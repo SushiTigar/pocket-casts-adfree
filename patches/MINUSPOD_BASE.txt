@@ -1,0 +1,9 @@
+# MinusPod patch baseline
+
+The patches in this directory apply on top of:
+
+    Repo:   https://github.com/ttlequals0/MinusPod.git
+    Commit: 0f754f82943db28c8f10a086de87dc8026414fd3
+
+Run `./scripts/setup_minuspod.sh` to clone the repo at this revision and apply
+the patches automatically.

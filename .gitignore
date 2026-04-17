@@ -1,0 +1,40 @@
+# Secrets ----------------------------------------------------------------
+.env
+*.env.local
+
+# Vendored upstream repos — re-cloned + patched via scripts/setup_*.sh.
+# The local diffs live in patches/ and are version-controlled.
+/MinusPod/
+/whisper.cpp/
+
+# Generated / runtime data ----------------------------------------------
+/processed_audio/
+/processed_episodes.json
+*.log
+.cache/
+
+# Python -----------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments ---------------------------------------------------
+venv/
+.venv/
+env/
+
+# Editor / OS ------------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Build / dist artefacts -------------------------------------------------
+build/
+dist/
+node_modules/

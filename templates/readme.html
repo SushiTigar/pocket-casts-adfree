@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>README · Pocket Casts Ad-Free Pipeline</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <style>
+    body { max-width: 880px; margin: 40px auto; padding: 0 24px; line-height: 1.6; color: var(--text); }
+    h1, h2, h3 { color: var(--text); margin-top: 1.6em; }
+    h1 { border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+    h2 { border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+    code { background: var(--surface); padding: 2px 6px; border-radius: 4px; font-size: 90%; }
+    pre { background: #0d1117; color: #c9d1d9; padding: 14px 16px; border-radius: 8px; overflow-x: auto; }
+    pre code { background: transparent; padding: 0; }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    table { border-collapse: collapse; }
+    th, td { border: 1px solid var(--border); padding: 6px 12px; }
+    blockquote { border-left: 3px solid var(--border); padding-left: 12px; color: var(--text-muted); }
+    .topbar { display: flex; justify-content: space-between; padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+    .topbar a { font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <a href="/">&larr; Back to Dashboard</a>
+    <a href="https://github.com/ttlequals0/MinusPod" target="_blank" rel="noopener">Upstream MinusPod</a>
+  </div>
+  {{ content | safe }}
+</body>
+</html>

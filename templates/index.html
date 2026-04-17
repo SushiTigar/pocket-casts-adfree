@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pocket Casts Ad-Free</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+  <div class="global-progress" id="global-progress">
+    <span class="progress-stage" id="progress-stage">Idle</span>
+    <div class="progress-bar-wrap">
+      <div class="progress-bar-fill" id="progress-bar" style="width: 0%"></div>
+    </div>
+    <span class="progress-label" id="progress-label"></span>
+    <span class="queue-badge hidden" id="queue-badge">0 queued</span>
+  </div>
+
+  <div class="header">
+    <h1>Pocket Casts <span>Ad-Free</span></h1>
+    <div class="header-actions">
+      <a class="header-link" href="#" onclick="event.preventDefault(); showView('dashboard')" id="nav-dashboard">Dashboard</a>
+      <a class="header-link" href="#" onclick="event.preventDefault(); showView('history')" id="nav-history">History</a>
+      <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme" id="theme-btn">&#9790;</button>
+    </div>
+  </div>
+
+  <div class="container">
+   <div id="view-dashboard">
+    <div class="stats-bar">
+      <div class="stat-card" onclick="setStatFilter('all')" id="stat-card-all">
+        <div class="stat-label">Subscriptions</div>
+        <div class="stat-value accent" id="stat-total">-</div>
+      </div>
+      <div class="stat-card" onclick="setStatFilter('eligible')" id="stat-card-eligible">
+        <div class="stat-label">Eligible</div>
+        <div class="stat-value green" id="stat-eligible">-</div>
+      </div>
+      <div class="stat-card" onclick="setStatFilter('patreon')" id="stat-card-patreon">
+        <div class="stat-label">Patreon (skipped)</div>
+        <div class="stat-value" id="stat-patreon" style="color:var(--warning)">-</div>
+      </div>
+      <div class="stat-card" onclick="setStatFilter('processed')" id="stat-card-processed">
+        <div class="stat-label">Processed Episodes</div>
+        <div class="stat-value blue" id="stat-processed">-</div>
+      </div>
+    </div>
+
+    <div class="toolbar" id="toolbar">
+      <input class="search-input" id="search" placeholder="Search podcasts..." oninput="filterPodcasts()">
+      <label class="select-all-wrap">
+        <input type="checkbox" id="select-all" onchange="toggleSelectAll()">
+        Select All Eligible
+      </label>
+      <button class="btn primary" id="btn-process" onclick="processSelected()" disabled>
+        Process Selected
+      </button>
+      <button class="btn" onclick="openServicesPanel()">Services</button>
+      <button class="btn danger" onclick="cleanupPlayedFiles()">Clean up played Ad-Free files</button>
+    </div>
+
+    <div id="podcast-list" class="podcast-list">
+      <div class="empty-state">
+        <h3>Loading subscriptions...</h3>
+        <p>Connecting to Pocket Casts</p>
+      </div>
+    </div>
+   </div>
+
+   <div id="view-history" class="hidden">
+    <div class="history-header">
+      <h2>Processing history</h2>
+      <div class="history-controls">
+        <input class="search-input" id="history-search" placeholder="Search title or podcast..." oninput="renderHistory()">
+        <select id="history-sort" onchange="renderHistory()">
+          <option value="processed_desc">Newest first</option>
+          <option value="processed_asc">Oldest first</option>
+          <option value="time_saved_desc">Most time saved</option>
+          <option value="ads_desc">Most ads removed</option>
+        </select>
+        <button class="btn small" onclick="loadHistory()">Refresh</button>
+        <button class="btn small" onclick="downloadHistoryCsv()">Export CSV</button>
+      </div>
+    </div>
+    <div class="history-summary" id="history-summary"></div>
+    <div class="history-table-wrap">
+      <table class="history-table">
+        <thead>
+          <tr>
+            <th>Processed</th>
+            <th>Episode</th>
+            <th>Podcast</th>
+            <th class="num">Ads</th>
+            <th class="num">Time saved</th>
+          </tr>
+        </thead>
+        <tbody id="history-rows">
+          <tr><td colspan="5" class="empty-state-cell">Loading history...</td></tr>
+        </tbody>
+      </table>
+    </div>
+   </div>
+  </div>
+
+  <div class="log-panel collapsed" id="log-panel">
+    <div class="log-header" onclick="toggleLogPanel()">
+      <div class="log-header-left">
+        <span class="log-toggle-icon">&#9660;</span>
+        <span>Processing Log</span>
+        <div class="log-unread" id="log-unread"></div>
+      </div>
+      <div class="log-header-actions" onclick="event.stopPropagation()">
+        <button class="btn small danger hidden" id="btn-skip" onclick="skipEpisode()">Skip Episode</button>
+        <button class="btn small danger hidden" id="btn-stop" onclick="stopJob()">Stop Job</button>
+        <button class="btn small" onclick="clearLog()">Clear</button>
+      </div>
+    </div>
+    <div class="log-body" id="log-body"></div>
+  </div>
+
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,315 @@
+diff --git a/docker-compose.whisper.yml b/docker-compose.whisper.yml
+index 8c4c2dc..9ce48d6 100644
+--- a/docker-compose.whisper.yml
++++ b/docker-compose.whisper.yml
+@@ -23,7 +23,7 @@
+ 
+ services:
+   whisper-server:
+-    image: ghcr.io/ggml-org/whisper.cpp:main-cuda
++    image: ghcr.io/ggml-org/whisper.cpp:main
+     platform: linux/amd64
+     container_name: whisper-server
+     ports:
+@@ -45,13 +45,6 @@ services:
+         --processors 1
+         --dtw large.v3.turbo
+         --no-flash-attn
+-    deploy:
+-      resources:
+-        reservations:
+-          devices:
+-            - driver: nvidia
+-              count: 1
+-              capabilities: [gpu]
+     healthcheck:
+       test: ["CMD-SHELL", "curl -sf http://localhost:8765/health || exit 1"]
+       interval: 30s
+diff --git a/src/audio_processor.py b/src/audio_processor.py
+index ee1ec7f..c166294 100644
+--- a/src/audio_processor.py
++++ b/src/audio_processor.py
+@@ -107,6 +107,20 @@ class AudioProcessor:
+             if current_segment:
+                 merged_ads.append(current_segment)
+ 
++            # Expand ad boundaries to avoid leaving partial ad audio.
++            # LLM-detected boundaries often land mid-word or mid-sentence;
++            # padding ensures the entire ad transition is captured.
++            AD_START_PAD = float(os.environ.get('AD_START_PAD', '1.5'))
++            AD_END_PAD = float(os.environ.get('AD_END_PAD', '2.0'))
++            # End-of-file ads get extra padding because the LLM tends to truncate
++            # outros early when Whisper drops the trailing music/jingle.
++            AD_END_PAD_TAIL = float(os.environ.get('AD_END_PAD_TAIL', '5.0'))
++            tail_threshold = 5.0  # treat as tail-of-file when within this many seconds
++            for ad in merged_ads:
++                ad['start'] = max(0, ad['start'] - AD_START_PAD)
++                end_pad = AD_END_PAD_TAIL if (total_duration - ad['end']) <= tail_threshold else AD_END_PAD
++                ad['end'] = min(total_duration, ad['end'] + end_pad)
++
+             # Filter out short ad detections (< 10 seconds) - likely false positives
+             MIN_AD_DURATION_FOR_REMOVAL = 10.0  # seconds
+             ads = []
+diff --git a/src/config.py b/src/config.py
+index aca5d08..67a30cc 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -83,8 +83,8 @@ MAX_FALSE_POSITIVE_TEXTS = 100              # Max false positives to load per po
+ # ============================================================
+ MAX_EPISODE_RETRIES = 3         # Retries before permanent failure
+ JIT_RETRY_COOLDOWN_SECONDS = 60 # Base cooldown between JIT retries (doubles per attempt)
+-WINDOW_SIZE_SECONDS = 600       # Claude processing window (10 min)
+-WINDOW_OVERLAP_SECONDS = 180    # Overlap between windows (3 min)
++WINDOW_SIZE_SECONDS = int(os.environ.get('WINDOW_SIZE_SECONDS', '900'))
++WINDOW_OVERLAP_SECONDS = int(os.environ.get('WINDOW_OVERLAP_SECONDS', '120'))
+ MAX_FILE_SIZE_MB = 500          # Maximum audio file size
+ 
+ # ============================================================
+diff --git a/src/database/__init__.py b/src/database/__init__.py
+index 5840937..bfaac2b 100644
+--- a/src/database/__init__.py
++++ b/src/database/__init__.py
+@@ -242,7 +242,10 @@ class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
+     _instance = None
+     _lock = threading.Lock()
+ 
+-    def __new__(cls, data_dir: str = "/app/data"):
++    def __new__(cls, data_dir: str = None):
++        import os
++        if data_dir is None:
++            data_dir = os.environ.get("DATA_DIR", "/app/data")
+         """Singleton pattern for database instance."""
+         if cls._instance is None:
+             with cls._lock:
+@@ -251,7 +254,10 @@ class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
+                     cls._instance._initialized = False
+         return cls._instance
+ 
+-    def __init__(self, data_dir: str = "/app/data"):
++    def __init__(self, data_dir: str = None):
++        import os
++        if data_dir is None:
++            data_dir = os.environ.get("DATA_DIR", "/app/data")
+         if self._initialized:
+             return
+ 
+diff --git a/src/llm_client.py b/src/llm_client.py
+index 20550bb..2d464d1 100644
+--- a/src/llm_client.py
++++ b/src/llm_client.py
+@@ -507,6 +507,9 @@ class OpenAICompatibleClient(LLMClient):
+         if response_format:
+             kwargs["response_format"] = response_format
+ 
++        if os.environ.get('LLM_PROVIDER') == 'ollama':
++            kwargs["extra_body"] = {"reasoning_effort": "none"}
++
+         try:
+             if cached_param is not None:
+                 response = self._client.chat.completions.create(**kwargs)
+diff --git a/src/main_app/processing.py b/src/main_app/processing.py
+index d16d16d..8028393 100644
+--- a/src/main_app/processing.py
++++ b/src/main_app/processing.py
+@@ -344,7 +344,7 @@ def _refine_and_validate(slug, episode_id, all_ads, segments, audio_path,
+ 
+     # Heuristic pre/post-roll detection
+     if segments:
+-        from roll_detector import detect_preroll, detect_postroll
++        from roll_detector import detect_preroll, detect_postroll, detect_tail_gap
+         preroll_ad = detect_preroll(segments, all_ads, podcast_name=podcast_name,
+                                     skip_patterns=skip_patterns)
+         if preroll_ad:
+@@ -356,6 +356,14 @@ def _refine_and_validate(slug, episode_id, all_ads, segments, audio_path,
+             all_ads.append(postroll_ad)
+             audio_logger.info(f"[{slug}:{episode_id}] Heuristic post-roll: {postroll_ad['start']:.1f}s-{postroll_ad['end']:.1f}s")
+ 
++        tail_gap_ad = detect_tail_gap(segments, all_ads, episode_duration=episode_duration)
++        if tail_gap_ad:
++            all_ads.append(tail_gap_ad)
++            audio_logger.info(
++                f"[{slug}:{episode_id}] Heuristic tail-gap: "
++                f"{tail_gap_ad['start']:.1f}s-{tail_gap_ad['end']:.1f}s"
++            )
++
+     # Validation
+     if not all_ads:
+         return [], []
+@@ -830,21 +838,26 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+             original_duration = episode_duration
+             _check_cancel(cancel_event, slug, episode_id)
+ 
+-            # Stage 6: Verification pass
+-            current_pass = "pass2"
+-            verification_count, v_ads_for_ui, processed_path = _run_verification_pass(
+-                slug, episode_id, processed_path, ads_to_remove,
+-                podcast_name, episode_title, episode_description,
+-                podcast_description, skip_patterns, min_cut_confidence,
+-                local_audio_processor, detection_progress_callback
+-            )
+-            _check_cancel(cancel_event, slug, episode_id)
+-
+-            # Merge pass 2 ads into combined list for UI
+-            if v_ads_for_ui:
+-                all_ads_with_validation = list(all_ads_with_validation) + v_ads_for_ui
+-                all_ads_with_validation.sort(key=lambda x: x['start'])
+-                storage.save_combined_ads(slug, episode_id, all_ads_with_validation)
++            # Stage 6: Verification pass (skip if SKIP_VERIFICATION is set)
++            skip_verification = os.environ.get('SKIP_VERIFICATION', 'true').lower() == 'true'
++            verification_count = 0
++            v_ads_for_ui = []
++            if not skip_verification:
++                current_pass = "pass2"
++                verification_count, v_ads_for_ui, processed_path = _run_verification_pass(
++                    slug, episode_id, processed_path, ads_to_remove,
++                    podcast_name, episode_title, episode_description,
++                    podcast_description, skip_patterns, min_cut_confidence,
++                    local_audio_processor, detection_progress_callback
++                )
++                _check_cancel(cancel_event, slug, episode_id)
++
++                if v_ads_for_ui:
++                    all_ads_with_validation = list(all_ads_with_validation) + v_ads_for_ui
++                    all_ads_with_validation.sort(key=lambda x: x['start'])
++                    storage.save_combined_ads(slug, episode_id, all_ads_with_validation)
++            else:
++                audio_logger.info(f"[{slug}:{episode_id}] Verification pass skipped (SKIP_VERIFICATION=true)")
+ 
+             new_duration = local_audio_processor.get_audio_duration(processed_path)
+ 
+diff --git a/src/roll_detector.py b/src/roll_detector.py
+index 8961805..47512bb 100644
+--- a/src/roll_detector.py
++++ b/src/roll_detector.py
+@@ -56,10 +56,17 @@ AD_INDICATOR_PATTERNS = [
+         r'for the ones who',
+         r'advertising inquiries',
+         r'privacy\s+(&|and)\s+opt.out',
++        r'(new|latest|upcoming)\s+(episode|season|series|show)',
++        r'(listen|subscribe|available)\s+(now|on|to|wherever)',
++        r'(apple|spotify|amazon)\s+podcasts?',
++        r'(stream|watch|listen)\s+(now|on|at|free)',
++        r'(produced|distributed|presented)\s+by',
++        r'from the makers of',
++        r'new york times|nyt\b',
+     ]
+ ]
+ 
+-MIN_AD_PATTERN_MATCHES = 2
++MIN_AD_PATTERN_MATCHES = 1
+ MAX_PREROLL_DURATION = 120.0   # seconds
+ MAX_POSTROLL_DURATION = 120.0  # seconds
+ 
+@@ -133,9 +140,31 @@ def detect_preroll(
+         if show_start_time is not None:
+             break
+ 
+-    if show_start_time is None or show_start_time <= episode_start + 5.0:
++    if show_start_time is None:
+         return None
+ 
++    if show_start_time <= episode_start + 5.0:
++        # The "show start" pattern is in the first 5s - it might be the ad itself
++        # (e.g. "This is brought to you by..." or "Hey everyone..." from an announcer).
++        # Try to find a SECOND show-start match further in.
++        second_start = None
++        for seg in segments:
++            if seg['start'] <= show_start_time:
++                continue
++            if seg['start'] > max_search_end:
++                break
++            text = seg.get('text', '')
++            for pattern in SHOW_START_PATTERNS:
++                if pattern.search(text):
++                    second_start = seg['start']
++                    break
++            if second_start is not None:
++                break
++        if second_start is not None and second_start > episode_start + 10.0:
++            show_start_time = second_start
++        else:
++            return None
++
+     # Check if region is already covered
+     if _region_covered(episode_start, show_start_time, existing_ads):
+         return None
+@@ -230,3 +259,63 @@ def detect_postroll(
+         'reason': f'Post-roll ad ({match_count} ad indicators after sign-off)',
+         'detection_stage': 'heuristic_postroll',
+     }
++
++
++# Tail-gap thresholds. When Whisper produces no segments for a long stretch at
++# the end of the file, treat that as untranscribed audio and flag it as a
++# post-roll candidate (musical outros, silent ads, DAI-injected outros).
++TAIL_GAP_MIN_SECONDS = float(__import__('os').environ.get('TAIL_GAP_MIN_SECONDS', '60'))
++TAIL_GAP_OVERLAP_BACK = 5.0  # eat into the last transcribed segment slightly to swallow lead-ins
++
++
++def detect_tail_gap(
++    segments: List[Dict],
++    existing_ads: List[Dict],
++    episode_duration: float = 0,
++) -> Optional[Dict]:
++    """Flag the untranscribed audio tail as a post-roll candidate.
++
++    Whisper sometimes drops the trailing N minutes of an episode when those
++    minutes are music, jingle, or sponsor audio with no clear speech. The LLM
++    can't see what isn't transcribed, so it either places the post-roll way too
++    late or misses it entirely. This detector emits a synthetic ad covering the
++    gap so the audio processor can cut it.
++
++    Args:
++        segments: Transcript segments with 'start', 'end', 'text' keys
++        existing_ads: Already-detected ads to avoid duplicates
++        episode_duration: Total episode duration (from audio file, not transcript)
++
++    Returns:
++        Ad marker dict if tail gap detected, None otherwise
++    """
++    if not segments or episode_duration <= 0:
++        return None
++
++    last_segment_end = segments[-1].get('end', 0)
++    gap = episode_duration - last_segment_end
++    if gap < TAIL_GAP_MIN_SECONDS:
++        return None
++
++    start = max(0.0, last_segment_end - TAIL_GAP_OVERLAP_BACK)
++    end = episode_duration
++
++    if _region_covered(start, end, existing_ads):
++        return None
++
++    logger.info(
++        f"Heuristic tail-gap detected: {start:.1f}s-{end:.1f}s "
++        f"(transcript ended at {last_segment_end:.1f}s, audio ends at {episode_duration:.1f}s, "
++        f"gap={gap:.1f}s)"
++    )
++
++    return {
++        'start': start,
++        'end': end,
++        'confidence': 0.85,
++        'reason': (
++            f'Tail-gap post-roll ({gap:.0f}s of untranscribed audio at end-of-file, '
++            f'likely musical/silent outro or DAI-inserted ad)'
++        ),
++        'detection_stage': 'heuristic_tail_gap',
++    }
+diff --git a/src/storage.py b/src/storage.py
+index 1860aaa..fe3b5e0 100644
+--- a/src/storage.py
++++ b/src/storage.py
+@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
+ class Storage:
+     """Storage manager using SQLite for metadata and filesystem for large files."""
+ 
+-    def __init__(self, data_dir: str = "/app/data"):
++    def __init__(self, data_dir: str = None):
++        import os
++        if data_dir is None:
++            data_dir = os.environ.get("DATA_DIR", "/app/data")
+         self.data_dir = Path(data_dir)
+         self.data_dir.mkdir(exist_ok=True)
+ 
