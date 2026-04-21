@@ -504,6 +504,72 @@ class TestUpNextQueueSafety(unittest.TestCase):
                 self.assertEqual(server_mod, 1234567890,
                     "add_to_up_next must use the serverModified from the fetch call")
 
+    def test_add_to_up_next_carries_published_date(self):
+        """Pocket Casts displays "Dec 31, 1969" when an Up Next entry has no
+        published date. The /files endpoint stores the real date but the
+        Up Next cache is separate — add_to_up_next must propagate it."""
+        from pocketcasts_adfree import PocketCastsClient
+        with patch.object(PocketCastsClient, '__init__', lambda self, *a, **kw: None):
+            pc = PocketCastsClient.__new__(PocketCastsClient)
+            pc.token = "fake"
+            pc.client = MagicMock()
+
+            fetch_resp = MagicMock(status_code=200, raise_for_status=MagicMock())
+            fetch_resp.json.return_value = {"serverModified": 1}
+            add_resp = MagicMock(status_code=200, raise_for_status=MagicMock())
+            add_resp.json.return_value = {}
+            pc.client.post = MagicMock(side_effect=[fetch_resp, add_resp])
+
+            pc.add_to_up_next(
+                "file-uuid", "Test Episode",
+                published="2026-04-21T15:41:28Z",
+            )
+
+            change = pc.client.post.call_args_list[1][1]["json"]["upNext"]["changes"][0]
+            self.assertEqual(change.get("published"), "2026-04-21T15:41:28Z",
+                "add_to_up_next must forward the published date so PC apps "
+                "don't render epoch-0 (Dec 31, 1969) for Ad-Free uploads.")
+
+    def test_add_to_up_next_omits_epoch_published_dates(self):
+        """Don't paper over epoch dates: if the upstream date is 1970, drop it
+        rather than re-poisoning Up Next. _sanitize_published_date already
+        coerces empty/epoch values to "now"; we just want to make sure we
+        never silently send 1970-01-01."""
+        from pocketcasts_adfree import PocketCastsClient
+        with patch.object(PocketCastsClient, '__init__', lambda self, *a, **kw: None):
+            pc = PocketCastsClient.__new__(PocketCastsClient)
+            pc.token = "fake"
+            pc.client = MagicMock()
+            fetch_resp = MagicMock(status_code=200, raise_for_status=MagicMock())
+            fetch_resp.json.return_value = {"serverModified": 1}
+            add_resp = MagicMock(status_code=200, raise_for_status=MagicMock())
+            add_resp.json.return_value = {}
+            pc.client.post = MagicMock(side_effect=[fetch_resp, add_resp])
+
+            pc.add_to_up_next("file-uuid", "Test", published="1970-01-01T00:00:00Z")
+
+            change = pc.client.post.call_args_list[1][1]["json"]["upNext"]["changes"][0]
+            self.assertNotEqual(change.get("published"), "1970-01-01T00:00:00Z",
+                "Epoch-0 input should be sanitized to a real date.")
+
+
+class TestTranscriptionFailureRecovery(unittest.TestCase):
+    """The pipeline must restart Whisper when its Metal backend wedges,
+    rather than spinning on reprocess against a known-broken server."""
+
+    def test_is_transcription_failure_detects_metal_errors(self):
+        from pocketcasts_adfree import _is_transcription_failure
+        self.assertTrue(_is_transcription_failure("Failed to transcribe audio"))
+        self.assertTrue(_is_transcription_failure("whisper backend returned 500"))
+        self.assertTrue(_is_transcription_failure("Metal command buffer error"))
+        self.assertTrue(_is_transcription_failure("GPU error/recovery"))
+
+    def test_is_transcription_failure_ignores_unrelated_errors(self):
+        from pocketcasts_adfree import _is_transcription_failure
+        self.assertFalse(_is_transcription_failure(""))
+        self.assertFalse(_is_transcription_failure("HTTP 404 audio source"))
+        self.assertFalse(_is_transcription_failure("Out of disk space"))
+
 
 class TestUIServerEndpoints(unittest.TestCase):
     """Test the Flask API endpoints."""

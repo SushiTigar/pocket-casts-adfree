@@ -703,9 +703,30 @@ let podcasts = [];
       return 'some';
     }
 
-    function selectAllEpsInPodcast(uuid, checked) {
-      const eps = (podcastEpisodes[uuid] || []).filter(e => !e.already_processed);
+    async function selectAllEpsInPodcast(uuid, checked) {
       if (!checked) {
+        delete selectedEpisodes[uuid];
+        renderPodcasts();
+        return;
+      }
+
+      // Episodes are only fetched when a podcast is expanded. If the user
+      // toggled the header checkbox without ever opening the row, our local
+      // cache is empty and selecting an empty Set leaves the checkbox stuck
+      // unchecked. Expand the row, await the lazy load, then select.
+      let eps = (podcastEpisodes[uuid] || []).filter(e => !e.already_processed);
+      if (!podcastEpisodes[uuid]) {
+        expandedPodcasts.add(uuid);
+        // Mark a placeholder so the indeterminate state shows during load.
+        selectedEpisodes[uuid] = new Set();
+        renderPodcasts();
+        try {
+          await loadEpisodes(uuid);
+        } catch (_) { /* loadEpisodes already resets state on error */ }
+        eps = (podcastEpisodes[uuid] || []).filter(e => !e.already_processed);
+      }
+
+      if (!eps.length) {
         delete selectedEpisodes[uuid];
       } else {
         selectedEpisodes[uuid] = new Set(eps.map(e => e.id));

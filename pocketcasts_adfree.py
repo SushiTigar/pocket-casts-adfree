@@ -83,6 +83,73 @@ def _sanitize_published_date(published: str | None) -> str:
     return p
 
 
+def _is_transcription_failure(err_text: str) -> bool:
+    """Heuristic: does this MinusPod error suggest the Whisper backend is sick?
+
+    The Metal backend on macOS occasionally crashes with
+    `kIOGPUCommandBufferCallbackErrorInnocentVictim` when another GPU
+    workload (Safari, Xcode, another whisper instance) preempts it. Once
+    that happens the whisper-server keeps accepting requests but every
+    inference returns 500. MinusPod surfaces this as
+    "Failed to transcribe audio" or similar.
+    """
+    if not err_text:
+        return False
+    needle = err_text.lower()
+    return any(s in needle for s in (
+        "failed to transcribe",
+        "transcription failed",
+        "transcribe audio",
+        "whisper",
+        "metal",
+        "gpu",
+    ))
+
+
+def _restart_whisper_if_wedged() -> bool:
+    """Restart whisper-server in-place. Returns True on success.
+
+    Lazy-imports `services_manager` to avoid a circular dependency between
+    pipeline code and the Flask UI module. Falls back to no-op if the
+    service helpers aren't available (e.g. running in CLI-only mode where
+    services_manager hasn't been initialised — restarting whisper there
+    is the user's job anyway).
+    """
+    try:
+        import services_manager
+    except Exception:
+        return False
+    try:
+        result = services_manager.restart_whisper(backend="native")
+        return bool(result.get("ok"))
+    except Exception as exc:
+        log.warning(f"  Whisper restart failed: {exc}")
+        return False
+
+
+def _list_up_next_episodes(pc) -> list[dict]:
+    """Fetch the current Up Next list using a pull-only sync (no changes).
+
+    Helper used by `process_single_episode` for the post-upload title-match
+    sweep. Mirrors the dashboard's `_get_up_next_episodes` so behaviour is
+    consistent between the background pipeline and the on-demand reconciler.
+    """
+    try:
+        resp = pc.client.post(
+            f"{POCKETCASTS_API}/up_next/sync",
+            headers=pc._headers(),
+            json={
+                "deviceTime": int(time.time() * 1000),
+                "version": "2",
+                "upNext": {"serverModified": 0, "changes": []},
+            },
+        )
+        resp.raise_for_status()
+        return resp.json().get("episodes", []) or []
+    except Exception:
+        return []
+
+
 def _normalize_artwork_to_jpeg(image_data: bytes, max_size: int = 1400) -> bytes:
     """Convert artwork to JPEG and resize if needed.
 
@@ -543,24 +610,41 @@ class PocketCastsClient:
             log.debug(f"Could not fetch Up Next server state: {e}")
         return 0
 
-    def add_to_up_next(self, file_uuid: str, title: str, play_last: bool = True):
-        """Add an uploaded file to the Up Next queue."""
+    def add_to_up_next(
+        self, file_uuid: str, title: str, play_last: bool = True,
+        published: str | None = None,
+    ):
+        """Add an uploaded file to the Up Next queue.
+
+        `published` is forwarded so Pocket Casts clients display the real
+        episode date instead of "Dec 31, 1969". The /up_next/sync endpoint
+        treats omitted/empty `published` as epoch 0, which the official
+        Pocket Casts apps render as 1969-12-31. The /files endpoint gets
+        the same value during upload, but Up Next is a separate cache —
+        without this field here, the Up Next entry shows the epoch date
+        even though the file's own metadata is correct.
+        """
         action = 3 if play_last else 2  # 3=PLAY_LAST, 2=PLAY_NEXT
         now_ms = int(time.time() * 1000)
         server_modified = self._get_up_next_server_modified()
+
+        change: dict = {
+            "action": action,
+            "modified": now_ms,
+            "uuid": file_uuid,
+            "title": title,
+            "podcast": USER_PODCAST_UUID,
+        }
+        sanitized = _sanitize_published_date(published) if published else None
+        if sanitized:
+            change["published"] = sanitized
 
         request_body = {
             "deviceTime": now_ms,
             "version": "2",
             "upNext": {
                 "serverModified": server_modified,
-                "changes": [{
-                    "action": action,
-                    "modified": now_ms,
-                    "uuid": file_uuid,
-                    "title": title,
-                    "podcast": USER_PODCAST_UUID,
-                }],
+                "changes": [change],
             },
         }
 
@@ -922,6 +1006,23 @@ class MinusPodClient:
                                             f"MinusPod marked failed: {err_text or 'unknown'}. "
                                             f"Retrying ({reprocess_count}/{MAX_REPROCESS_TRIGGERS})..."
                                         )
+                                    # If the failure looks like a Whisper crash
+                                    # (Metal GPU command-buffer error, etc.),
+                                    # bounce the whisper-server before retrying.
+                                    # Reprocessing without restart just hits the
+                                    # same wedged backend and loops forever.
+                                    if _is_transcription_failure(err_text):
+                                        if progress_callback:
+                                            progress_callback(
+                                                "Whisper appears wedged; restarting it before retry..."
+                                            )
+                                        if _restart_whisper_if_wedged():
+                                            log.info("  Whisper restarted; retrying transcription.")
+                                        else:
+                                            log.warning(
+                                                "  Whisper restart attempt failed or skipped; "
+                                                "reprocess may still loop."
+                                            )
                                     try:
                                         self.reprocess_episode(slug, episode_id)
                                     except Exception as e:
@@ -1773,9 +1874,9 @@ def process_single_episode(
         if progress_callback: progress_callback("Upload failed: No UUID returned")
         return None
 
-    pc.add_to_up_next(file_uuid, upload_title, play_last=True)
+    pc.add_to_up_next(file_uuid, upload_title, play_last=True, published=ep_published)
 
-    # Mark the original episode as played and remove from Up Next
+    # Mark the original episode as played and remove from Up Next.
     if podcast_uuid and original_episode_uuid:
         try:
             pc.mark_episode_played(original_episode_uuid, podcast_uuid)
@@ -1784,6 +1885,38 @@ def process_single_episode(
                 progress_callback("Marked original episode as played")
         except Exception as e:
             log.warning(f"  Could not mark original as played: {e}")
+    else:
+        # Fallback: title-match sweep. The episode-uuid lookup can miss when
+        # MinusPod's RSS title and Pocket Casts' title differ in trivial
+        # ways (smart quotes, trailing season tags, etc.) that break exact
+        # equality. Re-scan Up Next using the same normalized-title trick
+        # the dashboard reconciler uses, but only for the title we just
+        # uploaded so we don't sweep unrelated rows.
+        try:
+            target_norm = _normalize_title(ep_title)
+            for queue_ep in _list_up_next_episodes(pc):
+                qu_uuid = queue_ep.get("uuid") or ""
+                qu_title = (queue_ep.get("title") or "").strip()
+                qu_pod = queue_ep.get("podcast") or ""
+                if not qu_uuid or not qu_title:
+                    continue
+                if qu_pod == USER_PODCAST_UUID:
+                    continue  # custom-file row, not the original
+                if "(Ad-Free)" in qu_title:
+                    continue
+                if _normalize_title(qu_title) != target_norm:
+                    continue
+                try:
+                    if qu_pod:
+                        pc.mark_episode_played(qu_uuid, qu_pod)
+                    pc.remove_from_up_next(qu_uuid)
+                    if progress_callback:
+                        progress_callback("Removed original from Up Next (title match)")
+                    break
+                except Exception as exc:
+                    log.warning(f"  Title-match sweep failed for {qu_uuid[:12]}: {exc}")
+        except Exception as exc:
+            log.debug(f"  Up Next title-sweep skipped: {exc}")
 
     history_meta: dict = {}
     try:

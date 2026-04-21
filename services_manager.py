@@ -426,16 +426,40 @@ def restart_whisper(backend: str = "native") -> dict:
 
 
 def stop_minuspod() -> dict:
+    """Stop MinusPod, escalating SIGTERM -> SIGKILL.
+
+    The Flask dev server we launch (`python -m flask run`) doesn't always
+    exit on SIGTERM — its signal handler relies on the click runner being
+    in the foreground, and `start_services.sh` daemonises it inside a
+    subshell so its parent (the subshell) is already gone when we try to
+    stop it. Concretely: PPID is reparented to launchd (1) and the process
+    group leader has exited, so SIGTERM is silently absorbed.
+    Escalate to SIGKILL after a short grace period.
+    """
     pid = _pid_listening(8000)
-    if pid:
-        _kill_pid(pid)
-        # MinusPod is a Flask reloader parent + child; SIGTERM the group.
-        try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except Exception:
-            pass
-    ok = _wait_until(lambda: _pid_listening(8000) is None, timeout=15)
-    return {"ok": ok}
+    if not pid:
+        return {"ok": True, "note": "not running"}
+
+    # First try graceful SIGTERM on the pid and (best-effort) its group.
+    _kill_pid(pid, signal.SIGTERM)
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGTERM)
+    except Exception:
+        pass
+
+    # Give Flask up to 5s to exit cleanly.
+    if _wait_until(lambda: _pid_listening(8000) is None, timeout=5):
+        return {"ok": True}
+
+    # Escalate: SIGKILL the listener pid and any sibling in the same group.
+    _kill_pid(pid, signal.SIGKILL)
+    try:
+        os.killpg(os.getpgid(pid), signal.SIGKILL)
+    except Exception:
+        pass
+
+    ok = _wait_until(lambda: _pid_listening(8000) is None, timeout=10)
+    return {"ok": ok, "note": "killed (SIGTERM ignored)"} if ok else {"ok": False}
 
 
 def start_minuspod() -> dict:
