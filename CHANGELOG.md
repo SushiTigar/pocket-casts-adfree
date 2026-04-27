@@ -6,7 +6,53 @@ loosely tracks [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+- **"JSON.parse: unexpected character at line 1 column 1" in dashboard** —
+  `/api/subscriptions` and `/api/files` returned Werkzeug's HTML 500 page
+  whenever `PocketCastsClient.__init__` raised (most commonly an
+  `httpx.HTTPStatusError` on a 401). The frontend's `resp.json()` then
+  failed because the body started with `<!doctype html>`. Now:
+  - `_login` parses Pocket Casts' JSON error envelope and raises a typed
+    `PocketCastsAuthError(status_code, message_id, upstream_message)` so
+    the caller knows whether it was `login_account_locked`,
+    `login_wrong_password`, etc.
+  - A Flask error handler converts `PocketCastsAuthError` into a JSON
+    `502 {error, message, message_id, hint}` response.
+  - `get_pc()` caches auth failures for 60s so the dashboard's 20s
+    auto-refresh doesn't hammer `/user/login` and *extend* the lockout
+    (which is what likely triggered the user's `login_account_locked`
+    state in the first place).
+  - The dashboard renders a dedicated red banner with the human-readable
+    hint ("wait ~15 minutes", "fix POCKETCASTS_PASSWORD", etc.) instead
+    of the cryptic JSON.parse error.
+- **Runaway episode polls** — `download_processed_audio` previously polled
+  MinusPod for `max_retries × retry_after` ≈ 8 hours when the backend got
+  wedged. A single stuck episode could hold the whole queue hostage (the
+  "second queued episode never uploaded" bug). Now bounded by a wallclock
+  cap (`EPISODE_MAX_WALLCLOCK_SECONDS`, default 90 min) and a stall
+  watchdog (`EPISODE_STALL_THRESHOLD_SECONDS`, default 15 min) that bounces
+  whisper-server once and then aborts so the queue can move on.
+- **Whisper Metal crashes** — `start_services.sh` and `services_manager.py`
+  used to launch `whisper-server --processors $cores --threads $cores`,
+  which exceeded Metal's hard 8-command-buffer ceiling on most Apple Silicon
+  Macs and triggered `kIOGPUCommandBufferCallbackErrorInnocentVictim`
+  panics. We now cap threads at 8 and force `--processors 1` (which is
+  also required for correct token timestamps — whisper.cpp #2036).
+- **OOM-induced kernel panics** — defaults reduced for systems with ≤ 36 GB
+  RAM: `OLLAMA_NUM_PARALLEL=1` (was 2), `OLLAMA_MAX_LOADED_MODELS=1` (Ollama
+  default is 3), and `OLLAMA_KEEP_ALIVE=30s` so models evict between
+  episodes instead of clinging to ~22 GB of VRAM forever.
+
 ### Added
+- **Memory preflight warning** — `/api/system/memory` (and the existing
+  `/api/services` payload) now report total/available RAM and a
+  human-readable warning when free memory dips below 8 GB. The job runner
+  injects the same warning into the run log before processing starts so
+  users see it before their machine swap-thrashes.
+- **README "pick a model" guidance** — explicit table mapping free-RAM
+  budget to recommended model. The default README pointed at
+  `qwen3.5:35b-a3b` (~22 GB resident) without warning that on 36 GB Macs
+  it leaves almost no headroom.
 - **Up Next auto-reconcile** — `/api/subscriptions` now silently removes
   originals from Up Next and marks them played whenever their Ad-Free upload
   already exists, fixing the stale "Dec 31, 1969" leftovers users saw after

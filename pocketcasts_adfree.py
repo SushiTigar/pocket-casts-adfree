@@ -213,6 +213,35 @@ def is_patreon_feed(podcast: dict) -> bool:
     return any(ind in combined for ind in PATREON_INDICATORS)
 
 
+class PocketCastsAuthError(RuntimeError):
+    """Raised when /user/login fails. Carries the upstream message id and
+    body so callers (Flask routes, CLI) can surface a useful explanation
+    instead of a generic 500 / opaque HTTPStatusError.
+
+    Attributes
+    ----------
+    status_code:
+        HTTP status from Pocket Casts (typically 401).
+    message_id:
+        Pocket Casts' machine-readable code, e.g. ``login_account_locked``,
+        ``login_wrong_password``, ``login_email_unknown``. Empty string if
+        the response wasn't JSON.
+    upstream_message:
+        Human-readable text from Pocket Casts' JSON body, e.g. "Your
+        account has been locked due to too many login attempts...".
+    """
+
+    def __init__(self, status_code: int, message_id: str, upstream_message: str):
+        self.status_code = status_code
+        self.message_id = message_id
+        self.upstream_message = upstream_message
+        suffix = f" [{message_id}]" if message_id else ""
+        super().__init__(
+            f"Pocket Casts login failed (HTTP {status_code}){suffix}: "
+            f"{upstream_message or 'no detail provided'}"
+        )
+
+
 class PocketCastsClient:
     """Client for the Pocket Casts API (unofficial)."""
 
@@ -226,11 +255,28 @@ class PocketCastsClient:
             f"{POCKETCASTS_API}/user/login",
             json={"email": email, "password": password},
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            # Pocket Casts returns JSON like
+            #   {"errorMessage":"...","errorMessageId":"login_account_locked"}
+            # Surface those instead of the opaque httpx.HTTPStatusError so
+            # the dashboard can show "account locked, try again later"
+            # rather than "JSON.parse: unexpected character" (the frontend
+            # was choking on Flask's HTML 500 page).
+            msg_id = ""
+            msg = ""
+            try:
+                body = resp.json()
+                msg_id = (body.get("errorMessageId") or "").strip()
+                msg = (body.get("errorMessage") or "").strip()
+            except Exception:
+                msg = (resp.text or "").strip()[:200]
+            raise PocketCastsAuthError(resp.status_code, msg_id, msg)
         data = resp.json()
         token = data.get("token")
         if not token:
-            raise RuntimeError(f"Login failed: {data}")
+            raise PocketCastsAuthError(
+                resp.status_code, "", f"login response missing token: {data}"
+            )
         log.info("Authenticated successfully")
         return token
 
@@ -902,12 +948,26 @@ class MinusPodClient:
         max_retries: int = 1000, retry_delay: int = 30,
         skip_event=None, progress_callback=None,
         source_url: str = None,  # kept for backwards-compat callers; unused
+        max_wallclock_seconds: int | None = None,
+        stall_threshold_seconds: int | None = None,
     ) -> Path:
         """Download processed audio, retrying on 503 (queue busy/processing).
 
         The JIT endpoint returns 503 when the episode is being processed or
         the queue is busy. We retry with backoff until the audio is ready.
         If skip_event is set during a retry wait, raises _SkippedError.
+
+        Bounded by two safety nets so a wedged backend can't make a single
+        episode hold the whole queue hostage:
+        - `max_wallclock_seconds` (env: `EPISODE_MAX_WALLCLOCK_SECONDS`, default
+          5400 = 90 min): hard cap on total time spent waiting. The previous
+          implementation polled for `max_retries × retry_after` ≈ 8 hours,
+          which is what made "second episode never uploaded" possible.
+        - `stall_threshold_seconds` (env: `EPISODE_STALL_THRESHOLD_SECONDS`,
+          default 900 = 15 min): if MinusPod's reported `stage` doesn't change
+          for this long we treat the backend as wedged and either bounce
+          whisper-server or abort. This is what catches the silent
+          "transcription happening but nothing visible" hang.
         """
         if not slug or slug == '_files':
             raise ValueError(
@@ -916,10 +976,30 @@ class MinusPodClient:
                 "files live only in Pocket Casts, not in any RSS feed. "
                 "Re-process the original RSS feed episode instead."
             )
+
+        # Resolve safety caps from kwargs → env → defaults.
+        if max_wallclock_seconds is None:
+            try:
+                max_wallclock_seconds = int(os.environ.get(
+                    "EPISODE_MAX_WALLCLOCK_SECONDS", "5400"
+                ))
+            except ValueError:
+                max_wallclock_seconds = 5400
+        if stall_threshold_seconds is None:
+            try:
+                stall_threshold_seconds = int(os.environ.get(
+                    "EPISODE_STALL_THRESHOLD_SECONDS", "900"
+                ))
+            except ValueError:
+                stall_threshold_seconds = 900
+
         url = f"{self.base_url}/episodes/{slug}/{episode_id}.mp3"
         safe_id = re.sub(r'[^\w-]', '_', episode_id)[:80]
         output_path = output_dir / f"{safe_id}.mp3"
         last_stage = ""
+        last_progress_at = time.monotonic()
+        wallclock_start = time.monotonic()
+        whisper_bounced_for_stall = False
         # Cap how many times we'll ask MinusPod to re-attempt a "GONE" episode.
         # MinusPod itself caps internal retries at 3; if it keeps coming back
         # GONE, the underlying problem (e.g. Whisper backend down) won't fix
@@ -931,6 +1011,17 @@ class MinusPodClient:
         STATUS_CHECK_EVERY = 3
 
         for attempt in range(max_retries):
+            # Hard wallclock cap — this is the real safety net.
+            elapsed = time.monotonic() - wallclock_start
+            if elapsed > max_wallclock_seconds:
+                raise TimeoutError(
+                    f"Gave up waiting for {slug}/{episode_id} after "
+                    f"{elapsed/60:.0f} min (cap: {max_wallclock_seconds/60:.0f} min, "
+                    f"last stage: {last_stage or 'unknown'}). The episode is "
+                    f"either too long for the configured budget, or the "
+                    f"MinusPod / Whisper backend is wedged. Bumping the cap: "
+                    f"export EPISODE_MAX_WALLCLOCK_SECONDS=10800."
+                )
             if skip_event and skip_event.is_set():
                 raise _SkippedError("Skipped by user")
 
@@ -976,6 +1067,7 @@ class MinusPodClient:
                                 if progress_callback:
                                     progress_callback(msg)
                                 last_stage = stage
+                                last_progress_at = time.monotonic()
                             elif attempt == 0:
                                 log.info(f"  Episode queued for processing, waiting...")
                                 if progress_callback:
@@ -983,6 +1075,40 @@ class MinusPodClient:
                         except Exception:
                             if attempt == 0:
                                 log.info(f"  Episode queued for processing, waiting...")
+
+                        # Stall watchdog: if `stage` hasn't advanced for the
+                        # configured threshold, MinusPod is almost certainly
+                        # stuck on a wedged Whisper or LLM. Try one whisper
+                        # bounce; if that doesn't kick things loose on the next
+                        # status update, give up so the queue can move on.
+                        stall_for = time.monotonic() - last_progress_at
+                        if stall_for > stall_threshold_seconds:
+                            if not whisper_bounced_for_stall:
+                                whisper_bounced_for_stall = True
+                                log.warning(
+                                    f"  No MinusPod stage change for "
+                                    f"{stall_for/60:.0f} min (stuck on "
+                                    f"'{last_stage or 'unknown'}'). Bouncing "
+                                    f"whisper-server in case it's wedged."
+                                )
+                                if progress_callback:
+                                    progress_callback(
+                                        f"Stalled on '{last_stage or 'unknown'}' "
+                                        f"for {stall_for/60:.0f}m — restarting whisper..."
+                                    )
+                                _restart_whisper_if_wedged()
+                                # Reset the stall clock so we give whisper
+                                # another full window to make progress.
+                                last_progress_at = time.monotonic()
+                            else:
+                                raise TimeoutError(
+                                    f"MinusPod stuck on stage "
+                                    f"'{last_stage or 'unknown'}' for "
+                                    f"{stall_for/60:.0f} min even after "
+                                    f"restarting whisper. Aborting so other "
+                                    f"queued episodes can run. Inspect "
+                                    f"/tmp/minuspod.log and /tmp/whisper-server.log."
+                                )
 
                         # Periodically check the episode-detail endpoint —
                         # `currentJob == null` + `status == failed` means

@@ -1230,6 +1230,90 @@ class TestFailedEpisodeAbort(unittest.TestCase):
             mp.client.get.return_value = resp
             self.assertIsNone(mp.get_episode("slug", "ep"))
 
+    def test_wallclock_cap_aborts_runaway_poll(self):
+        """A wedged backend used to make a single episode poll for ~8 hours.
+
+        The wallclock cap (default 90 min) is the safety net that kept
+        the second queued episode from ever uploading: episode #1 just
+        sat in this loop forever. Verify that exceeding the cap raises
+        TimeoutError instead of looping.
+        """
+        from pocketcasts_adfree import MinusPodClient
+        # First call sets wallclock_start, second call (top of next loop
+        # iteration) is 6000 s later — comfortably past the 60 s cap.
+        clock = [1000.0]
+
+        def fake_monotonic():
+            t = clock[0]
+            clock[0] += 6000.0   # +100 min per call → blows past 90 min cap
+            return t
+
+        with patch.object(MinusPodClient, '__init__', lambda self, *a, **kw: None), \
+             patch('pocketcasts_adfree.time.monotonic', side_effect=fake_monotonic), \
+             patch('pocketcasts_adfree.time.sleep'):
+            mp = MinusPodClient.__new__(MinusPodClient)
+            mp.base_url = "http://localhost:8000"
+            mp.client = MagicMock()
+            # Return 503 so we go through the polling path. The wallclock
+            # check fires on the next iteration before we ever fetch status.
+            mp.client.stream.return_value = self._make_resp(503, {"Retry-After": "0"})
+            with patch.object(mp, "get_status", return_value={"currentJob": {"stage": "transcribing"}}):
+                with self.assertRaises(TimeoutError) as ctx:
+                    mp.download_processed_audio(
+                        "some-slug", "ep-1", Path("/tmp"),
+                        max_retries=1000, retry_delay=0,
+                        max_wallclock_seconds=60,
+                    )
+        self.assertIn("Gave up", str(ctx.exception))
+        # Hint about EPISODE_MAX_WALLCLOCK_SECONDS should be in the error
+        # so users know how to bump it without grepping the source.
+        self.assertIn("EPISODE_MAX_WALLCLOCK_SECONDS", str(ctx.exception))
+
+    def test_stall_watchdog_bounces_whisper_then_aborts(self):
+        """If MinusPod's `stage` doesn't change for the threshold window,
+        we should bounce whisper-server first; if it stalls a SECOND time,
+        abort the episode so the queue can move on instead of looping."""
+        from pocketcasts_adfree import MinusPodClient
+        # Three relevant time points: t0=start, t1=stall #1 detected,
+        # t2=stall #2 detected. Anything in between just needs to be
+        # increasing. Use a counter-based clock that jumps past the
+        # stall threshold every iteration so the watchdog fires.
+        clock = [0.0]
+
+        def fake_monotonic():
+            t = clock[0]
+            clock[0] += 2000.0   # +33 min per call → > 15 min stall threshold
+            return t
+
+        restart_calls = []
+
+        def fake_restart():
+            restart_calls.append(time.monotonic())
+            return True
+
+        with patch.object(MinusPodClient, '__init__', lambda self, *a, **kw: None), \
+             patch('pocketcasts_adfree.time.monotonic', side_effect=fake_monotonic), \
+             patch('pocketcasts_adfree.time.sleep'), \
+             patch('pocketcasts_adfree._restart_whisper_if_wedged', side_effect=fake_restart):
+            mp = MinusPodClient.__new__(MinusPodClient)
+            mp.base_url = "http://localhost:8000"
+            mp.client = MagicMock()
+            mp.client.stream.return_value = self._make_resp(503, {"Retry-After": "1"})
+            # Stage never advances (always "transcribing") → stall.
+            with patch.object(mp, "get_status", return_value={
+                "currentJob": {"stage": "transcribing", "progress": 50, "elapsed": 60}
+            }), patch.object(mp, "get_episode", return_value=None):
+                with self.assertRaises(TimeoutError) as ctx:
+                    mp.download_processed_audio(
+                        "slug", "ep-1", Path("/tmp"),
+                        max_retries=50, retry_delay=0,
+                        max_wallclock_seconds=10**9,  # disable wallclock cap
+                        stall_threshold_seconds=60,
+                    )
+        # Whisper should have been bounced exactly once before the abort.
+        self.assertEqual(len(restart_calls), 1)
+        self.assertIn("stuck on stage", str(ctx.exception))
+
 
 class TestUpNextTitleMatching(unittest.TestCase):
     """When a PC Up Next UUID isn't in MinusPod's ep_map, the fallback
@@ -1438,6 +1522,68 @@ class TestServicesManager(unittest.TestCase):
     def test_read_log_tail_missing_file_returns_empty(self):
         self.assertEqual(self.sm._read_log_tail(Path("/nonexistent/x.log")), "")
 
+    def test_get_memory_pressure_warns_on_low_free(self):
+        """Preflight must surface a warning when free RAM is dangerously
+        low. The threshold (8 GB) is what we've found to be the difference
+        between healthy fan-spin and kernel panic on Apple Silicon Macs
+        running the default Qwen3.5 35B-A3B model alongside Whisper."""
+        # 36 GB total, ~3 GB available  → 1.5 GB free + 1.5 GB inactive
+        # at 4096 byte pages. Numbers chosen to land below the 8 GB warn
+        # threshold without being so low they're implausible.
+        page = 4096
+        free_pages = int(1.5 * 1024**3) // page
+        inactive_pages = int(1.5 * 1024**3) // page
+        vm_text = (
+            "Mach Virtual Memory Statistics: (page size of 4096 bytes)\n"
+            f"Pages free:                  {free_pages}.\n"
+            f"Pages inactive:              {inactive_pages}.\n"
+            "Pages speculative:           0.\n"
+            "Pages purgeable:             0.\n"
+            "Pages wired down:            1000.\n"
+            "Pages active:                1000.\n"
+        )
+
+        def fake_run(cmd, *a, **kw):
+            if cmd[:2] == ["sysctl", "-n"] and cmd[2] == "hw.memsize":
+                return self._mk_proc_run(stdout=str(36 * 1024**3))
+            if cmd[0] == "vm_stat":
+                return self._mk_proc_run(stdout=vm_text)
+            return self._mk_proc_run(stdout="")
+
+        with patch("services_manager.subprocess.run", side_effect=fake_run), \
+             patch("services_manager.httpx.get", side_effect=Exception("ollama down")):
+            result = self.sm.get_memory_pressure()
+        self.assertEqual(result["total_gb"], 36.0)
+        self.assertLess(result["available_gb"], 8.0)
+        self.assertIsNotNone(result["warning"])
+        self.assertIn("free", result["warning"].lower())
+
+    def test_get_memory_pressure_no_warning_when_plenty_free(self):
+        page = 4096
+        free_pages = int(16 * 1024**3) // page  # 16 GB free
+        vm_text = (
+            "Mach Virtual Memory Statistics: (page size of 4096 bytes)\n"
+            f"Pages free:                  {free_pages}.\n"
+            "Pages inactive:              0.\n"
+            "Pages speculative:           0.\n"
+            "Pages purgeable:             0.\n"
+            "Pages wired down:            1000.\n"
+            "Pages active:                1000.\n"
+        )
+
+        def fake_run(cmd, *a, **kw):
+            if cmd[:2] == ["sysctl", "-n"] and cmd[2] == "hw.memsize":
+                return self._mk_proc_run(stdout=str(36 * 1024**3))
+            if cmd[0] == "vm_stat":
+                return self._mk_proc_run(stdout=vm_text)
+            return self._mk_proc_run(stdout="")
+
+        with patch("services_manager.subprocess.run", side_effect=fake_run), \
+             patch("services_manager.httpx.get", side_effect=Exception("ollama down")):
+            result = self.sm.get_memory_pressure()
+        self.assertGreaterEqual(result["available_gb"], 8.0)
+        self.assertIsNone(result["warning"])
+
 
 class TestServicesEndpoints(unittest.TestCase):
     """Flask routes for the Services panel."""
@@ -1542,6 +1688,136 @@ class TestServicesEndpoints(unittest.TestCase):
                                 json={"model": "qwen3:14b"})
         self.assertEqual(r.status_code, 200)
         m.assert_called_once_with("qwen3:14b")
+
+
+class TestPocketCastsAuthErrorSurface(unittest.TestCase):
+    """Auth failures must surface as JSON, not Werkzeug HTML 500 pages.
+
+    Regression test for the user-visible
+    ``JSON.parse: unexpected character at line 1 column 1`` error: the
+    dashboard's auto-refresh hits /api/subscriptions, which used to
+    bubble httpx.HTTPStatusError as an HTML 500 page that the frontend
+    couldn't parse.
+    """
+
+    def setUp(self):
+        os.environ["POCKETCASTS_EMAIL"] = "test@example.com"
+        os.environ["POCKETCASTS_PASSWORD"] = "x" * 10
+        # Force a fresh app per test so cached auth state doesn't leak.
+        from importlib import reload
+        import ui_server
+        reload(ui_server)
+        self.ui_server = ui_server
+        self.app = ui_server.create_app()
+        self.client = self.app.test_client()
+
+    def _mk_auth_error(self, message_id="login_account_locked"):
+        from pocketcasts_adfree import PocketCastsAuthError
+        return PocketCastsAuthError(
+            401, message_id,
+            "Your account has been locked due too many login attempts.",
+        )
+
+    def test_pocketcasts_auth_error_carries_message_id_and_body(self):
+        from pocketcasts_adfree import PocketCastsAuthError
+        err = PocketCastsAuthError(
+            401, "login_wrong_password", "wrong password"
+        )
+        self.assertEqual(err.status_code, 401)
+        self.assertEqual(err.message_id, "login_wrong_password")
+        self.assertIn("login_wrong_password", str(err))
+        self.assertIn("wrong password", str(err))
+
+    def test_login_translates_401_json_to_typed_error(self):
+        """_login must parse Pocket Casts' JSON body and raise our typed
+        error, not let httpx.HTTPStatusError escape (which the route
+        wouldn't know how to render as JSON)."""
+        from pocketcasts_adfree import PocketCastsClient, PocketCastsAuthError
+
+        class FakeResponse:
+            status_code = 401
+            text = '{"errorMessage":"locked","errorMessageId":"login_account_locked"}'
+            def json(self):
+                return {
+                    "errorMessage": "locked",
+                    "errorMessageId": "login_account_locked",
+                }
+
+        class FakeHTTPClient:
+            def post(self, url, json=None):
+                return FakeResponse()
+
+        with patch("pocketcasts_adfree.httpx.Client", return_value=FakeHTTPClient()):
+            with self.assertRaises(PocketCastsAuthError) as ctx:
+                PocketCastsClient("a@b.c", "pw")
+        self.assertEqual(ctx.exception.message_id, "login_account_locked")
+        self.assertEqual(ctx.exception.status_code, 401)
+
+    def test_subscriptions_endpoint_returns_json_502_on_auth_failure(self):
+        with patch.object(
+            self.ui_server, "PocketCastsClient",
+            side_effect=self._mk_auth_error(),
+        ):
+            r = self.client.get("/api/subscriptions")
+        self.assertEqual(r.status_code, 502)
+        self.assertEqual(r.content_type.split(";")[0], "application/json")
+        body = r.get_json()
+        self.assertEqual(body["error"], "pocketcasts_auth_failed")
+        self.assertEqual(body["message_id"], "login_account_locked")
+        self.assertIn("locked", body["message"].lower())
+        # Hint must explain remediation, not be a stack trace.
+        self.assertIn("Wait", body["hint"])
+
+    def test_files_endpoint_returns_json_502_on_auth_failure(self):
+        with patch.object(
+            self.ui_server, "PocketCastsClient",
+            side_effect=self._mk_auth_error("login_wrong_password"),
+        ):
+            r = self.client.get("/api/files")
+        self.assertEqual(r.status_code, 502)
+        self.assertEqual(r.content_type.split(";")[0], "application/json")
+        body = r.get_json()
+        self.assertEqual(body["message_id"], "login_wrong_password")
+        self.assertIn("password", body["hint"].lower())
+
+    def test_status_endpoint_includes_pocketcasts_error(self):
+        with patch.object(
+            self.ui_server, "PocketCastsClient",
+            side_effect=self._mk_auth_error(),
+        ):
+            with patch.object(
+                self.ui_server.MinusPodClient, "health", return_value=True
+            ):
+                r = self.client.get("/api/status")
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertFalse(body["pocketcasts"])
+        self.assertIsNotNone(body["pocketcasts_error"])
+        self.assertEqual(
+            body["pocketcasts_error"]["message_id"], "login_account_locked"
+        )
+
+    def test_auth_failure_is_cached_so_dashboard_polls_dont_hammer_login(self):
+        """Once auth fails, subsequent calls within the cooldown window
+        must NOT call PocketCastsClient again. This is what prevented
+        the dashboard's 20s refresh from extending the lockout."""
+        call_count = {"n": 0}
+
+        def fake_ctor(*a, **kw):
+            call_count["n"] += 1
+            raise self._mk_auth_error()
+
+        with patch.object(
+            self.ui_server, "PocketCastsClient", side_effect=fake_ctor
+        ):
+            self.client.get("/api/subscriptions")
+            self.client.get("/api/subscriptions")
+            self.client.get("/api/subscriptions")
+        self.assertEqual(
+            call_count["n"], 1,
+            "Auth-failure cache let repeated requests re-trigger login; "
+            "this would extend Pocket Casts' lockout."
+        )
 
 
 if __name__ == "__main__":

@@ -102,6 +102,7 @@ per episode.
 
 ```bash
 cp .env.example .env       # then edit and add your Pocket Casts credentials
+source venv/bin/activate
 ./start_services.sh        # starts Ollama, Whisper (native Metal), MinusPod
 source .env && python3 pocketcasts_adfree.py ui
 # Open http://localhost:5050
@@ -186,14 +187,29 @@ variant named `qwen3.5-addetect` with a 16 K context. Any OpenAI-compatible
 endpoint works — point `OPENAI_BASE_URL` at it and set `OPENAI_MODEL` to
 whatever model you want.
 
-```bash
-# Default setup (local Ollama, requires ~24 GB VRAM/RAM)
-brew services start ollama        # or: `systemctl --user start ollama`
-ollama pull qwen3.5:35b-a3b
+**Pick a model that fits your machine.** Ad detection runs one LLM call per
+~8-min transcript window, so a 4-hour episode = 30 calls. With a too-large
+model that's both slow (the "45 min per episode" complaint) and a hard-crash
+risk on machines with less than ~48 GB RAM (the model + Whisper + KV cache
++ your other apps will swap-thrash and can panic the kernel).
 
-# Lighter alternative (works on ~8 GB RAM, less accurate)
-ollama pull llama3.1:8b
-echo 'OPENAI_MODEL=llama3.1:8b' >> .env
+| Free RAM | Recommended model | Why |
+|----------|-------------------|-----|
+| ≥ 48 GB | `qwen3.5:35b-a3b` | Best accuracy. MoE so generation is fast. ~22 GB resident. |
+| 24-48 GB | `qwen3:14b` | Solid accuracy, ~9 GB resident, ~2× the windows/min. **Default for ≤ 36 GB Macs.** |
+| 8-24 GB | `llama3.1:8b` | Acceptable for short shows; misses the occasional native-read sponsor. ~5 GB. |
+
+```bash
+ollama pull qwen3:14b
+echo 'OPENAI_MODEL=qwen3:14b' >> .env
+```
+
+If you change the model after `start_services.sh` already created the
+`qwen3.5-addetect` alias, also reset `OPENAI_MODEL` so MinusPod stops
+asking for the alias:
+
+```bash
+echo 'OPENAI_MODEL=qwen3:14b' >> .env
 ```
 
 ### 6. Launch
@@ -310,7 +326,11 @@ only what you need.
 | `WINDOW_SIZE_SECONDS` | `600` | Transcript window size handed to the LLM. |
 | `WINDOW_OVERLAP_SECONDS` | `120` | Overlap between consecutive windows. |
 | `AD_DETECTION_MAX_TOKENS` | `4096` | Token budget per LLM call. |
-| `OLLAMA_NUM_PARALLEL` | `2` | Concurrent Ollama requests. Increase only if you have plenty of VRAM. |
+| `OLLAMA_NUM_PARALLEL` | `1` | Concurrent Ollama requests. Each in-flight slot duplicates the KV cache. Increase only on machines with ≥48 GB free RAM. |
+| `OLLAMA_MAX_LOADED_MODELS` | `1` | How many models Ollama keeps resident. Bumping this silently doubles memory if MinusPod swaps detection ↔ verification ↔ chapters models. |
+| `OLLAMA_KEEP_ALIVE` | `30s` | How long Ollama keeps the model loaded after the last request. Short values quiet the fans between episodes; longer values save the ~30 s reload cost. |
+| `EPISODE_MAX_WALLCLOCK_SECONDS` | `5400` (90 min) | Hard cap on a single episode. If exceeded the orchestrator gives up and moves to the next one so the queue stays unblocked. |
+| `EPISODE_STALL_THRESHOLD_SECONDS` | `900` (15 min) | If MinusPod's reported processing stage doesn't change for this long, restart `whisper-server`. Same threshold a second time aborts the episode. |
 
 ## Architecture
 
@@ -381,6 +401,10 @@ See [`patches/README.md`](patches/README.md) for line-by-line detail.
 | MinusPod "Circuit breaker OPEN" | The LLM endpoint failed repeatedly. Check `ollama list` (or your remote endpoint), then `./start_services.sh`. |
 | Fans still spinning after a job | The pipeline auto-unloads Ollama. Force it: `curl -s -X POST http://localhost:11434/api/generate -H "Content-Type: application/json" -d '{"model":"<your-model>","keep_alive":"0s"}'` |
 | Transcription much slower than expected | You're probably on the Docker whisper image. Switch to the native binary via the Services panel (Metal on macOS, CPU/CUDA elsewhere). |
+| One episode takes 30+ minutes | A 4-hour show = ~30 LLM windows. With `qwen3.5:35b-a3b` that's ~30 × 1.5 min = 45 min. Switch to `qwen3:14b` (`echo 'OPENAI_MODEL=qwen3:14b' >> .env`) — same 30 windows, ~3 × faster. |
+| Mac kernel panics or hard freezes during a job | The default model is ~22 GB resident. Combined with Whisper Metal buffers (~2 GB), browser, IDE, etc. it can OOM the GPU on a 36 GB machine. The dashboard now shows a memory warning before each job; heed it, switch to `qwen3:14b`, or set `OLLAMA_NUM_PARALLEL=1` (already the default). |
+| Whisper crash with `kIOGPUCommandBufferCallbackErrorInnocentVictim` | Metal has a hard 8-command-buffer limit. The launcher now forces `--processors 1 --threads ≤8`; if you customised it, lower those numbers. |
+| Queue stalls on one episode forever | A single episode is now wallclock-capped at 90 min (`EPISODE_MAX_WALLCLOCK_SECONDS`). If MinusPod's reported stage doesn't change for 15 min (`EPISODE_STALL_THRESHOLD_SECONDS`) the pipeline restarts whisper-server, then aborts the episode so the queue keeps moving. Both knobs are env-tunable. |
 | Ad still partially in outro | Increase `TAIL_GAP_MIN_SECONDS` (smaller threshold = more aggressive) or `AD_END_PAD_TAIL`. See `patches/README.md`. |
 | Custom-file thumbnail stuck on the generic icon | Pocket Casts caches the colour fallback for ~1 minute after upload. The image does eventually render on every device — it's cosmetic only. |
 

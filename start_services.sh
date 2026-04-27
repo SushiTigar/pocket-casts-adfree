@@ -85,14 +85,23 @@ else
         echo "  ERROR: whisper.cpp not built. Run the setup first."
         exit 1
     fi
+    # Threads = perf cores capped at 8 (Metal has a hard 8 command-buffer
+    # limit; going higher crashes the GPU backend).
+    # `--processors 1`: whisper.cpp #2036 corrupts token timestamps when
+    # processors > 1 (timestamps restart per chunk), and we rely on those
+    # timestamps for ad cutting.
+    WHISPER_CORES=$(sysctl -n hw.performancecores 2>/dev/null \
+        || sysctl -n hw.perflevel0.physicalcpu 2>/dev/null \
+        || echo 4)
+    if [ "$WHISPER_CORES" -gt 8 ]; then WHISPER_CORES=8; fi
     "$WHISPER_DIR/build/bin/whisper-server" \
         --host 0.0.0.0 --port "$WHISPER_PORT" \
         --model "$WHISPER_DIR/models/ggml-large-v3-turbo.bin" \
         --inference-path /v1/audio/transcriptions \
         --dtw large.v3.turbo \
         --no-flash-attn \
-        --threads "$(sysctl -n hw.performancecores 2>/dev/null || echo 4)" \
-        --processors "$(sysctl -n hw.performancecores 2>/dev/null || echo 4)" \
+        --threads "$WHISPER_CORES" \
+        --processors 1 \
         > /tmp/whisper-server.log 2>&1 &
     echo "  PID: $!"
     sleep 8
@@ -127,7 +136,9 @@ else
         WINDOW_SIZE_SECONDS=600 \
         WINDOW_OVERLAP_SECONDS=120 \
         AD_DETECTION_MAX_TOKENS=4096 \
-        OLLAMA_NUM_PARALLEL=2 \
+        OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}" \
+        OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-1}" \
+        OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:-30s}" \
         PYTHONPATH=. python -m flask --app main_app:app run --host 0.0.0.0 --port "$MINUSPOD_PORT" \
             > /tmp/minuspod.log 2>&1 &
     )

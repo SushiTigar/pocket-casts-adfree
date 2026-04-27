@@ -21,6 +21,7 @@ from flask import Flask, jsonify, render_template, request
 from pocketcasts_adfree import (
     MinusPodClient,
     PocketCastsClient,
+    PocketCastsAuthError,
     is_patreon_feed,
     find_rss_url_for_podcast,
     load_state,
@@ -52,6 +53,14 @@ def create_app(email=None, password=None):
     app.config["SECRET_KEY"] = os.urandom(24).hex()
 
     pc_client = None
+    pc_auth_error: PocketCastsAuthError | None = None
+    pc_auth_error_at: float = 0.0
+    # Cache auth failures so the dashboard's 20s auto-refresh doesn't keep
+    # hammering /user/login while Pocket Casts has us locked out (which
+    # extends the lockout). Re-attempt at most once per
+    # PC_AUTH_RETRY_COOLDOWN_SECONDS even if every UI poll triggers it.
+    PC_AUTH_RETRY_COOLDOWN_SECONDS = 60
+
     mp_client = MinusPodClient()
     output_dir = Path(__file__).parent / "processed_audio"
     output_dir.mkdir(exist_ok=True)
@@ -65,12 +74,73 @@ def create_app(email=None, password=None):
         pass
 
     def get_pc():
-        nonlocal pc_client
-        if pc_client is None:
-            if not email or not password:
-                raise RuntimeError("Pocket Casts credentials not set")
+        nonlocal pc_client, pc_auth_error, pc_auth_error_at
+        if pc_client is not None:
+            return pc_client
+        if not email or not password:
+            raise PocketCastsAuthError(
+                0, "credentials_missing",
+                "Pocket Casts credentials not set. Add POCKETCASTS_EMAIL "
+                "and POCKETCASTS_PASSWORD to .env and restart the UI."
+            )
+        # Honor cached auth failure during the cooldown window.
+        if pc_auth_error is not None:
+            age = time.time() - pc_auth_error_at
+            if age < PC_AUTH_RETRY_COOLDOWN_SECONDS:
+                raise pc_auth_error
+        try:
             pc_client = PocketCastsClient(email, password)
-        return pc_client
+            pc_auth_error = None
+            return pc_client
+        except PocketCastsAuthError as exc:
+            pc_auth_error = exc
+            pc_auth_error_at = time.time()
+            raise
+
+    @app.errorhandler(PocketCastsAuthError)
+    def _handle_pc_auth_error(exc: PocketCastsAuthError):
+        """Return a JSON 502 instead of Flask's HTML 500 page.
+
+        The dashboard polls /api/subscriptions and /api/files every 20s.
+        When auth fails the frontend used to receive the default Werkzeug
+        HTML error page and choke with "JSON.parse: unexpected character
+        at line 1 column 1". Always return parseable JSON so the UI can
+        render a useful banner instead.
+        """
+        log.warning(
+            "Pocket Casts auth error surfaced to client: %s", exc
+        )
+        return jsonify({
+            "error": "pocketcasts_auth_failed",
+            "message": str(exc),
+            "message_id": exc.message_id,
+            "status_code": exc.status_code,
+            "hint": _pc_auth_hint(exc.message_id),
+        }), 502
+
+    def _pc_auth_hint(message_id: str) -> str:
+        """Plain-English remediation hint for known Pocket Casts error codes."""
+        return {
+            "login_account_locked": (
+                "Pocket Casts has temporarily locked the account due to "
+                "too many failed login attempts. Wait ~15 minutes, then "
+                "fix the password in .env before the UI auto-refresh "
+                "tries again. Stop the dashboard now to avoid extending "
+                "the lockout."
+            ),
+            "login_wrong_password": (
+                "The password in .env doesn't match. Update "
+                "POCKETCASTS_PASSWORD and restart the UI."
+            ),
+            "login_email_unknown": (
+                "Pocket Casts doesn't have an account for that email. "
+                "Update POCKETCASTS_EMAIL in .env."
+            ),
+            "credentials_missing": (
+                "Add POCKETCASTS_EMAIL and POCKETCASTS_PASSWORD to .env, "
+                "then restart `python3 pocketcasts_adfree.py ui`."
+            ),
+        }.get(message_id, "Check .env credentials and restart the UI.")
 
     @app.route("/")
     def index():
@@ -95,6 +165,7 @@ def create_app(email=None, password=None):
     def api_status():
         mp_ok = False
         pc_ok = False
+        pc_error: dict | None = None
         try:
             mp_client.health()
             mp_ok = True
@@ -103,9 +174,20 @@ def create_app(email=None, password=None):
         try:
             get_pc()
             pc_ok = True
+        except PocketCastsAuthError as exc:
+            pc_error = {
+                "message": str(exc),
+                "message_id": exc.message_id,
+                "status_code": exc.status_code,
+                "hint": _pc_auth_hint(exc.message_id),
+            }
         except Exception:
             pass
-        return jsonify({"minuspod": mp_ok, "pocketcasts": pc_ok})
+        return jsonify({
+            "minuspod": mp_ok,
+            "pocketcasts": pc_ok,
+            "pocketcasts_error": pc_error,
+        })
 
     @app.route("/api/subscriptions")
     def api_subscriptions():
@@ -844,8 +926,20 @@ def create_app(email=None, password=None):
     def api_services_list():
         """Return live status for ollama, whisper, minuspod, ui."""
         return jsonify({
-            "services": [s.as_dict() for s in services_manager.all_statuses()]
+            "services": [s.as_dict() for s in services_manager.all_statuses()],
+            "memory": services_manager.get_memory_pressure(),
         })
+
+    @app.route("/api/system/memory", methods=["GET"])
+    def api_system_memory():
+        """Return RAM stats + a preflight warning if free memory is low.
+
+        The dashboard polls this before launching a job so the user sees
+        the warning before the system locks up. The same payload also
+        rides on `/api/services` so the Services panel can show pressure
+        without a second round-trip.
+        """
+        return jsonify(services_manager.get_memory_pressure())
 
     @app.route("/api/services/<service_id>/<action>", methods=["POST"])
     def api_services_action(service_id, action):
@@ -1033,6 +1127,23 @@ def create_app(email=None, password=None):
         stop_event = job["stop_event"]
 
         try:
+            # Memory preflight: warn (don't block) when free RAM is dangerously
+            # low. Better to show the warning prominently in the run log than
+            # to silently kernel-panic the user's machine 30 minutes later.
+            try:
+                mem = services_manager.get_memory_pressure()
+                if mem.get("warning"):
+                    _job_log(job_id, "warn", f"Memory preflight: {mem['warning']}")
+                else:
+                    _job_log(
+                        job_id, "info",
+                        f"Memory: {mem.get('available_gb', '?')}/"
+                        f"{mem.get('total_gb', '?')} GB available, "
+                        f"Ollama loaded: {mem.get('ollama_loaded_gb', 0)} GB."
+                    )
+            except Exception:
+                pass
+
             pc = get_pc()
             mp = MinusPodClient()
             mp.disable_auto_process()

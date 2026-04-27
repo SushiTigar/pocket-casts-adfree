@@ -368,10 +368,29 @@ def _start_whisper_native() -> dict:
             f"No Whisper model found in {WHISPER_MODEL_DIR}. "
             "Run: cd whisper.cpp/models && bash download-ggml-model.sh large-v3-turbo"
         )
-    cores = subprocess.run(
-        ["sysctl", "-n", "hw.performancecores"],
-        capture_output=True, text=True, timeout=3,
-    ).stdout.strip() or "4"
+    # Pick a sane thread count without blowing up the Metal command-buffer
+    # budget. `hw.performancecores` only exists on Apple Silicon Sequoia+;
+    # older OIDs are `hw.perflevel0.physicalcpu`. Fall back to a hard floor
+    # of 4 if neither is available. Cap at 8 because:
+    #   - whisper.cpp's Metal backend has a hard ceiling of 8 command
+    #     buffers (GGML_METAL_MAX_COMMAND_BUFFERS); going higher crashes.
+    #   - more threads than perf cores on Apple Silicon just degrades
+    #     performance because efficiency cores run Metal kernels slowly.
+    cores_raw = (
+        subprocess.run(
+            ["sysctl", "-n", "hw.performancecores"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout.strip()
+        or subprocess.run(
+            ["sysctl", "-n", "hw.perflevel0.physicalcpu"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout.strip()
+        or "4"
+    )
+    try:
+        cores = str(min(int(cores_raw), 8))
+    except ValueError:
+        cores = "4"
     log_fd = open(WHISPER_LOG, "ab")
     subprocess.Popen(
         [
@@ -381,7 +400,15 @@ def _start_whisper_native() -> dict:
             "--inference-path", "/v1/audio/transcriptions",
             "--dtw", "large.v3.turbo",
             "--no-flash-attn",
-            "--threads", cores, "--processors", cores,
+            # `--processors 1` (single chunk processed sequentially):
+            # whisper.cpp issue #2036 reports that `--processors > 1`
+            # corrupts token timestamps because each parallel chunk
+            # restarts its timestamp counter from zero. We rely on those
+            # timestamps for ad cutting, so misaligned timestamps mean
+            # we cut the wrong audio. Combined with whisper.cpp issue
+            # #2521 (Metal crashes with `--processors > 8`), keeping
+            # this at 1 is both safer and produces correct output.
+            "--threads", cores, "--processors", "1",
         ],
         stdout=log_fd, stderr=log_fd, start_new_session=True,
     )
@@ -497,7 +524,20 @@ def start_minuspod() -> dict:
         "WINDOW_SIZE_SECONDS": "600",
         "WINDOW_OVERLAP_SECONDS": "120",
         "AD_DETECTION_MAX_TOKENS": "4096",
-        "OLLAMA_NUM_PARALLEL": "2",
+        # Default to a single in-flight LLM request. The previous default of
+        # 2 doubled the KV-cache footprint (~5GB per 16K context for Qwen3.5
+        # 35B-MoE Q4). On a 36GB Mac that, plus Whisper Metal buffers,
+        # plus the browser/IDE, is enough to push the system into swap and
+        # trigger the GPU OOM panic the user hit. Override per-machine via
+        # `OLLAMA_NUM_PARALLEL=2` in `.env` only if you know you have headroom.
+        "OLLAMA_NUM_PARALLEL": env.get("OLLAMA_NUM_PARALLEL", "1"),
+        # Never keep more than one model resident. Ollama's default is 3,
+        # which means switching detection ↔ verification ↔ chapters models
+        # silently piles ~50GB onto the GPU.
+        "OLLAMA_MAX_LOADED_MODELS": env.get("OLLAMA_MAX_LOADED_MODELS", "1"),
+        # Tell ollama to evict idle models quickly. Long keep-alives are
+        # the second contributor to "fans never quiet down" reports.
+        "OLLAMA_KEEP_ALIVE": env.get("OLLAMA_KEEP_ALIVE", "30s"),
         "PYTHONPATH": ".",
     })
     log_fd = open(MINUSPOD_LOG, "ab")
@@ -600,3 +640,113 @@ def perform_action(service_id: str, action: str, **kwargs: Any) -> dict:
     if service_id == "whisper" and action in ("start", "restart"):
         return fn(backend=kwargs.get("backend", "native"))
     return fn()
+
+
+# ---------------------------------------------------------------------------
+# Resource pressure / preflight
+# ---------------------------------------------------------------------------
+
+def get_memory_pressure() -> dict:
+    """Return system memory state suitable for a preflight check.
+
+    The pipeline can request more RAM than a 36GB Mac can supply once the
+    user also has Cursor + a browser + Slack open. This helper exposes the
+    raw numbers so the UI can warn before queueing a job that's likely to
+    swap-thrash or panic. We deliberately don't try to be clever about
+    "free RAM" on macOS — the kernel reclaims inactive/cached pages on
+    demand, so the meaningful number is `total - wired - active`.
+
+    Returns:
+        {
+            "total_gb": float,
+            "available_gb": float,        # rough; macOS will reclaim more
+            "ollama_loaded_gb": float,    # currently resident model bytes
+            "warning": str | None,        # human-readable preflight warning
+        }
+    """
+    total_bytes = 0
+    available_bytes = 0
+    try:
+        out = subprocess.run(
+            ["sysctl", "-n", "hw.memsize"],
+            capture_output=True, text=True, timeout=3,
+        ).stdout.strip()
+        total_bytes = int(out)
+    except Exception:
+        pass
+
+    page_size = 4096
+    pages = {"free": 0, "inactive": 0, "speculative": 0, "purgeable": 0,
+             "wired": 0, "active": 0}
+    try:
+        vm = subprocess.run(
+            ["vm_stat"], capture_output=True, text=True, timeout=3,
+        ).stdout
+        # First line: "Mach Virtual Memory Statistics: (page size of N bytes)"
+        m = _PAGE_SIZE_RE.search(vm)
+        if m:
+            page_size = int(m.group(1))
+        for line in vm.splitlines():
+            if ":" not in line:
+                continue
+            key, _, val = line.partition(":")
+            key = key.strip().lower()
+            val = val.strip().rstrip(".").replace(",", "")
+            try:
+                n = int(val)
+            except ValueError:
+                continue
+            if "pages free" in key:
+                pages["free"] = n
+            elif "pages inactive" in key:
+                pages["inactive"] = n
+            elif "pages speculative" in key:
+                pages["speculative"] = n
+            elif "pages purgeable" in key:
+                pages["purgeable"] = n
+            elif "pages wired" in key:
+                pages["wired"] = n
+            elif "pages active" in key:
+                pages["active"] = n
+        # macOS treats inactive + speculative + purgeable as reclaimable.
+        available_bytes = (
+            pages["free"] + pages["inactive"]
+            + pages["speculative"] + pages["purgeable"]
+        ) * page_size
+    except Exception:
+        pass
+
+    ollama_loaded_bytes = 0
+    try:
+        r = httpx.get("http://localhost:11434/api/ps", timeout=3)
+        if r.status_code == 200:
+            for m in r.json().get("models", []):
+                ollama_loaded_bytes += int(m.get("size_vram") or m.get("size") or 0)
+    except Exception:
+        pass
+
+    total_gb = total_bytes / (1024**3) if total_bytes else 0.0
+    available_gb = available_bytes / (1024**3) if available_bytes else 0.0
+    loaded_gb = ollama_loaded_bytes / (1024**3) if ollama_loaded_bytes else 0.0
+
+    # Heuristic warning. The threshold (8GB headroom) is what we've found
+    # to be the difference between "fans spin up" and "kernel panic" on
+    # Apple Silicon Macs running the Qwen3.5 35B-A3B model.
+    warning = None
+    if total_gb and available_gb and (available_gb < 8.0):
+        warning = (
+            f"Only {available_gb:.1f} GB free of {total_gb:.0f} GB. "
+            "Running a large LLM + Whisper now risks swap thrashing. "
+            "Close memory-heavy apps (browsers, IDEs, Docker) or switch "
+            "to a smaller model (e.g. qwen3:14b)."
+        )
+    return {
+        "total_gb": round(total_gb, 1),
+        "available_gb": round(available_gb, 1),
+        "ollama_loaded_gb": round(loaded_gb, 1),
+        "warning": warning,
+    }
+
+
+import re as _re  # noqa: E402  -- keep regex local to this helper
+_PAGE_SIZE_RE = _re.compile(r"page size of (\d+) bytes")

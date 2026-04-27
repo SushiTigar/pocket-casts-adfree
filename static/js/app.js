@@ -40,17 +40,86 @@ let podcasts = [];
       }
     }
 
+    // Custom error type so callers can branch on Pocket Casts auth failures
+    // and render the human-readable hint we attach server-side, instead of
+    // the old generic "JSON.parse: unexpected character" surfaced when the
+    // server returned an HTML 500 page.
+    class ApiError extends Error {
+      constructor(status, body) {
+        super(body && body.message ? body.message : ('HTTP ' + status));
+        this.status = status;
+        this.body = body || {};
+      }
+    }
+
     async function api(path, opts = {}) {
       const resp = await fetch('/api' + path, {
         headers: { 'Content-Type': 'application/json' }, ...opts
       });
-      return resp.json();
+      const ctype = (resp.headers.get('content-type') || '').toLowerCase();
+      // Be defensive: even on non-200, try to parse JSON so we surface the
+      // structured `{error, message, hint}` shape the backend now returns
+      // for known failure modes (Pocket Casts auth, MinusPod down, etc.).
+      let body = null;
+      if (ctype.includes('application/json')) {
+        try { body = await resp.json(); } catch (_) { body = null; }
+      } else {
+        // Non-JSON response (Werkzeug HTML 500, e.g.). Read a snippet so
+        // the error message has *something* useful in it.
+        try {
+          const text = await resp.text();
+          body = { message: 'Server returned ' + (ctype || 'unknown') + ': ' + text.slice(0, 200) };
+        } catch (_) { body = null; }
+      }
+      if (!resp.ok) {
+        throw new ApiError(resp.status, body);
+      }
+      return body || {};
+    }
+
+    function renderAuthBanner(err) {
+      // Inject (or update) a single dismissable banner at the top of the
+      // dashboard. Repeated calls just refresh the message in place.
+      let banner = document.getElementById('pc-auth-banner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'pc-auth-banner';
+        banner.style.cssText =
+          'background:#5b1d1d;color:#ffd9d9;padding:12px 16px;margin:8px 0;' +
+          'border:1px solid #a23a3a;border-radius:6px;font-size:14px;line-height:1.45;';
+        const list = el('podcast-list');
+        if (list && list.parentNode) {
+          list.parentNode.insertBefore(banner, list);
+        }
+      }
+      const hint = (err.body && err.body.hint) || '';
+      const msg = (err.body && err.body.message) || err.message || 'Pocket Casts auth failed.';
+      banner.innerHTML =
+        '<strong>Pocket Casts authentication failed.</strong><br>' +
+        '<span style="opacity:0.85">' + escapeHtml(msg) + '</span>' +
+        (hint ? ('<br><em style="opacity:0.85">' + escapeHtml(hint) + '</em>') : '');
+    }
+
+    function clearAuthBanner() {
+      const banner = document.getElementById('pc-auth-banner');
+      if (banner && banner.parentNode) banner.parentNode.removeChild(banner);
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+      }[c]));
     }
 
     async function checkStatus() {
       try {
         const d = await api('/status');
         serviceHealth = { minuspod: !!d.minuspod, pocketcasts: !!d.pocketcasts };
+        if (d.pocketcasts_error) {
+          renderAuthBanner({ body: d.pocketcasts_error, message: d.pocketcasts_error.message });
+        } else if (d.pocketcasts) {
+          clearAuthBanner();
+        }
       } catch { }
     }
 
@@ -69,9 +138,17 @@ let podcasts = [];
         el('stat-eligible').textContent = d.eligible || 0;
         el('stat-patreon').textContent = d.patreon || 0;
         el('stat-processed').textContent = d.processed_count || 0;
+        clearAuthBanner();
         renderPodcasts();
       } catch(e) {
-        el('podcast-list').innerHTML = '<div class="empty-state"><h3>Error loading</h3><p>' + e.message + '</p></div>';
+        if (e instanceof ApiError && e.body && e.body.error === 'pocketcasts_auth_failed') {
+          renderAuthBanner(e);
+          el('podcast-list').innerHTML =
+            '<div class="empty-state"><h3>Pocket Casts auth failed</h3>' +
+            '<p>Fix the credentials in <code>.env</code> and restart the UI.</p></div>';
+          return;
+        }
+        el('podcast-list').innerHTML = '<div class="empty-state"><h3>Error loading</h3><p>' + escapeHtml(e.message) + '</p></div>';
       }
     }
 
