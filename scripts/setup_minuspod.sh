@@ -6,7 +6,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${ROOT}/MinusPod"
 REPO="https://github.com/ttlequals0/MinusPod.git"
-PIN="0f754f82943db28c8f10a086de87dc8026414fd3"
+PIN="61eb125a1e73ffdff6450b2d29d6e75772f5d00a"
 PATCH="${ROOT}/patches/minuspod-local.patch"
 
 if [[ ! -f "${PATCH}" ]]; then
@@ -35,6 +35,9 @@ fi
 # shellcheck source=/dev/null
 source venv/bin/activate
 pip install --quiet --upgrade pip
-pip install --quiet -r requirements.txt
+if ! pip install --quiet -r requirements.txt; then
+    echo "requirements.txt failed (likely due to Python 3.14+ compatibility). Falling back to requirements.in..."
+    pip install --quiet -r requirements.in
+fi
 
 echo "MinusPod ready at ${TARGET}"

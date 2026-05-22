@@ -3,7 +3,7 @@
 The patches in this directory apply on top of:
 
     Repo:   https://github.com/ttlequals0/MinusPod.git
-    Commit: 0f754f82943db28c8f10a086de87dc8026414fd3
+    Commit: 61eb125a1e73ffdff6450b2d29d6e75772f5d00a
 
 Run `./scripts/setup_minuspod.sh` to clone the repo at this revision and apply
 the patches automatically.

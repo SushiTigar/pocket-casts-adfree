@@ -1,8 +1,8 @@
 diff --git a/docker-compose.whisper.yml b/docker-compose.whisper.yml
-index 8c4c2dc..9ce48d6 100644
+index fe7667d9..10fedf60 100644
 --- a/docker-compose.whisper.yml
 +++ b/docker-compose.whisper.yml
-@@ -23,7 +23,7 @@
+@@ -30,7 +30,7 @@
  
  services:
    whisper-server:
@@ -11,7 +11,7 @@ index 8c4c2dc..9ce48d6 100644
      platform: linux/amd64
      container_name: whisper-server
      ports:
-@@ -45,13 +45,6 @@ services:
+@@ -52,13 +52,7 @@ services:
          --processors 1
          --dtw large.v3.turbo
          --no-flash-attn
@@ -22,14 +22,15 @@ index 8c4c2dc..9ce48d6 100644
 -            - driver: nvidia
 -              count: 1
 -              capabilities: [gpu]
++
      healthcheck:
        test: ["CMD-SHELL", "curl -sf http://localhost:8765/health || exit 1"]
        interval: 30s
 diff --git a/src/audio_processor.py b/src/audio_processor.py
-index ee1ec7f..c166294 100644
+index e650660a..ac280b94 100644
 --- a/src/audio_processor.py
 +++ b/src/audio_processor.py
-@@ -107,6 +107,20 @@ class AudioProcessor:
+@@ -120,6 +120,20 @@ class AudioProcessor:
              if current_segment:
                  merged_ads.append(current_segment)
  
@@ -50,110 +51,76 @@ index ee1ec7f..c166294 100644
              # Filter out short ad detections (< 10 seconds) - likely false positives
              MIN_AD_DURATION_FOR_REMOVAL = 10.0  # seconds
              ads = []
-diff --git a/src/config.py b/src/config.py
-index aca5d08..67a30cc 100644
---- a/src/config.py
-+++ b/src/config.py
-@@ -83,8 +83,8 @@ MAX_FALSE_POSITIVE_TEXTS = 100              # Max false positives to load per po
- # ============================================================
- MAX_EPISODE_RETRIES = 3         # Retries before permanent failure
- JIT_RETRY_COOLDOWN_SECONDS = 60 # Base cooldown between JIT retries (doubles per attempt)
--WINDOW_SIZE_SECONDS = 600       # Claude processing window (10 min)
--WINDOW_OVERLAP_SECONDS = 180    # Overlap between windows (3 min)
-+WINDOW_SIZE_SECONDS = int(os.environ.get('WINDOW_SIZE_SECONDS', '900'))
-+WINDOW_OVERLAP_SECONDS = int(os.environ.get('WINDOW_OVERLAP_SECONDS', '120'))
- MAX_FILE_SIZE_MB = 500          # Maximum audio file size
- 
- # ============================================================
 diff --git a/src/database/__init__.py b/src/database/__init__.py
-index 5840937..bfaac2b 100644
+index ab098b1d..8ed9b4bd 100644
 --- a/src/database/__init__.py
 +++ b/src/database/__init__.py
-@@ -242,7 +242,10 @@ class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
+@@ -249,7 +249,7 @@ class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
      _instance = None
      _lock = threading.Lock()
  
 -    def __new__(cls, data_dir: str = "/app/data"):
-+    def __new__(cls, data_dir: str = None):
-+        import os
-+        if data_dir is None:
-+            data_dir = os.environ.get("DATA_DIR", "/app/data")
++    def __new__(cls, data_dir: Optional[str] = None):
          """Singleton pattern for database instance."""
          if cls._instance is None:
              with cls._lock:
-@@ -251,7 +254,10 @@ class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
+@@ -258,10 +258,14 @@ class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
                      cls._instance._initialized = False
          return cls._instance
  
 -    def __init__(self, data_dir: str = "/app/data"):
-+    def __init__(self, data_dir: str = None):
-+        import os
-+        if data_dir is None:
-+            data_dir = os.environ.get("DATA_DIR", "/app/data")
++    def __init__(self, data_dir: Optional[str] = None):
          if self._initialized:
              return
  
-diff --git a/src/llm_client.py b/src/llm_client.py
-index 20550bb..2d464d1 100644
---- a/src/llm_client.py
-+++ b/src/llm_client.py
-@@ -507,6 +507,9 @@ class OpenAICompatibleClient(LLMClient):
-         if response_format:
-             kwargs["response_format"] = response_format
- 
-+        if os.environ.get('LLM_PROVIDER') == 'ollama':
-+            kwargs["extra_body"] = {"reasoning_effort": "none"}
++        import os
++        if data_dir is None:
++            data_dir = os.environ.get("DATA_DIR") or os.environ.get("DATA_PATH") or "/app/data"
 +
-         try:
-             if cached_param is not None:
-                 response = self._client.chat.completions.create(**kwargs)
+         self.data_dir = Path(data_dir)
+         self.data_dir.mkdir(parents=True, exist_ok=True)
+         self.db_path = self.data_dir / "podcast.db"
 diff --git a/src/main_app/processing.py b/src/main_app/processing.py
-index d16d16d..8028393 100644
+index 8b9ae7f8..accced6b 100644
 --- a/src/main_app/processing.py
 +++ b/src/main_app/processing.py
-@@ -344,7 +344,7 @@ def _refine_and_validate(slug, episode_id, all_ads, segments, audio_path,
+@@ -380,7 +380,7 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
+     """Append heuristic pre/post-roll and VAD-gap ads to ``all_ads`` in place."""
+     if not segments:
+         return
+-    from roll_detector import detect_preroll, detect_postroll
++    from roll_detector import detect_preroll, detect_postroll, detect_tail_gap
+     preroll_ad = detect_preroll(segments, all_ads, podcast_name=podcast_name,
+                                 skip_patterns=skip_patterns)
+     if preroll_ad:
+@@ -392,6 +392,14 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
+         all_ads.append(postroll_ad)
+         audio_logger.info(f"[{slug}:{episode_id}] Heuristic post-roll: {postroll_ad['start']:.1f}s-{postroll_ad['end']:.1f}s")
  
-     # Heuristic pre/post-roll detection
-     if segments:
--        from roll_detector import detect_preroll, detect_postroll
-+        from roll_detector import detect_preroll, detect_postroll, detect_tail_gap
-         preroll_ad = detect_preroll(segments, all_ads, podcast_name=podcast_name,
-                                     skip_patterns=skip_patterns)
-         if preroll_ad:
-@@ -356,6 +356,14 @@ def _refine_and_validate(slug, episode_id, all_ads, segments, audio_path,
-             all_ads.append(postroll_ad)
-             audio_logger.info(f"[{slug}:{episode_id}] Heuristic post-roll: {postroll_ad['start']:.1f}s-{postroll_ad['end']:.1f}s")
- 
-+        tail_gap_ad = detect_tail_gap(segments, all_ads, episode_duration=episode_duration)
-+        if tail_gap_ad:
-+            all_ads.append(tail_gap_ad)
-+            audio_logger.info(
-+                f"[{slug}:{episode_id}] Heuristic tail-gap: "
-+                f"{tail_gap_ad['start']:.1f}s-{tail_gap_ad['end']:.1f}s"
-+            )
++    tail_gap_ad = detect_tail_gap(segments, all_ads, episode_duration=episode_duration)
++    if tail_gap_ad:
++        all_ads.append(tail_gap_ad)
++        audio_logger.info(
++            f"[{slug}:{episode_id}] Heuristic tail-gap: "
++            f"{tail_gap_ad['start']:.1f}s-{tail_gap_ad['end']:.1f}s"
++        )
 +
-     # Validation
-     if not all_ads:
-         return [], []
-@@ -830,21 +838,26 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+     # VAD-gap detection (head/mid/tail)
+     if _vad_gap_enabled(db):
+         from vad_gap_detector import detect_vad_gaps
+@@ -1428,21 +1436,27 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
              original_duration = episode_duration
              _check_cancel(cancel_event, slug, episode_id)
  
 -            # Stage 6: Verification pass
 -            current_pass = "pass2"
 -            verification_count, v_ads_for_ui, processed_path = _run_verification_pass(
--                slug, episode_id, processed_path, ads_to_remove,
--                podcast_name, episode_title, episode_description,
--                podcast_description, skip_patterns, min_cut_confidence,
--                local_audio_processor, detection_progress_callback
+-                ctx, processed_path, ads_to_remove,
+-                skip_patterns, min_cut_confidence,
+-                local_audio_processor, detection_progress_callback,
+-                original_segments=segments,
 -            )
 -            _check_cancel(cancel_event, slug, episode_id)
--
--            # Merge pass 2 ads into combined list for UI
--            if v_ads_for_ui:
--                all_ads_with_validation = list(all_ads_with_validation) + v_ads_for_ui
--                all_ads_with_validation.sort(key=lambda x: x['start'])
--                storage.save_combined_ads(slug, episode_id, all_ads_with_validation)
 +            # Stage 6: Verification pass (skip if SKIP_VERIFICATION is set)
 +            skip_verification = os.environ.get('SKIP_VERIFICATION', 'true').lower() == 'true'
 +            verification_count = 0
@@ -161,13 +128,19 @@ index d16d16d..8028393 100644
 +            if not skip_verification:
 +                current_pass = "pass2"
 +                verification_count, v_ads_for_ui, processed_path = _run_verification_pass(
-+                    slug, episode_id, processed_path, ads_to_remove,
-+                    podcast_name, episode_title, episode_description,
-+                    podcast_description, skip_patterns, min_cut_confidence,
-+                    local_audio_processor, detection_progress_callback
++                    ctx, processed_path, ads_to_remove,
++                    skip_patterns, min_cut_confidence,
++                    local_audio_processor, detection_progress_callback,
++                    original_segments=segments,
 +                )
 +                _check_cancel(cancel_event, slug, episode_id)
-+
+ 
+-            # Merge pass 2 ads into combined list for UI
+-            if v_ads_for_ui:
+-                all_ads_with_validation = list(all_ads_with_validation) + v_ads_for_ui
+-                all_ads_with_validation.sort(key=lambda x: x['start'])
+-                storage.save_combined_ads(slug, episode_id, all_ads_with_validation)
++                # Merge pass 2 ads into combined list for UI
 +                if v_ads_for_ui:
 +                    all_ads_with_validation = list(all_ads_with_validation) + v_ads_for_ui
 +                    all_ads_with_validation.sort(key=lambda x: x['start'])
@@ -178,7 +151,7 @@ index d16d16d..8028393 100644
              new_duration = local_audio_processor.get_audio_duration(processed_path)
  
 diff --git a/src/roll_detector.py b/src/roll_detector.py
-index 8961805..47512bb 100644
+index 89618058..47512bb0 100644
 --- a/src/roll_detector.py
 +++ b/src/roll_detector.py
 @@ -56,10 +56,17 @@ AD_INDICATOR_PATTERNS = [
@@ -298,18 +271,16 @@ index 8961805..47512bb 100644
 +        'detection_stage': 'heuristic_tail_gap',
 +    }
 diff --git a/src/storage.py b/src/storage.py
-index 1860aaa..fe3b5e0 100644
+index 4b73666e..d0ba2aac 100644
 --- a/src/storage.py
 +++ b/src/storage.py
-@@ -16,7 +16,10 @@ logger = logging.getLogger(__name__)
- class Storage:
-     """Storage manager using SQLite for metadata and filesystem for large files."""
- 
--    def __init__(self, data_dir: str = "/app/data"):
-+    def __init__(self, data_dir: str = None):
-+        import os
-+        if data_dir is None:
-+            data_dir = os.environ.get("DATA_DIR", "/app/data")
-         self.data_dir = Path(data_dir)
-         self.data_dir.mkdir(exist_ok=True)
- 
+@@ -113,7 +113,8 @@ class Storage:
+         # /app/data is the in-container default.
+         if data_dir is None:
+             data_dir = (
+-                os.environ.get("DATA_PATH")
++                os.environ.get("DATA_DIR")
++                or os.environ.get("DATA_PATH")
+                 or os.environ.get("MINUSPOD_DATA_DIR")
+                 or "/app/data"
+             )
