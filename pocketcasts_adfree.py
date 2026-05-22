@@ -1846,7 +1846,8 @@ def process_single_episode(
 
     # Pre-populate transcript from Pocket Casts if available (skips Whisper).
     # Requires a real Pocket Casts episode UUID — MinusPod IDs won't work.
-    if podcast_uuid and ep_status != "completed":
+    disable_sync = os.environ.get("DISABLE_TRANSCRIPT_SYNC", "").lower() == "true"
+    if podcast_uuid and ep_status != "completed" and not disable_sync:
         if not original_episode_uuid:
             log.info(f"  Could not match episode to Pocket Casts UUID (title matching failed)")
             if progress_callback:
