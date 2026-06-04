@@ -23,6 +23,7 @@ import os
 import shutil
 import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -42,6 +43,7 @@ OLLAMA_LOG_GUESSES = [
     Path("/tmp/ollama.log"),
 ]
 UI_LOG = Path("/tmp/pocketcasts-ui.log")
+MINUSPOD_PATCH = ROOT / "patches" / "minuspod-local.patch"
 
 
 # ---------------------------------------------------------------------------
@@ -322,7 +324,7 @@ def start_ollama() -> dict:
         except FileNotFoundError:
             raise ServiceError("`ollama` not found on PATH. brew install ollama.")
     ok = _wait_until(
-        lambda: _http_ok("http://localhost:11434/api/tags"), timeout=20,
+        lambda: _http_ok("http://localhost:11434/api/tags"), timeout=45,
     )
     return {"ok": ok}
 
@@ -343,10 +345,31 @@ def stop_whisper() -> dict:
             )
         except Exception:
             pass
-    pid = _pid_listening(8765)
-    if pid:
-        _kill_pid(pid)
-    ok = _wait_until(lambda: _pid_listening(8765) is None, timeout=15)
+            
+    # Find all pids listening on Whisper's port
+    pids = []
+    try:
+        out = subprocess.run(
+            ["lsof", "-nP", "-iTCP:8765", "-sTCP:LISTEN", "-t"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if out.returncode == 0:
+            for line in out.stdout.splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    pids.append(int(line))
+    except Exception:
+        pass
+
+    for pid in pids:
+        _kill_pid(pid, signal.SIGTERM)
+        
+    # Give them up to 3 seconds to exit gracefully, then escalate to SIGKILL
+    if pids and not _wait_until(lambda: _pid_listening(8765) is None, timeout=3):
+        for pid in pids:
+            _kill_pid(pid, signal.SIGKILL)
+            
+    ok = _wait_until(lambda: _pid_listening(8765) is None, timeout=12)
     return {"ok": ok}
 
 
@@ -413,7 +436,7 @@ def _start_whisper_native() -> dict:
         stdout=log_fd, stderr=log_fd, start_new_session=True,
     )
     ok = _wait_until(
-        lambda: _http_ok("http://localhost:8765/health"), timeout=30,
+        lambda: _http_ok("http://localhost:8765/health"), timeout=60,
     )
     return {"ok": ok, "backend": "native", "model": model.name}
 
@@ -489,9 +512,114 @@ def stop_minuspod() -> dict:
     return {"ok": ok, "note": "killed (SIGTERM ignored)"} if ok else {"ok": False}
 
 
+def update_minuspod() -> dict:
+    """Pull the latest MinusPod from upstream and reapply local patches.
+
+    Safe to call when MinusPod is NOT running (start_minuspod calls this
+    automatically). When MinusPod is already running the update is skipped
+    and the caller receives ``{"ok": True, "note": "already running"}``.  
+
+    Returns a dict with keys:
+        ok      – True on success or if already up-to-date / offline.
+        updated – True if a new upstream commit was pulled.
+        note    – Human-readable status message.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    if not MINUSPOD_DIR.exists():
+        return {"ok": False, "updated": False, "note": "MinusPod directory not found"}
+
+    def _run(*args, **kwargs):
+        return subprocess.run(
+            list(args), cwd=str(MINUSPOD_DIR),
+            capture_output=True, text=True, timeout=60, **kwargs
+        )
+
+    try:
+        # Fetch from upstream (tolerate offline)
+        fetch = _run("git", "fetch", "origin", "--quiet")
+        if fetch.returncode != 0:
+            log.warning("MinusPod update: git fetch failed — offline? %s", fetch.stderr.strip())
+            return {"ok": True, "updated": False, "note": "offline — skipped update check"}
+
+        local_sha = _run("git", "rev-parse", "HEAD").stdout.strip()
+        # Try main then master
+        for branch in ("origin/main", "origin/master"):
+            r = _run("git", "rev-parse", branch)
+            if r.returncode == 0:
+                remote_sha = r.stdout.strip()
+                break
+        else:
+            return {"ok": True, "updated": False, "note": "could not resolve remote branch"}
+
+        if local_sha == remote_sha:
+            short = local_sha[:7]
+            log.info("MinusPod already at latest (%s)", short)
+            return {"ok": True, "updated": False, "note": f"already at latest ({short})"}
+
+        old_short = local_sha[:7]
+        new_short = remote_sha[:7]
+        log.info("MinusPod update available: %s → %s; pulling…", old_short, new_short)
+
+        # Discard locally applied patch before pulling
+        _run("git", "reset", "--hard", "HEAD")
+        _run("git", "clean", "-fd")
+
+        pulled = False
+        for branch in ("main", "master"):
+            pr = _run("git", "pull", "--ff-only", "origin", branch)
+            if pr.returncode == 0:
+                pulled = True
+                break
+        if not pulled:
+            log.warning("MinusPod update: git pull failed (non-fast-forward?)")
+            return {"ok": False, "updated": False, "note": "git pull failed"}
+
+        log.info("MinusPod pulled to %s", new_short)
+
+        # Reapply local patches on top of new upstream
+        if MINUSPOD_PATCH.exists():
+            patch_r = _run("git", "apply", str(MINUSPOD_PATCH))
+            if patch_r.returncode == 0:
+                log.info("MinusPod local patches applied cleanly")
+            else:
+                log.warning(
+                    "MinusPod patch did not apply cleanly — manual merge needed.\n%s",
+                    patch_r.stderr.strip(),
+                )
+
+        # Reinstall Python deps if requirements.txt changed
+        venv_pip = MINUSPOD_DIR / "venv" / "bin" / "pip"
+        req = MINUSPOD_DIR / "requirements.txt"
+        if venv_pip.exists() and req.exists():
+            pip_r = subprocess.run(
+                [str(venv_pip), "install", "-r", str(req),
+                 "--quiet", "--disable-pip-version-check"],
+                capture_output=True, text=True, timeout=120,
+            )
+            if pip_r.returncode != 0:
+                log.warning("MinusPod pip install failed: %s", pip_r.stderr.strip())
+            else:
+                log.info("MinusPod deps updated")
+
+        return {"ok": True, "updated": True, "note": f"updated {old_short} → {new_short}"}
+
+    except subprocess.TimeoutExpired:
+        log.warning("MinusPod update timed out")
+        return {"ok": False, "updated": False, "note": "update timed out"}
+    except Exception as exc:
+        log.warning("MinusPod update error: %s", exc)
+        return {"ok": False, "updated": False, "note": str(exc)}
+
+
 def start_minuspod() -> dict:
     if _pid_listening(8000):
         return {"ok": True, "note": "already running"}
+    # Auto-update before starting so we always run the latest upstream + local patches.
+    update_result = update_minuspod()
+    if update_result.get("updated"):
+        import logging
+        logging.getLogger(__name__).info("MinusPod updated: %s", update_result["note"])
     venv_python = MINUSPOD_DIR / "venv" / "bin" / "python"
     if not venv_python.exists():
         raise ServiceError(
@@ -518,6 +646,9 @@ def start_minuspod() -> dict:
         "WHISPER_BACKEND": "openai-api",
         "WHISPER_API_BASE_URL": "http://localhost:8765/v1",
         "WHISPER_DEVICE": "cpu",
+        "WHISPER_SKIP_PREPROCESS": "1",
+        "HTTP_TIMEOUT_WHISPER": env.get("HTTP_TIMEOUT_WHISPER", "1800"),
+        "API_CHUNK_DURATION_SECONDS": env.get("API_CHUNK_DURATION_SECONDS", "300"),
         "BASE_URL": "http://localhost:8000",
         "HF_HOME": str(MINUSPOD_DIR / "data" / ".cache"),
         "SKIP_VERIFICATION": "true",
@@ -530,6 +661,7 @@ def start_minuspod() -> dict:
         # plus the browser/IDE, is enough to push the system into swap and
         # trigger the GPU OOM panic the user hit. Override per-machine via
         # `OLLAMA_NUM_PARALLEL=2` in `.env` only if you know you have headroom.
+        "LLM_TIMEOUT_LOCAL": env.get("LLM_TIMEOUT_LOCAL", "1200"),
         "OLLAMA_NUM_PARALLEL": env.get("OLLAMA_NUM_PARALLEL", "1"),
         # Never keep more than one model resident. Ollama's default is 3,
         # which means switching detection ↔ verification ↔ chapters models
@@ -554,7 +686,7 @@ def start_minuspod() -> dict:
         lambda: _http_ok(
             "http://localhost:8000/api/v1/health", expect_substr="healthy",
         ),
-        timeout=30,
+        timeout=60,
     )
     return {"ok": ok}
 
@@ -582,15 +714,16 @@ def get_minuspod_model() -> str | None:
     """Return the model MinusPod currently uses for ad detection."""
     try:
         r = httpx.get(
-            "http://localhost:8000/api/v1/settings/ad-detection", timeout=5,
+            "http://localhost:8000/api/v1/settings", timeout=5,
         )
         if r.status_code == 200:
             j = r.json()
-            return (
-                j.get("claudeModel")
-                or j.get("model")
-                or j.get("settings", {}).get("claudeModel")
-            )
+            # The setting payload returns entries as dictionary keys like
+            # 'claudeModel': {'value': 'name', 'isDefault': bool}
+            claude_model = j.get("claudeModel")
+            if isinstance(claude_model, dict):
+                return claude_model.get("value")
+            return claude_model or j.get("model")
     except Exception:
         pass
     return None
@@ -612,6 +745,92 @@ def set_minuspod_model(model: str) -> dict:
         return {"ok": r.status_code < 400, "status_code": r.status_code}
     except Exception as e:
         raise ServiceError(f"MinusPod settings update failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Batch control & Background pulling
+# ---------------------------------------------------------------------------
+
+_pull_progress: dict[str, dict] = {}
+_pull_lock = threading.Lock()
+
+def start_all_services(whisper_backend: str = "native") -> dict:
+    results = {}
+    # 1. Start Ollama first (required for model check)
+    results["ollama"] = start_ollama()
+    # 2. Start Whisper
+    results["whisper"] = start_whisper(backend=whisper_backend)
+    # 3. Start MinusPod
+    results["minuspod"] = start_minuspod()
+    all_ok = all(svc.get("ok", False) for svc in results.values())
+    return {"ok": all_ok, "results": results}
+
+def stop_all_services() -> dict:
+    results = {}
+    # Stop in reverse order (MinusPod, then Whisper, then Ollama)
+    results["minuspod"] = stop_minuspod()
+    results["whisper"] = stop_whisper()
+    results["ollama"] = stop_ollama()
+    all_ok = all(svc.get("ok", False) for svc in results.values())
+    return {"ok": all_ok, "results": results}
+
+def pull_ollama_model(model_name: str) -> dict:
+    if not model_name:
+        raise ServiceError("model name required")
+    
+    # Make sure Ollama is running before starting the pull
+    start_ollama()
+
+    global _pull_progress
+    with _pull_lock:
+        if model_name in _pull_progress and _pull_progress[model_name]["status"] in ("downloading", "starting"):
+            return {"ok": True, "note": "already pulling"}
+        _pull_progress[model_name] = {
+            "status": "starting",
+            "completed": 0,
+            "total": 0,
+            "error": None
+        }
+
+    def _target():
+        import json
+        global _pull_progress
+        try:
+            with httpx.stream("POST", "http://localhost:11434/api/pull", json={"name": model_name}, timeout=3600) as r:
+                if r.status_code != 200:
+                    with _pull_lock:
+                        _pull_progress[model_name] = {"status": "error", "error": f"Ollama returned {r.status_code}"}
+                    return
+                for line in r.iter_lines():
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        status = data.get("status", "downloading")
+                        completed = data.get("completed", 0)
+                        total = data.get("total", 0)
+                        with _pull_lock:
+                            _pull_progress[model_name].update({
+                                "status": status,
+                                "completed": completed,
+                                "total": total
+                            })
+                    except Exception:
+                        pass
+            with _pull_lock:
+                _pull_progress[model_name]["status"] = "success"
+        except Exception as e:
+            with _pull_lock:
+                _pull_progress[model_name] = {"status": "error", "error": str(e)}
+
+    t = threading.Thread(target=_target, daemon=True)
+    t.start()
+    return {"ok": True}
+
+def get_pull_progress(model_name: str) -> dict | None:
+    with _pull_lock:
+        return _pull_progress.get(model_name)
+
 
 
 # ---------------------------------------------------------------------------
@@ -649,72 +868,95 @@ def perform_action(service_id: str, action: str, **kwargs: Any) -> dict:
 def get_memory_pressure() -> dict:
     """Return system memory state suitable for a preflight check.
 
-    The pipeline can request more RAM than a 36GB Mac can supply once the
-    user also has Cursor + a browser + Slack open. This helper exposes the
-    raw numbers so the UI can warn before queueing a job that's likely to
-    swap-thrash or panic. We deliberately don't try to be clever about
-    "free RAM" on macOS — the kernel reclaims inactive/cached pages on
-    demand, so the meaningful number is `total - wired - active`.
-
-    Returns:
-        {
-            "total_gb": float,
-            "available_gb": float,        # rough; macOS will reclaim more
-            "ollama_loaded_gb": float,    # currently resident model bytes
-            "warning": str | None,        # human-readable preflight warning
-        }
+    Exposes total/available memory dynamically and recommends the best local
+    Ollama model based on system RAM. Supports macOS, Linux, and Windows.
     """
+    import sys
     total_bytes = 0
     available_bytes = 0
-    try:
-        out = subprocess.run(
-            ["sysctl", "-n", "hw.memsize"],
-            capture_output=True, text=True, timeout=3,
-        ).stdout.strip()
-        total_bytes = int(out)
-    except Exception:
-        pass
 
-    page_size = 4096
-    pages = {"free": 0, "inactive": 0, "speculative": 0, "purgeable": 0,
-             "wired": 0, "active": 0}
+    # 1. Try psutil first if available (cross-platform and highly reliable)
     try:
-        vm = subprocess.run(
-            ["vm_stat"], capture_output=True, text=True, timeout=3,
-        ).stdout
-        # First line: "Mach Virtual Memory Statistics: (page size of N bytes)"
-        m = _PAGE_SIZE_RE.search(vm)
-        if m:
-            page_size = int(m.group(1))
-        for line in vm.splitlines():
-            if ":" not in line:
-                continue
-            key, _, val = line.partition(":")
-            key = key.strip().lower()
-            val = val.strip().rstrip(".").replace(",", "")
+        import psutil
+        vm = psutil.virtual_memory()
+        total_bytes = vm.total
+        available_bytes = vm.available
+    except ImportError:
+        # 2. Fallbacks if psutil is not installed
+        if sys.platform == "darwin":
             try:
-                n = int(val)
-            except ValueError:
-                continue
-            if "pages free" in key:
-                pages["free"] = n
-            elif "pages inactive" in key:
-                pages["inactive"] = n
-            elif "pages speculative" in key:
-                pages["speculative"] = n
-            elif "pages purgeable" in key:
-                pages["purgeable"] = n
-            elif "pages wired" in key:
-                pages["wired"] = n
-            elif "pages active" in key:
-                pages["active"] = n
-        # macOS treats inactive + speculative + purgeable as reclaimable.
-        available_bytes = (
-            pages["free"] + pages["inactive"]
-            + pages["speculative"] + pages["purgeable"]
-        ) * page_size
-    except Exception:
-        pass
+                out = subprocess.run(
+                    ["sysctl", "-n", "hw.memsize"],
+                    capture_output=True, text=True, timeout=3,
+                ).stdout.strip()
+                total_bytes = int(out)
+            except Exception:
+                pass
+
+            page_size = 4096
+            pages = {"free": 0, "inactive": 0, "speculative": 0, "purgeable": 0,
+                     "wired": 0, "active": 0}
+            try:
+                vm = subprocess.run(
+                    ["vm_stat"], capture_output=True, text=True, timeout=3,
+                ).stdout
+                m = _PAGE_SIZE_RE.search(vm)
+                if m:
+                    page_size = int(m.group(1))
+                for line in vm.splitlines():
+                    if ":" not in line:
+                        continue
+                    key, _, val = line.partition(":")
+                    key = key.strip().lower()
+                    val = val.strip().rstrip(".").replace(",", "")
+                    try:
+                        n = int(val)
+                    except ValueError:
+                        continue
+                    if "pages free" in key:
+                        pages["free"] = n
+                    elif "pages inactive" in key:
+                        pages["inactive"] = n
+                    elif "pages speculative" in key:
+                        pages["speculative"] = n
+                    elif "pages purgeable" in key:
+                        pages["purgeable"] = n
+                    elif "pages wired" in key:
+                        pages["wired"] = n
+                    elif "pages active" in key:
+                        pages["active"] = n
+                available_bytes = (
+                    pages["free"] + pages["inactive"]
+                    + pages["speculative"] + pages["purgeable"]
+                ) * page_size
+            except Exception:
+                pass
+        elif sys.platform.startswith("linux"):
+            try:
+                # Read /proc/meminfo directly
+                with open("/proc/meminfo", "r") as f:
+                    for line in f:
+                        if line.startswith("MemTotal:"):
+                            total_bytes = int(line.split()[1]) * 1024
+                        elif line.startswith("MemAvailable:"):
+                            available_bytes = int(line.split()[1]) * 1024
+            except Exception:
+                pass
+        elif sys.platform == "win32":
+            try:
+                out = subprocess.run(
+                    ["wmic", "OS", "get", "TotalVisibleMemorySize,FreePhysicalMemory", "/Value"],
+                    capture_output=True, text=True, timeout=3
+                ).stdout
+                for line in out.splitlines():
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        if k.strip() == "TotalVisibleMemorySize":
+                            total_bytes = int(v.strip()) * 1024
+                        elif k.strip() == "FreePhysicalMemory":
+                            available_bytes = int(v.strip()) * 1024
+            except Exception:
+                pass
 
     ollama_loaded_bytes = 0
     try:
@@ -729,22 +971,27 @@ def get_memory_pressure() -> dict:
     available_gb = available_bytes / (1024**3) if available_bytes else 0.0
     loaded_gb = ollama_loaded_bytes / (1024**3) if ollama_loaded_bytes else 0.0
 
-    # Heuristic warning. The threshold (8GB headroom) is what we've found
-    # to be the difference between "fans spin up" and "kernel panic" on
-    # Apple Silicon Macs running the Qwen3.5 35B-A3B model.
+    # Dynamic model recommendation based on overall hardware capability (Total RAM)
+    # Recommends lightweight model to save RAM and avoid swap-thrashing unless high RAM is present.
+    recommended_model = "qwen3.5-addetect"
+    if total_gb >= 24.0:
+        recommended_model = "qwen3:14b"
+
     warning = None
     if total_gb and available_gb and (available_gb < 8.0):
         warning = (
             f"Only {available_gb:.1f} GB free of {total_gb:.0f} GB. "
             "Running a large LLM + Whisper now risks swap thrashing. "
             "Close memory-heavy apps (browsers, IDEs, Docker) or switch "
-            "to a smaller model (e.g. qwen3:14b)."
+            f"to a smaller model (e.g. {recommended_model})."
         )
+
     return {
         "total_gb": round(total_gb, 1),
         "available_gb": round(available_gb, 1),
         "ollama_loaded_gb": round(loaded_gb, 1),
         "warning": warning,
+        "recommended_model": recommended_model,
     }
 
 

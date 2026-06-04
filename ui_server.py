@@ -41,8 +41,44 @@ job_queue: deque = deque()
 queue_lock = threading.Lock()
 active_job_id: str | None = None
 
+# ---------------------------------------------------------------------------
+# Process-level shutdown hooks — registered once at import time so that
+# multiple calls to create_app() (e.g. in tests) don't stack up duplicates.
+# ---------------------------------------------------------------------------
+import signal as _signal
+import sys as _sys
+import atexit as _atexit
 
+_shutdown_done = threading.Event()
 
+def _shutdown_all():
+    """Stop all background services. Idempotent — only executes once."""
+    if _shutdown_done.is_set():
+        return
+    _shutdown_done.set()
+    try:
+        services_manager.stop_all_services()
+    except Exception:
+        pass
+
+def _signal_handler(signum, frame):
+    log.info("UI shutting down (signal %s). Stopping all background services...", signum)
+    _shutdown_all()
+    _sys.exit(0)
+
+try:
+    _signal.signal(_signal.SIGINT, _signal_handler)
+    _signal.signal(_signal.SIGTERM, _signal_handler)
+except (ValueError, OSError):
+    # ValueError: signal only works in main thread; OSError on some platforms.
+    pass
+
+def _atexit_cleanup():
+    if not _shutdown_done.is_set():
+        log.info("UI process exiting. Stopping all background services...")
+    _shutdown_all()
+
+_atexit.register(_atexit_cleanup)
 
 
 def create_app(email=None, password=None):
@@ -51,6 +87,7 @@ def create_app(email=None, password=None):
 
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.urandom(24).hex()
+
 
     pc_client = None
     pc_auth_error: PocketCastsAuthError | None = None
@@ -65,13 +102,25 @@ def create_app(email=None, password=None):
     output_dir = Path(__file__).parent / "processed_audio"
     output_dir.mkdir(exist_ok=True)
 
-    # Disable MinusPod auto-processing at startup to prevent background
-    # CPU/GPU usage when the user isn't actively processing episodes.
-    try:
-        mp_client.disable_auto_process()
-        unload_ollama_models()
-    except Exception:
-        pass
+    # Auto-start all backend services in the background so the UI is ready
+    # immediately while Ollama / Whisper / MinusPod come up.
+    # This makes `source .env && python3 pocketcasts_adfree.py ui` the only
+    # command needed — no separate ./start_services.sh required.
+    def _startup_services():
+        try:
+            log.info("Auto-starting backend services (Ollama, Whisper, MinusPod)...")
+            services_manager.start_all_services()
+            log.info("All backend services ready.")
+            # Disable MinusPod's own background auto-processor so it only works
+            # on episodes we explicitly hand to it.
+            try:
+                mp_client.disable_auto_process()
+            except Exception:
+                pass
+        except Exception as exc:
+            log.warning("Service auto-start encountered an issue: %s", exc)
+
+    threading.Thread(target=_startup_services, daemon=True, name="service-startup").start()
 
     def get_pc():
         nonlocal pc_client, pc_auth_error, pc_auth_error_at
@@ -521,6 +570,7 @@ def create_app(email=None, password=None):
         job_id = str(uuid_mod.uuid4())
         skip_event = threading.Event()
         stop_event = threading.Event()
+        pause_event = threading.Event()  # set = paused
 
         processing_jobs[job_id] = {
             "status": "queued",
@@ -532,6 +582,7 @@ def create_app(email=None, password=None):
             "log_cursor": 0,
             "skip_event": skip_event,
             "stop_event": stop_event,
+            "pause_event": pause_event,
             "selections": selections,
         }
 
@@ -941,6 +992,62 @@ def create_app(email=None, password=None):
         """
         return jsonify(services_manager.get_memory_pressure())
 
+    @app.route("/api/services/all/start", methods=["POST"])
+    def api_services_all_start():
+        body = request.get_json(silent=True) or {}
+        backend = body.get("backend", "native")
+        threading.Thread(
+            target=services_manager.start_all_services,
+            kwargs={"whisper_backend": backend},
+            daemon=True
+        ).start()
+        return jsonify({"ok": True, "status": "starting"})
+
+    @app.route("/api/services/all/stop", methods=["POST"])
+    def api_services_all_stop():
+        threading.Thread(
+            target=services_manager.stop_all_services,
+            daemon=True
+        ).start()
+        return jsonify({"ok": True, "status": "stopping"})
+
+    @app.route("/api/shutdown", methods=["POST"])
+    def api_shutdown():
+        """Shut down background services and exit the UI web server."""
+        log.info("Shutdown UI requested from web client.")
+        def _target():
+            time.sleep(1)
+            _shutdown_all()
+            os.kill(os.getpid(), _signal.SIGINT)
+        threading.Thread(target=_target, daemon=True).start()
+        return jsonify({"ok": True, "status": "shutting_down"})
+
+
+    @app.route("/api/services/ollama/pull", methods=["POST"])
+    def api_services_ollama_pull():
+        body = request.get_json() or {}
+        model = body.get("model", "")
+        if not model:
+            return jsonify({"ok": False, "error": "model required"}), 400
+        try:
+            res = services_manager.pull_ollama_model(model)
+            return jsonify(res)
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+
+    @app.route("/api/services/ollama/pull-status", methods=["GET"])
+    def api_services_ollama_pull_status():
+        model = request.args.get("model", "")
+        if not model:
+            return jsonify({"ok": False, "error": "model required"}), 400
+        try:
+            prog = services_manager.get_pull_progress(model)
+            if prog:
+                return jsonify(prog)
+            return jsonify({"status": "not_started"})
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
+
     @app.route("/api/services/<service_id>/<action>", methods=["POST"])
     def api_services_action(service_id, action):
         """Start, stop, or restart a service.
@@ -1029,10 +1136,51 @@ def create_app(email=None, password=None):
             return jsonify({"error": "Job not found"}), 404
         job["stop_event"].set()
         job["skip_event"].set()
+        # Clear pause so the thread can wake and see the stop flag.
+        job["pause_event"].clear()
         # Immediately unload models so fans quiet down — don't wait
         # for the job thread to finish its current retry loop.
         threading.Thread(target=_cleanup_after_stop, daemon=True).start()
         return jsonify({"ok": True})
+
+    @app.route("/api/job/<job_id>/pause", methods=["POST"])
+    def api_pause(job_id):
+        job = processing_jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        job["pause_event"].set()
+        job["status"] = "paused"
+        # Resources are freed only after the current episode finishes
+        # (in the pause wait loop inside _process_job) to avoid killing
+        # an active Whisper transcription mid-stream.
+        return jsonify({"ok": True, "paused": True})
+
+    @app.route("/api/job/<job_id>/resume", methods=["POST"])
+    def api_resume(job_id):
+        job = processing_jobs.get(job_id)
+        if not job:
+            return jsonify({"error": "Job not found"}), 404
+        job["status"] = "running"
+        # Start services back up in the background before resuming the job thread
+        threading.Thread(target=_resume_services_and_clear_pause, args=(job,), daemon=True).start()
+        return jsonify({"ok": True, "paused": False})
+
+    def _cleanup_for_pause():
+        # Called ONLY between episodes (from _process_job after an episode completes),
+        # so it is always safe to free all resources here.
+        try:
+            unload_ollama_models()
+            services_manager.stop_whisper()
+        except Exception:
+            pass
+
+    def _resume_services_and_clear_pause(job):
+        try:
+            services_manager.start_all_services()
+        except Exception:
+            pass
+        job["pause_event"].clear()
+
 
     def _cleanup_after_stop():
         """Unload models and disable auto-processing after a stop request."""
@@ -1125,6 +1273,7 @@ def create_app(email=None, password=None):
         job = processing_jobs[job_id]
         skip_event = job["skip_event"]
         stop_event = job["stop_event"]
+        pause_event = job["pause_event"]
 
         try:
             # Memory preflight: warn (don't block) when free RAM is dangerously
@@ -1143,6 +1292,17 @@ def create_app(email=None, password=None):
                     )
             except Exception:
                 pass
+
+            _job_log(job_id, "info", "Ensuring background services are started...")
+            try:
+                res = services_manager.start_all_services()
+                if not res.get("ok"):
+                    failed_svcs = [k for k, v in res.get("results", {}).items() if not v.get("ok")]
+                    raise Exception(f"Failed to start services: {', '.join(failed_svcs)}")
+                _job_log(job_id, "info", "Background services started.")
+            except Exception as e:
+                _job_log(job_id, "error", f"Failed to start services: {e}")
+                raise e
 
             pc = get_pc()
             mp = MinusPodClient()
@@ -1354,6 +1514,7 @@ def create_app(email=None, password=None):
                             skip_event=skip_event,
                             podcast_uuid=puuid,
                             original_episode_uuid=original_ep_uuid,
+                            pause_event=pause_event,
                         )
                         job["processed"] += 1
                         if skip_event.is_set() and not file_uuid:
@@ -1371,6 +1532,19 @@ def create_app(email=None, password=None):
                     except Exception as e:
                         job["processed"] += 1
                         _job_log(job_id, "error", f"  Failed: {ep_title}: {e}")
+
+                    # --- Pause check between episodes ---
+                    # Resources are freed here, safely after the current
+                    # episode finishes, never mid-transcription.
+                    if pause_event.is_set() and not stop_event.is_set():
+                        _job_log(job_id, "info", "Current episode done. Pausing and freeing resources...")
+                        _cleanup_for_pause()  # unload Ollama + stop Whisper
+                        while pause_event.is_set():
+                            if stop_event.is_set():
+                                break
+                            pause_event.wait(timeout=1)
+                        if not stop_event.is_set():
+                            _job_log(job_id, "info", "Job resumed. Services restarting...")
 
             if stop_event.is_set():
                 job["status"] = "stopped"
@@ -1390,6 +1564,17 @@ def create_app(email=None, password=None):
             with queue_lock:
                 if active_job_id == job_id:
                     active_job_id = None
+            # Check if there are no other queued or running jobs, then stop services.
+            # We check if active_job_id is None and the job_queue is empty.
+            with queue_lock:
+                has_next = len(job_queue) > 0
+            if not has_next and not active_job_id:
+                _job_log(job_id, "info", "No more jobs in queue. Stopping all background services...")
+                try:
+                    services_manager.stop_all_services()
+                    _job_log(job_id, "info", "All background services stopped.")
+                except Exception as e:
+                    _job_log(job_id, "error", f"Failed to stop services: {e}")
             _maybe_start_next_job()
 
     return app

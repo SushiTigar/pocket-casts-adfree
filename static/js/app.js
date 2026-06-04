@@ -121,7 +121,153 @@ let podcasts = [];
           clearAuthBanner();
         }
       } catch { }
+
+      // Update the services quick bar status
+      try {
+        const svcData = await api('/services');
+        const services = svcData.services || [];
+        const memory = svcData.memory || {};
+
+        // 1. Update RAM Status
+        if (memory && typeof memory.available_gb !== 'undefined') {
+          const avail = memory.available_gb;
+          const total = memory.total_gb;
+          const pct = Math.min(100, Math.round(((total - avail) / total) * 100));
+          const valEl = el('sq-ram-value');
+          if (valEl) {
+            valEl.textContent = `${avail.toFixed(1)} GB free of ${total.toFixed(0)} GB`;
+          }
+          const barEl = el('sq-ram-bar-fill');
+          if (barEl) {
+            barEl.style.width = pct + '%';
+            barEl.classList.toggle('warning', pct >= 80 && pct < 90);
+            barEl.classList.toggle('danger', pct >= 90);
+          }
+        }
+
+        // 2. Update Service Dots
+        const updateDot = (serviceId, elId) => {
+          const service = services.find(s => s.id === serviceId);
+          const svcEl = el(elId);
+          if (svcEl && service) {
+            svcEl.classList.remove('up', 'warn');
+            // Check starting class
+            svcEl.classList.remove('starting');
+            
+            // Clean up any existing status label
+            const labelNode = svcEl.childNodes[1];
+            if (labelNode) {
+              const baseName = serviceId === 'ollama' ? 'Ollama' : (serviceId === 'whisper' ? 'Whisper' : 'MinusPod');
+              let statusLabel = baseName;
+              
+              if (service.healthy) {
+                svcEl.classList.add('up');
+              } else if (service.running) {
+                // If it is running but not healthy yet, it is starting!
+                svcEl.classList.add('warn');
+                statusLabel = `${baseName} (starting)`;
+              } else {
+                statusLabel = `${baseName} (offline)`;
+              }
+              labelNode.nodeValue = ' ' + statusLabel;
+            }
+          }
+        };
+        updateDot('ollama', 'sq-svc-ollama');
+        updateDot('whisper', 'sq-svc-whisper');
+        updateDot('minuspod', 'sq-svc-minuspod');
+      } catch (e) {
+        console.error('Failed to update quick bar services status:', e);
+      }
     }
+
+    // Set up warning when leaving page if services are running
+    window.addEventListener('beforeunload', (event) => {
+      const anyRunning = servicesState.services.some(s => s.running && s.id !== 'ui');
+      if (anyRunning) {
+        const message = 'Reminder: Background services (Ollama/Whisper/MinusPod) are still running. Please stop them to free system RAM.';
+        event.returnValue = message;
+        return message;
+      }
+    });
+
+    async function startAllServices() {
+      const btn = el('btn-start-all');
+      if (btn) { btn.disabled = true; btn.textContent = 'Starting...'; }
+      addLog('info', 'Starting background services in the background...');
+      try {
+        const res = await api('/services/all/start', { method: 'POST' });
+        if (res.ok) {
+          addLog('info', 'Startup initiated. Services are starting...');
+          let pings = 0;
+          const pingInterval = setInterval(async () => {
+            await checkStatus();
+            pings++;
+            if (pings >= 10) clearInterval(pingInterval);
+          }, 3000);
+        } else {
+          addLog('error', 'Failed to start: ' + (res.error || 'unknown error'));
+        }
+      } catch (e) {
+        addLog('error', 'Start request failed: ' + e.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Start All'; }
+        await checkStatus();
+      }
+    }
+
+    async function stopAllServices() {
+      const btn = el('btn-stop-all');
+      if (btn) { btn.disabled = true; btn.textContent = 'Stopping...'; }
+      addLog('info', 'Stopping background services...');
+      try {
+        const res = await api('/services/all/stop', { method: 'POST' });
+        if (res.ok) {
+          addLog('success', 'Shutdown initiated.');
+          let pings = 0;
+          const pingInterval = setInterval(async () => {
+            await checkStatus();
+            pings++;
+            if (pings >= 10) clearInterval(pingInterval);
+          }, 3000);
+        } else {
+          addLog('error', 'Failed to stop: ' + (res.error || 'unknown error'));
+        }
+      } catch (e) {
+        addLog('error', 'Stop request failed: ' + e.message);
+      } finally {
+        if (btn) { btn.disabled = false; btn.textContent = 'Stop All'; }
+        await checkStatus();
+      }
+    }
+
+    async function shutdownUI() {
+      if (!confirm('Are you sure you want to stop all backend services AND shut down this Web UI server? You will need to restart it from the terminal to access it again.')) return;
+      
+      const btn = el('btn-shutdown-ui');
+      if (btn) { btn.disabled = true; btn.textContent = 'Shutting Down...'; }
+      addLog('warn', 'Shutting down UI and all backend services...');
+      try {
+        const res = await api('/shutdown', { method: 'POST' });
+        if (res.ok) {
+          addLog('success', 'UI and all services are shutting down. You can close this tab now.');
+          alert('UI and all backend services are shutting down. You can now close this tab.');
+          document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0d1117;color:#e6edf3;font-family:sans-serif;"><h1>UI Server Shut Down</h1><p style="color:#8b949e;margin-top:12px;">All background services have been stopped. You can close this tab now.</p></div>';
+        } else {
+          addLog('error', 'Failed to shut down UI: ' + (res.error || 'unknown error'));
+        }
+      } catch (e) {
+        addLog('success', 'Shutdown request sent. Web server is stopping.');
+        document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0d1117;color:#e6edf3;font-family:sans-serif;"><h1>UI Server Shut Down</h1><p style="color:#8b949e;margin-top:12px;">All background services have been stopped. You can close this tab now.</p></div>';
+      }
+    }
+
+    window.startAllServices = startAllServices;
+    window.stopAllServices = stopAllServices;
+    window.shutdownUI = shutdownUI;
+
+
+
 
     async function loadSubscriptions() {
       try {
@@ -523,6 +669,7 @@ let podcasts = [];
       try {
         const d = await api('/services');
         servicesState.services = d.services || [];
+        servicesState.memory = d.memory || null;
         if (document.getElementById('services-modal')) renderServicesModal();
       } catch (e) {
         addLog('error', 'Failed to refresh services: ' + e.message);
@@ -546,6 +693,7 @@ let podcasts = [];
         </div>
         <div style="display:flex;gap:8px">
           <button class="btn small" onclick="refreshServices()">Refresh</button>
+          <button class="btn small danger" onclick="shutdownUI()" style="border:1px dashed var(--danger);" title="Stop all services and shut down this Web UI server.">Shutdown UI</button>
           <button class="btn small" onclick="closeServicesPanel()">Close</button>
         </div>
       </div>`;
@@ -659,18 +807,53 @@ let podcasts = [];
       return parts.join(' · ');
     }
 
+    let modelPullingState = {};
+
     function renderServicesFooter() {
       const ollama = servicesState.services.find(s => s.id === 'ollama');
       const models = (ollama && ollama.extra && ollama.extra.models) || [];
       const current = ollamaModelsCache && ollamaModelsCache.current;
-      let opts = models.map(m => `<option value="${esc(m)}" ${m === current ? 'selected' : ''}>${esc(m)}</option>`).join('');
-      if (!opts) opts = '<option value="">(no models loaded)</option>';
-      return `<div style="padding:14px 16px;border-top:1px solid var(--border);display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-        <div style="font-weight:600;font-size:12px">MinusPod ad-detection model:</div>
-        <select id="ollama-model-sel" style="font-size:12px;padding:4px 10px">${opts}</select>
-        <button class="btn small primary" onclick="setOllamaModel()">Apply</button>
-        <div style="flex:1"></div>
-        <div style="font-size:11px;color:var(--text-muted)">Currently: ${esc(current || 'unknown')}</div>
+
+      // Get recommended model from the latest memory API data if available
+      const recommendedModel = (servicesState.memory && servicesState.memory.recommended_model) || 'qwen3:14b';
+
+      const availableOptions = [
+        { value: 'qwen3.5-addetect', label: `qwen3.5-addetect (Default, lightest)${recommendedModel === 'qwen3.5-addetect' ? ' (⭐ Recommended for your RAM)' : ''}` },
+        { value: 'qwen3:14b', label: `qwen3:14b (Best balance of speed/accuracy)${recommendedModel === 'qwen3:14b' ? ' (⭐ Recommended for your RAM)' : ''}` },
+        { value: 'qwen3.5:35b-a3b', label: `qwen3.5:35b-a3b (High accuracy, heavy)${recommendedModel === 'qwen3.5:35b-a3b' ? ' (⭐ Recommended for your RAM)' : ''}` }
+      ];
+
+      // Build options, labeling which ones are installed
+      const opts = availableOptions.map(opt => {
+        const isInstalled = models.some(m => m === opt.value || m.split(':')[0] === opt.value.split(':')[0]);
+        const suffix = isInstalled ? ' (Installed)' : ' (Will download automatically)';
+        const selectedAttr = opt.value === current ? 'selected' : '';
+        return `<option value="${esc(opt.value)}" ${selectedAttr}>${esc(opt.label)}${suffix}</option>`;
+      }).join('');
+      
+      let pullStatusHtml = '';
+      for (const [model, state] of Object.entries(modelPullingState)) {
+        if (state.status === 'downloading') {
+          pullStatusHtml += `<div style="font-size:11px;color:var(--info);margin-top:4px;">Downloading ${model}: ${state.pct}% completed...</div>`;
+        } else if (state.status === 'success') {
+          pullStatusHtml += `<div style="font-size:11px;color:var(--accent2);margin-top:4px;">Successfully downloaded ${model}!</div>`;
+        } else if (state.status === 'error') {
+          pullStatusHtml += `<div style="font-size:11px;color:var(--danger);margin-top:4px;">Failed downloading ${model}: ${esc(state.error)}</div>`;
+        }
+      }
+
+      return `<div style="padding:14px 16px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:12px;">
+        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+          <div style="font-weight:600;font-size:12px">Model Selection:</div>
+          <select id="ollama-model-sel" style="font-size:12px;padding:4px 10px;flex:1;min-width:200px;">${opts}</select>
+          <button class="btn small primary" onclick="applyModelSelection()">Apply</button>
+          <div style="font-size:11px;color:var(--text-muted)">Current MinusPod Model: <strong>${esc(current || 'unknown')}</strong></div>
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+          <span>Ollama Model Path: <code>~/.ollama/models</code></span>
+          <span>Recommended Model for your hardware: <code>${esc(recommendedModel)}</code></span>
+        </div>
+        ${pullStatusHtml}
       </div>`;
     }
 
@@ -717,24 +900,85 @@ let podcasts = [];
       renderServicesModal();
     }
 
-    async function setOllamaModel() {
+    async function applyModelSelection() {
       const sel = document.getElementById('ollama-model-sel');
       if (!sel || !sel.value) return;
+      const model = sel.value;
+      const ollama = servicesState.services.find(s => s.id === 'ollama');
+      const models = (ollama && ollama.extra && ollama.extra.models) || [];
+      const isInstalled = models.some(m => m === model || m.split(':')[0] === model.split(':')[0]);
+
+      if (!isInstalled) {
+        addLog('info', `Model ${model} is not installed locally. Starting download...`);
+        try {
+          const r = await fetch('/api/services/ollama/pull', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model }),
+          });
+          const j = await r.json();
+          if (j.ok) {
+            modelPullingState[model] = { status: 'downloading', pct: 0 };
+            renderServicesModal();
+            pollModelPullStatus(model, true); // true to apply model after download
+          } else {
+            addLog('error', `Download failed to start: ${j.error || 'unknown'}`);
+          }
+        } catch (e) {
+          addLog('error', 'Download failed: ' + e.message);
+        }
+      } else {
+        await executeSetModel(model);
+      }
+    }
+
+    async function executeSetModel(model) {
       try {
         const r = await fetch('/api/services/ollama/model', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ model: sel.value }),
+          body: JSON.stringify({ model }),
         });
         const j = await r.json();
         if (j.ok) {
-          addLog('success', `MinusPod model set to ${sel.value}`);
+          addLog('success', `MinusPod model set to ${model}`);
           ollamaModelsCache = await api('/services/ollama/model');
         } else {
           addLog('error', `Failed to set model: ${j.error || 'unknown'}`);
         }
-      } catch (e) { addLog('error', 'Set model failed: ' + e.message); }
+      } catch (e) {
+        addLog('error', 'Set model failed: ' + e.message);
+      }
       renderServicesModal();
+    }
+
+    async function pollModelPullStatus(model, shouldApply = false) {
+      const interval = setInterval(async () => {
+        try {
+          const r = await fetch(`/api/services/ollama/pull-status?model=${encodeURIComponent(model)}`);
+          const j = await r.json();
+          if (j.status === 'success') {
+            modelPullingState[model] = { status: 'success' };
+            addLog('success', `Model ${model} downloaded successfully!`);
+            clearInterval(interval);
+            try { ollamaModelsCache = await api('/services/ollama/model'); } catch {}
+            await refreshServices();
+            if (shouldApply) {
+              await executeSetModel(model);
+            }
+          } else if (j.status === 'error') {
+            modelPullingState[model] = { status: 'error', error: j.error };
+            addLog('error', `Model ${model} download failed: ${j.error}`);
+            clearInterval(interval);
+          } else if (j.completed && j.total) {
+            const pct = Math.round((j.completed / j.total) * 100);
+            modelPullingState[model] = { status: 'downloading', pct };
+          }
+          if (document.getElementById('services-modal')) renderServicesModal();
+        } catch (e) {
+          clearInterval(interval);
+        }
+      }, 2000);
     }
 
     function renderPodcastGroup(list) {
@@ -1068,7 +1312,28 @@ let podcasts = [];
 
     function showJobControls(show) {
       el('btn-skip').classList.toggle('hidden', !show);
+      el('btn-pause').classList.toggle('hidden', !show);
       el('btn-stop').classList.toggle('hidden', !show);
+      if (!show) {
+        // Reset pause button to default state when controls are hidden
+        el('btn-pause').textContent = 'Pause';
+        el('btn-pause').classList.remove('active');
+      }
+    }
+
+    let _jobIsPaused = false;
+
+    async function togglePause() {
+      if (!activeJobId) return;
+      try {
+        const endpoint = _jobIsPaused ? 'resume' : 'pause';
+        await api('/job/' + activeJobId + '/' + endpoint, { method: 'POST' });
+        _jobIsPaused = !_jobIsPaused;
+        const btn = el('btn-pause');
+        btn.textContent = _jobIsPaused ? 'Resume' : 'Pause';
+        btn.classList.toggle('active', _jobIsPaused);
+        addLog(_jobIsPaused ? 'warn' : 'info', _jobIsPaused ? 'Job paused.' : 'Job resumed.');
+      } catch(e) { addLog('error', 'Pause failed: ' + e.message); }
     }
 
     async function skipEpisode() {
@@ -1081,6 +1346,8 @@ let podcasts = [];
 
     async function stopJob() {
       if (!activeJobId) return;
+      // Also clear paused state so button resets on next job
+      _jobIsPaused = false;
       try {
         await api('/job/' + activeJobId + '/stop', { method: 'POST' });
         addLog('warn', 'Stopping job...');
@@ -1127,6 +1394,7 @@ let podcasts = [];
             lastLogCursor += jd.new_logs.length;
           }
           if (jd.status === 'completed' || jd.status === 'failed' || jd.status === 'stopped') {
+            _jobIsPaused = false;
             const label = jd.status === 'stopped' ? 'stopped by user' : jd.status;
             addLog(jd.status === 'completed' ? 'success' : 'warn',
               `Job ${label}. Processed: ${jd.processed || 0}, Uploaded: ${jd.uploaded || 0}`);

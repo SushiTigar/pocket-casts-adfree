@@ -127,6 +127,51 @@ def _restart_whisper_if_wedged() -> bool:
         return False
 
 
+def _restart_ollama_if_wedged() -> bool:
+    """Restart Ollama when ad-detection LLM calls are hung. Returns True on success."""
+    try:
+        import services_manager
+    except Exception:
+        return False
+    try:
+        result = services_manager.restart_ollama()
+        return bool(result.get("ok"))
+    except Exception as exc:
+        log.warning(f"  Ollama restart failed: {exc}")
+        return False
+
+
+def _is_llm_stage(stage: str) -> bool:
+    if not stage:
+        return False
+    s = stage.lower()
+    return "detecting" in s or "llm" in s or "pass2" in s or "verifying" in s
+
+
+def _is_transcription_stage(stage: str) -> bool:
+    if not stage:
+        return False
+    s = stage.lower()
+    return "transcribing" in s or "whisper" in s
+
+
+def _stall_threshold_for_stage(stage: str, base_threshold: int) -> int:
+    """LLM ad detection stages get a 3x threshold multiplier compared to Whisper."""
+    if _is_llm_stage(stage):
+        return base_threshold * 3
+    return base_threshold
+
+
+def _bounce_service_for_stall(stage: str) -> tuple[bool, str]:
+    """Restart the backend most likely wedged for this MinusPod stage."""
+    if _is_llm_stage(stage):
+        return _restart_ollama_if_wedged(), "Ollama"
+    if _is_transcription_stage(stage):
+        return _restart_whisper_if_wedged(), "whisper-server"
+    # Post-transcription work is almost always LLM-bound.
+    return _restart_ollama_if_wedged(), "Ollama"
+
+
 def _list_up_next_episodes(pc) -> list[dict]:
     """Fetch the current Up Next list using a pull-only sync (no changes).
 
@@ -914,12 +959,25 @@ class MinusPodClient:
         raise TimeoutError(f"Processing did not complete within {timeout}s")
 
     def reprocess_episode(self, slug: str, episode_id: str, mode: str = "reprocess") -> dict:
-        """Trigger reprocessing for an episode (useful for 410 GONE)."""
+        """Trigger reprocessing for an episode (useful for 410 GONE).
+
+        Returns a dict with an ``already_processing`` key set to ``True`` when
+        MinusPod responds 409 (the episode is still being worked on internally).
+        In that case the caller should keep polling rather than counting a retry.
+        """
         resp = self.client.post(
             f"{self.base_url}/api/v1/feeds/{slug}/episodes/{episode_id}/reprocess",
             json={"mode": mode},
             timeout=30,
         )
+        if resp.status_code == 409:
+            # 409 Conflict — MinusPod is still actively processing this episode.
+            # This is NOT a failed reprocess; the episode is healthy, just busy.
+            log.info(
+                f"  Reprocess 409 for {slug}:{episode_id} — "
+                "MinusPod is still processing, keeping poll loop alive."
+            )
+            return {"already_processing": True}
         resp.raise_for_status()
         log.info(f"  Triggered reprocess for {slug}:{episode_id}")
         return resp.json()
@@ -950,6 +1008,7 @@ class MinusPodClient:
         source_url: str = None,  # kept for backwards-compat callers; unused
         max_wallclock_seconds: int | None = None,
         stall_threshold_seconds: int | None = None,
+        pause_event=None,
     ) -> Path:
         """Download processed audio, retrying on 503 (queue busy/processing).
 
@@ -999,7 +1058,8 @@ class MinusPodClient:
         last_stage = ""
         last_progress_at = time.monotonic()
         wallclock_start = time.monotonic()
-        whisper_bounced_for_stall = False
+        service_bounced_for_stall = False
+        bounced_service_name = ""
         # Cap how many times we'll ask MinusPod to re-attempt a "GONE" episode.
         # MinusPod itself caps internal retries at 3; if it keeps coming back
         # GONE, the underlying problem (e.g. Whisper backend down) won't fix
@@ -1011,6 +1071,30 @@ class MinusPodClient:
         STATUS_CHECK_EVERY = 3
 
         for attempt in range(max_retries):
+            if pause_event and pause_event.is_set():
+                log.info("  Pause requested mid-episode. Pausing poll loop (services kept running)...")
+                if progress_callback:
+                    progress_callback("Pausing active processing and freeing resources...")
+                # Do NOT stop Whisper or Ollama here.
+                # MinusPod is a separate process that continues running and may have
+                # transcription or LLM inference in-flight. Stopping either service
+                # mid-chunk causes MinusPod to mark the episode 'failed', which burns
+                # the reprocess budget. We simply pause our polling loop and let
+                # MinusPod finish whatever chunk it's working on.
+                # Resources (Ollama KEEP_ALIVE, Whisper) are freed between episodes
+                # by the caller in ui_server.py, safely after the episode completes.
+                while pause_event.is_set():
+                    if skip_event and skip_event.is_set():
+                        raise _SkippedError("Skipped by user")
+                    time.sleep(1)
+                log.info("  Resumed (services were kept running, no restart needed).")
+                if progress_callback:
+                    progress_callback("Resuming services...")
+                # Reset reprocess budget — any 'failed' MinusPod state that appeared
+                # while paused was caused by transient issues, not a genuine error.
+                reprocess_count = 0
+                log.info("  Reprocess budget reset after pause/resume.")
+
             # Hard wallclock cap — this is the real safety net.
             elapsed = time.monotonic() - wallclock_start
             if elapsed > max_wallclock_seconds:
@@ -1077,92 +1161,154 @@ class MinusPodClient:
                                 log.info(f"  Episode queued for processing, waiting...")
 
                         # Stall watchdog: if `stage` hasn't advanced for the
-                        # configured threshold, MinusPod is almost certainly
-                        # stuck on a wedged Whisper or LLM. Try one whisper
-                        # bounce; if that doesn't kick things loose on the next
-                        # status update, give up so the queue can move on.
+                        # configured threshold, bounce the relevant backend
+                        # (Ollama for ad detection, whisper for transcription).
                         stall_for = time.monotonic() - last_progress_at
-                        if stall_for > stall_threshold_seconds:
-                            if not whisper_bounced_for_stall:
-                                whisper_bounced_for_stall = True
+                        stage_stall_cap = _stall_threshold_for_stage(
+                            last_stage, stall_threshold_seconds,
+                        )
+                        if stall_for > stage_stall_cap:
+                            if not service_bounced_for_stall:
+                                service_bounced_for_stall = True
+                                bounced_ok, bounced_service_name = (
+                                    _bounce_service_for_stall(last_stage)
+                                )
                                 log.warning(
                                     f"  No MinusPod stage change for "
                                     f"{stall_for/60:.0f} min (stuck on "
-                                    f"'{last_stage or 'unknown'}'). Bouncing "
-                                    f"whisper-server in case it's wedged."
+                                    f"'{last_stage or 'unknown'}', cap "
+                                    f"{stage_stall_cap/60:.0f} min). Bouncing "
+                                    f"{bounced_service_name} in case it's wedged."
                                 )
                                 if progress_callback:
                                     progress_callback(
                                         f"Stalled on '{last_stage or 'unknown'}' "
-                                        f"for {stall_for/60:.0f}m — restarting whisper..."
+                                        f"for {stall_for/60:.0f}m — restarting "
+                                        f"{bounced_service_name}..."
                                     )
-                                _restart_whisper_if_wedged()
-                                # Reset the stall clock so we give whisper
-                                # another full window to make progress.
+                                if not bounced_ok:
+                                    log.warning(
+                                        f"  {bounced_service_name} restart "
+                                        f"failed or skipped."
+                                    )
                                 last_progress_at = time.monotonic()
                             else:
+                                log_hint = (
+                                    "~/Library/Logs/Homebrew/ollama/ollama.log"
+                                    if bounced_service_name == "Ollama"
+                                    else "/tmp/whisper-server.log"
+                                )
+                                llm_hint = ""
+                                if _is_llm_stage(last_stage):
+                                    llm_hint = (
+                                        " Ad detection uses Ollama — if windows "
+                                        "keep timing out, set OPENAI_MODEL=qwen3:14b "
+                                        "in .env (faster on ≤36GB Macs) or raise "
+                                        "LLM_TIMEOUT_LOCAL in MinusPod's environment."
+                                    )
                                 raise TimeoutError(
                                     f"MinusPod stuck on stage "
                                     f"'{last_stage or 'unknown'}' for "
                                     f"{stall_for/60:.0f} min even after "
-                                    f"restarting whisper. Aborting so other "
-                                    f"queued episodes can run. Inspect "
-                                    f"/tmp/minuspod.log and /tmp/whisper-server.log."
+                                    f"restarting {bounced_service_name or 'backend'}. "
+                                    f"Aborting so other queued episodes can run. "
+                                    f"Inspect /tmp/minuspod.log and {log_hint}."
+                                    f"{llm_hint}"
                                 )
 
                         # Periodically check the episode-detail endpoint —
-                        # `currentJob == null` + `status == failed` means
-                        # MinusPod has given up and 503 will never become 200.
+                        # 1. `currentJob == null` + `status == failed` means
+                        #    MinusPod has given up and 503 will never become 200.
+                        # 2. `currentJob == null` + `status == processing` means
+                        #    the episode is orphaned (stuck from a previous pause/crash).
                         if attempt > 0 and attempt % STATUS_CHECK_EVERY == 0:
                             ep_detail = self.get_episode(slug, episode_id)
-                            if ep_detail and ep_detail.get("status") in (
-                                "failed", "permanently_failed",
-                            ):
-                                err_text = (ep_detail.get("error") or "").strip()
-                                # Try a single reprocess if we haven't already
-                                if reprocess_count < MAX_REPROCESS_TRIGGERS:
-                                    reprocess_count += 1
-                                    log.warning(
-                                        f"  MinusPod episode is in '{ep_detail['status']}' state "
-                                        f"({err_text or 'no error detail'}). Triggering reprocess "
-                                        f"{reprocess_count}/{MAX_REPROCESS_TRIGGERS}..."
-                                    )
+                            if ep_detail:
+                                status = ep_detail.get("status")
+                                current_job = st.get("currentJob")
+                                
+                                # Auto-recovery for orphaned 'processing' state
+                                if status == "processing" and not current_job:
+                                    log.warning(f"  Detected orphaned processing status for {slug}/{episode_id} with no active job. Forcing database reset...")
                                     if progress_callback:
-                                        progress_callback(
-                                            f"MinusPod marked failed: {err_text or 'unknown'}. "
-                                            f"Retrying ({reprocess_count}/{MAX_REPROCESS_TRIGGERS})..."
-                                        )
-                                    # If the failure looks like a Whisper crash
-                                    # (Metal GPU command-buffer error, etc.),
-                                    # bounce the whisper-server before retrying.
-                                    # Reprocessing without restart just hits the
-                                    # same wedged backend and loops forever.
-                                    if _is_transcription_failure(err_text):
-                                        if progress_callback:
-                                            progress_callback(
-                                                "Whisper appears wedged; restarting it before retry..."
-                                            )
-                                        if _restart_whisper_if_wedged():
-                                            log.info("  Whisper restarted; retrying transcription.")
-                                        else:
-                                            log.warning(
-                                                "  Whisper restart attempt failed or skipped; "
-                                                "reprocess may still loop."
-                                            )
+                                        progress_callback("Orphaned job detected; resetting status to discovered...")
+                                    
+                                    # Update the database status directly to discovered
+                                    import sqlite3
+                                    try:
+                                        db_path = Path(__file__).parent / "MinusPod" / "data" / "podcast.db"
+                                        if db_path.exists():
+                                            conn = sqlite3.connect(str(db_path))
+                                            conn.execute("UPDATE episodes SET status='discovered' WHERE slug=? AND status='processing'", (episode_id,))
+                                            conn.commit()
+                                            conn.close()
+                                            log.info("  Successfully reset orphaned episode status to discovered in DB.")
+                                    except Exception as db_err:
+                                        log.error(f"  Failed to update episode status in DB: {db_err}")
+
+                                    # Trigger reprocess
                                     try:
                                         self.reprocess_episode(slug, episode_id)
                                     except Exception as e:
-                                        log.error(f"  Failed to trigger reprocess: {e}")
+                                        log.error(f"  Failed to trigger reprocess for orphaned episode: {e}")
                                     time.sleep(10)
                                     continue
-                                else:
-                                    raise RuntimeError(
-                                        f"MinusPod marked episode as '{ep_detail['status']}': "
-                                        f"{err_text or 'no error detail provided'}. "
-                                        f"Check the MinusPod log (typically /tmp/minuspod.log) "
-                                        f"for the underlying cause — common culprits are the "
-                                        f"Whisper backend being unreachable or out-of-memory."
-                                    )
+
+                                err_text = ""
+                                if status in ("failed", "permanently_failed"):
+                                    err_text = (ep_detail.get("error") or "").strip()
+                                    # Only reprocess for genuine failures, not transient
+                                    # states (processing, discovering, done, etc.).
+                                    # MinusPod sometimes marks an episode 'failed' while
+                                    # still internally retrying a window; calling reprocess
+                                    # then gets a 409 (still processing) which should not
+                                    # burn a retry slot.
+                                    if reprocess_count < MAX_REPROCESS_TRIGGERS:
+                                        reprocess_count += 1
+                                        log.warning(
+                                            f"  MinusPod episode is in '{ep_detail['status']}' state "
+                                            f"({err_text or 'no error detail'}). Triggering reprocess "
+                                            f"{reprocess_count}/{MAX_REPROCESS_TRIGGERS}..."
+                                        )
+                                        if progress_callback:
+                                            progress_callback(
+                                                f"MinusPod marked failed: {err_text or 'unknown'}. "
+                                                f"Retrying ({reprocess_count}/{MAX_REPROCESS_TRIGGERS})..."
+                                            )
+                                        if _is_transcription_failure(err_text):
+                                            if progress_callback:
+                                                progress_callback(
+                                                    "Whisper appears wedged; restarting it before retry..."
+                                                )
+                                            if _restart_whisper_if_wedged():
+                                                log.info("  Whisper restarted; retrying transcription.")
+                                            else:
+                                                log.warning(
+                                                    "  Whisper restart attempt failed or skipped; "
+                                                    "reprocess may still loop."
+                                                )
+                                        try:
+                                            result = self.reprocess_episode(slug, episode_id)
+                                            if result.get("already_processing"):
+                                                # MinusPod is still working — don't count this
+                                                # as a retry; just keep polling.
+                                                reprocess_count -= 1
+                                                log.info(
+                                                    "  MinusPod still processing (409); "
+                                                    "reprocess count not incremented."
+                                                )
+                                        except Exception as e:
+                                            log.error(f"  Failed to trigger reprocess: {e}")
+                                        time.sleep(10)
+                                        continue
+                                    else:
+                                        raise RuntimeError(
+                                            f"MinusPod marked episode as '{ep_detail['status']}': "
+                                            f"{err_text or 'no error detail provided'}. "
+                                            f"Check the MinusPod log (typically /tmp/minuspod.log) "
+                                            f"for the underlying cause — common culprits are the "
+                                            f"Whisper backend being unreachable or out-of-memory."
+                                        )
 
                         for _ in range(retry_after):
                             if skip_event and skip_event.is_set():
@@ -1774,6 +1920,7 @@ def process_single_episode(
     skip_event=None,
     podcast_uuid: str = None,
     original_episode_uuid: str = None,
+    pause_event=None,
 ) -> str | None:
     """Process a single episode via MinusPod JIT and upload to Pocket Casts.
 
@@ -1965,6 +2112,7 @@ def process_single_episode(
         processed_path = mp.download_processed_audio(
             feed_slug, ep_id, output_dir, skip_event=skip_event,
             progress_callback=progress_callback,
+            pause_event=pause_event,
         )
     except _SkippedError:
         log.info(f"  Skipped by user: {ep_title}")
@@ -2007,11 +2155,14 @@ def process_single_episode(
     if podcast_uuid and original_episode_uuid:
         try:
             pc.mark_episode_played(original_episode_uuid, podcast_uuid)
-            pc.remove_from_up_next(original_episode_uuid)
-            if progress_callback:
-                progress_callback("Marked original episode as played")
         except Exception as e:
             log.warning(f"  Could not mark original as played: {e}")
+        try:
+            pc.remove_from_up_next(original_episode_uuid)
+            if progress_callback:
+                progress_callback("Removed original episode from Up Next")
+        except Exception as e:
+            log.warning(f"  Could not remove original from Up Next: {e}")
     else:
         # Fallback: title-match sweep. The episode-uuid lookup can miss when
         # MinusPod's RSS title and Pocket Casts' title differ in trivial
@@ -2035,10 +2186,16 @@ def process_single_episode(
                     continue
                 try:
                     if qu_pod:
-                        pc.mark_episode_played(qu_uuid, qu_pod)
-                    pc.remove_from_up_next(qu_uuid)
-                    if progress_callback:
-                        progress_callback("Removed original from Up Next (title match)")
+                        try:
+                            pc.mark_episode_played(qu_uuid, qu_pod)
+                        except Exception as exc:
+                            log.warning(f"  Title-match mark played failed for {qu_uuid[:12]}: {exc}")
+                    try:
+                        pc.remove_from_up_next(qu_uuid)
+                        if progress_callback:
+                            progress_callback("Removed original from Up Next (title match)")
+                    except Exception as exc:
+                        log.warning(f"  Title-match remove from Up Next failed for {qu_uuid[:12]}: {exc}")
                     break
                 except Exception as exc:
                     log.warning(f"  Title-match sweep failed for {qu_uuid[:12]}: {exc}")

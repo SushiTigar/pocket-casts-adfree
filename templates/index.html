@@ -25,6 +25,28 @@
     </div>
   </div>
 
+  <div class="services-quick-bar" id="services-quick-bar">
+    <div class="sq-left">
+      <div class="sq-ram-status" id="sq-ram-status">
+        <span class="sq-label">RAM:</span>
+        <span class="sq-value" id="sq-ram-value">Checking...</span>
+        <div class="sq-ram-bar-wrap"><div class="sq-ram-bar-fill" id="sq-ram-bar-fill" style="width: 0%"></div></div>
+      </div>
+      <div class="sq-services-status" id="sq-services-status">
+        <span class="sq-label">Services:</span>
+        <span class="sq-service" id="sq-svc-ollama"><span class="sq-dot"></span> Ollama</span>
+        <span class="sq-service" id="sq-svc-whisper"><span class="sq-dot"></span> Whisper</span>
+        <span class="sq-service" id="sq-svc-minuspod"><span class="sq-dot"></span> MinusPod</span>
+      </div>
+    </div>
+    <div class="sq-actions">
+      <span class="sq-reminder-text" style="font-size:11px;color:var(--text-muted);align-self:center;margin-right:8px;opacity:0.85;">⚠️ Shut down services before leaving!</span>
+      <button class="btn small primary" id="btn-start-all" onclick="startAllServices()">Start All</button>
+      <button class="btn small danger" id="btn-stop-all" onclick="stopAllServices()">Stop All</button>
+      <button class="btn small danger" id="btn-shutdown-ui" onclick="shutdownUI()" style="font-weight:600;border:1px dashed var(--danger);" title="Stop all services and shut down this Web UI server.">Shutdown UI</button>
+    </div>
+  </div>
+
   <div class="container">
    <div id="view-dashboard">
     <div class="stats-bar">
@@ -111,6 +133,7 @@
       </div>
       <div class="log-header-actions" onclick="event.stopPropagation()">
         <button class="btn small danger hidden" id="btn-skip" onclick="skipEpisode()">Skip Episode</button>
+        <button class="btn small warning hidden" id="btn-pause" onclick="togglePause()">Pause</button>
         <button class="btn small danger hidden" id="btn-stop" onclick="stopJob()">Stop Job</button>
         <button class="btn small" onclick="clearLog()">Clear</button>
       </div>
