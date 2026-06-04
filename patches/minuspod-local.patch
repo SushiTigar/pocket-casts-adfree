@@ -51,6 +51,44 @@ index e650660a..ac280b94 100644
              # Filter out short ad detections (< 10 seconds) - likely false positives
              MIN_AD_DURATION_FOR_REMOVAL = 10.0  # seconds
              ads = []
+diff --git a/src/config.py b/src/config.py
+index c47f710d..9707ece6 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -167,7 +167,9 @@ SUBPROCESS_VERSION_PROBE = 5         # ffmpeg -version, fpcalc -version
+ # LLM Timeouts (seconds)
+ # ============================================================
+ LLM_TIMEOUT_DEFAULT = 120.0          # Anthropic / fast cloud APIs
+-LLM_TIMEOUT_LOCAL = 600.0            # Ollama / local models (10 min)
++LLM_TIMEOUT_LOCAL = float(os.environ.get('LLM_TIMEOUT_LOCAL', '1200'))
++                                      # Ollama / local models (default 20 min;
++                                      # large models on 10-min windows need headroom)
+ LLM_RETRY_MAX_RETRIES = 3            # Default retries for cloud APIs
+ LLM_RETRY_MAX_RETRIES_LOCAL = 2      # Fewer retries for local (each is slow)
+ AD_DETECTION_MAX_TOKENS = int(os.environ.get('AD_DETECTION_MAX_TOKENS', '4096'))
+@@ -192,8 +194,11 @@ HTTP_TIMEOUT_PROBE = 5.0              # Short outbound: /version probes,
+ HTTP_TIMEOUT_API = 10.0               # Standard JSON API (LLM verify, PodcastIndex search)
+ HTTP_TIMEOUT_EXTERNAL = 15.0          # Third-party scraping (pricing sources)
+ HTTP_TIMEOUT_FETCH = 30.0             # RSS fetch, artwork / audio download
+-HTTP_TIMEOUT_WHISPER = 600            # Remote Whisper transcription upload
+-                                      # (multi-minute audio over slow network)
++HTTP_TIMEOUT_WHISPER = int(os.environ.get('HTTP_TIMEOUT_WHISPER', '600'))
++                                      # Remote Whisper transcription upload
++                                      # (multi-minute audio over slow network).
++                                      # Override via env for local whisper.cpp on
++                                      # long chunks (e.g. 1800 for 5-min chunks).
+ 
+ # ============================================================
+ # Chunked Transcription (OOM prevention for long episodes)
+@@ -204,7 +209,7 @@ CHUNK_MAX_DURATION_SECONDS = 3600    # Maximum chunk size (60 minutes)
+ CHUNK_DEFAULT_DURATION_SECONDS = 1800  # Default if memory detection fails (30 minutes)
+ 
+ # API backend chunk duration (10 min = ~19MB WAV, under 25MB OpenAI API limit)
+-API_CHUNK_DURATION_SECONDS = 600
++API_CHUNK_DURATION_SECONDS = int(os.environ.get('API_CHUNK_DURATION_SECONDS', '600'))
+ 
+ # Whisper backend identifiers
+ WHISPER_BACKEND_LOCAL = 'local'
 diff --git a/src/database/__init__.py b/src/database/__init__.py
 index ab098b1d..8ed9b4bd 100644
 --- a/src/database/__init__.py
@@ -81,10 +119,32 @@ index ab098b1d..8ed9b4bd 100644
          self.data_dir.mkdir(parents=True, exist_ok=True)
          self.db_path = self.data_dir / "podcast.db"
 diff --git a/src/main_app/processing.py b/src/main_app/processing.py
-index 8b9ae7f8..accced6b 100644
+index 8b9ae7f8..71d5c0f2 100644
 --- a/src/main_app/processing.py
 +++ b/src/main_app/processing.py
-@@ -380,7 +380,7 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
+@@ -243,7 +243,20 @@ def _download_and_transcribe(slug, episode_id, episode_url, podcast_name):
+ 
+         status_service.update_job_stage("pass1:transcribing", 20)
+         audio_logger.info(f"[{slug}:{episode_id}] Starting transcription")
+-        segments = transcriber.transcribe_chunked(audio_path, podcast_name=podcast_name)
++
++        def _transcribe_chunk_progress(done: int, total: int) -> None:
++            # Reserve 20-25% of the pass-1 bar for chunked Whisper work so the
++            # UI doesn't sit on a static "Starting transcription" for an hour.
++            pct = 20.0 + (5.0 * done / max(total, 1))
++            status_service.update_job_stage(
++                f"pass1:transcribing {done}/{total}", pct,
++            )
++
++        segments = transcriber.transcribe_chunked(
++            audio_path,
++            podcast_name=podcast_name,
++            progress_callback=_transcribe_chunk_progress,
++        )
+         if not segments:
+             raise Exception("Failed to transcribe audio")
+ 
+@@ -380,7 +393,7 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
      """Append heuristic pre/post-roll and VAD-gap ads to ``all_ads`` in place."""
      if not segments:
          return
@@ -93,7 +153,7 @@ index 8b9ae7f8..accced6b 100644
      preroll_ad = detect_preroll(segments, all_ads, podcast_name=podcast_name,
                                  skip_patterns=skip_patterns)
      if preroll_ad:
-@@ -392,6 +392,14 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
+@@ -392,6 +405,14 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
          all_ads.append(postroll_ad)
          audio_logger.info(f"[{slug}:{episode_id}] Heuristic post-roll: {postroll_ad['start']:.1f}s-{postroll_ad['end']:.1f}s")
  
@@ -108,7 +168,47 @@ index 8b9ae7f8..accced6b 100644
      # VAD-gap detection (head/mid/tail)
      if _vad_gap_enabled(db):
          from vad_gap_detector import detect_vad_gaps
-@@ -1428,21 +1436,27 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+@@ -451,7 +472,7 @@ def _gate_validation_by_confidence(slug, episode_id, validation_ads, min_cut_con
+ 
+ def _refine_and_validate(slug, episode_id, all_ads, segments, audio_path,
+                           episode_description, episode_duration, min_cut_confidence,
+-                          podcast_name, skip_patterns=False):
++                          podcast_name, skip_patterns=False, db=None):
+     """Pipeline stage: Refine ad boundaries, detect rolls, validate, gate by confidence.
+ 
+     Returns (ads_to_remove, all_ads_with_validation).
+@@ -1144,7 +1165,10 @@ def _log_completion_summary(slug, episode_id, ads_to_remove, original_duration,
+     mem_info = get_available_memory_gb()
+     if mem_info is not None:
+         mem_val, mem_desc = mem_info
+-        audio_logger.info(f"[{slug}:{episode_id}] Post-cleanup memory: {mem_val:.1f} GB ({mem_desc})")
++        if mem_val is not None:
++            audio_logger.info(f"[{slug}:{episode_id}] Post-cleanup memory: {mem_val:.1f} GB ({mem_desc})")
++        else:
++            audio_logger.info(f"[{slug}:{episode_id}] Post-cleanup memory: unknown GB ({mem_desc})")
+ 
+     return token_totals
+ 
+@@ -1324,7 +1348,8 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+         mem_info = get_available_memory_gb()
+         if mem_info is not None:
+             mem_val, mem_desc = mem_info
+-            audio_logger.info(f"[{slug}:{episode_id}] Available memory: {mem_val:.1f} GB ({mem_desc})")
++            if mem_val is not None:
++                audio_logger.info(f"[{slug}:{episode_id}] Available memory: {mem_val:.1f} GB ({mem_desc})")
+         min_cut_confidence = get_min_cut_confidence()
+         audio_logger.info(f"[{slug}:{episode_id}] Confidence threshold: {min_cut_confidence:.0%}")
+ 
+@@ -1394,7 +1419,7 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+             ads_to_remove, all_ads_with_validation = _refine_and_validate(
+                 slug, episode_id, all_ads, segments, audio_path,
+                 episode_description, episode_duration, min_cut_confidence, podcast_name,
+-                skip_patterns=skip_patterns
++                skip_patterns=skip_patterns, db=db
+             )
+             _check_cancel(cancel_event, slug, episode_id)
+ 
+@@ -1428,21 +1453,27 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
              original_duration = episode_duration
              _check_cancel(cancel_event, slug, episode_id)
  
@@ -151,7 +251,7 @@ index 8b9ae7f8..accced6b 100644
              new_duration = local_audio_processor.get_audio_duration(processed_path)
  
 diff --git a/src/roll_detector.py b/src/roll_detector.py
-index 89618058..47512bb0 100644
+index 89618058..eb949f10 100644
 --- a/src/roll_detector.py
 +++ b/src/roll_detector.py
 @@ -56,10 +56,17 @@ AD_INDICATOR_PATTERNS = [
@@ -206,7 +306,7 @@ index 89618058..47512bb0 100644
      # Check if region is already covered
      if _region_covered(episode_start, show_start_time, existing_ads):
          return None
-@@ -230,3 +259,63 @@ def detect_postroll(
+@@ -230,3 +259,69 @@ def detect_postroll(
          'reason': f'Post-roll ad ({match_count} ad indicators after sign-off)',
          'detection_stage': 'heuristic_postroll',
      }
@@ -240,10 +340,12 @@ index 89618058..47512bb0 100644
 +    Returns:
 +        Ad marker dict if tail gap detected, None otherwise
 +    """
-+    if not segments or episode_duration <= 0:
++    if not segments or episode_duration is None or episode_duration <= 0:
 +        return None
 +
 +    last_segment_end = segments[-1].get('end', 0)
++    if last_segment_end is None:
++        last_segment_end = 0
 +    gap = episode_duration - last_segment_end
 +    if gap < TAIL_GAP_MIN_SECONDS:
 +        return None
@@ -252,6 +354,10 @@ index 89618058..47512bb0 100644
 +    end = episode_duration
 +
 +    if _region_covered(start, end, existing_ads):
++        return None
++
++    # Ensure all values are valid numbers before formatting
++    if start is None or end is None or gap is None:
 +        return None
 +
 +    logger.info(
@@ -284,3 +390,80 @@ index 4b73666e..d0ba2aac 100644
                  or os.environ.get("MINUSPOD_DATA_DIR")
                  or "/app/data"
              )
+diff --git a/src/transcriber.py b/src/transcriber.py
+index 025b9249..34be4eae 100644
+--- a/src/transcriber.py
++++ b/src/transcriber.py
+@@ -6,7 +6,7 @@ import re
+ import subprocess
+ import hashlib
+ import requests
+-from typing import List, Dict, Optional, Tuple
++from typing import Callable, List, Dict, Optional, Tuple
+ from pathlib import Path
+ 
+ from utils.audio import get_audio_duration
+@@ -636,9 +636,17 @@ class Transcriber:
+                 logger.error("Whisper API base URL not configured")
+                 return None
+ 
+-            # Preprocess audio for consistent quality
+-            preprocessed_path = self.preprocess_audio(audio_path)
+-            transcribe_path = preprocessed_path if preprocessed_path else audio_path
++            # Preprocess audio for consistent quality. Local whisper.cpp via the
++            # OpenAI-compatible API path can skip loudnorm — it adds minutes per
++            # chunk with no benefit for already-compressed podcast MP3s.
++            skip_preprocess = os.environ.get('WHISPER_SKIP_PREPROCESS', '').lower() in (
++                '1', 'true', 'yes',
++            )
++            if skip_preprocess:
++                transcribe_path = audio_path
++            else:
++                preprocessed_path = self.preprocess_audio(audio_path)
++                transcribe_path = preprocessed_path if preprocessed_path else audio_path
+ 
+             # After preprocessing, compress to FLAC for upload (lossless, ~4-5x smaller than WAV).
+             # Prevents 413 errors from APIs with tight upload limits (e.g. OpenRouter).
+@@ -1351,7 +1359,12 @@ class Transcriber:
+                 except OSError:
+                     pass
+ 
+-    def transcribe_chunked(self, audio_path: str, podcast_name: str = None) -> List[Dict]:
++    def transcribe_chunked(
++        self,
++        audio_path: str,
++        podcast_name: str = None,
++        progress_callback: Optional[Callable[[int, int], None]] = None,
++    ) -> List[Dict]:
+         """Transcribe audio files with dynamic chunking to prevent OOM errors.
+ 
+         This method:
+@@ -1413,6 +1426,8 @@ class Transcriber:
+             f"Starting chunked transcription: {duration/60:.1f} min audio in ~{num_chunks} chunks "
+             f"(chunk_size={chunk_duration/60:.0f}min, overlap={overlap}s) - {memory_reason}"
+         )
++        if progress_callback:
++            progress_callback(0, num_chunks)
+ 
+         all_segments = []
+         chunk_start = 0
+@@ -1445,6 +1460,10 @@ class Transcriber:
+             )
+ 
+             # Extract chunk using ffmpeg
++            logger.info(
++                f"Extracting audio chunk {chunk_num + 1}/{num_chunks} "
++                f"({chunk_start/60:.1f}-{chunk_end_with_overlap/60:.1f} min)"
++            )
+             chunk_path = extract_audio_chunk(audio_path, chunk_start, chunk_end_with_overlap)
+             if not chunk_path:
+                 logger.error(f"Failed to extract chunk {chunk_num + 1}")
+@@ -1499,6 +1518,8 @@ class Transcriber:
+                     f"Chunk {chunk_num} complete: {len(chunk_segments)} segments "
+                     f"(total: {len(all_segments)})"
+                 )
++                if progress_callback:
++                    progress_callback(chunk_num, num_chunks)
+ 
+                 # Move to next chunk
+                 chunk_start = chunk_end

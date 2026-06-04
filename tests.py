@@ -1269,6 +1269,18 @@ class TestFailedEpisodeAbort(unittest.TestCase):
         # so users know how to bump it without grepping the source.
         self.assertIn("EPISODE_MAX_WALLCLOCK_SECONDS", str(ctx.exception))
 
+    def test_is_llm_stage_detects_ad_detection(self):
+        from pocketcasts_adfree import _is_llm_stage, _is_transcription_stage
+        self.assertTrue(_is_llm_stage("pass1:detecting:1/9"))
+        self.assertTrue(_is_llm_stage("pass1:verifying"))
+        self.assertFalse(_is_llm_stage("pass1:transcribing 3/14"))
+        self.assertTrue(_is_transcription_stage("pass1:transcribing"))
+
+    def test_stall_threshold_higher_for_llm_stages(self):
+        from pocketcasts_adfree import _stall_threshold_for_stage
+        self.assertEqual(_stall_threshold_for_stage("pass1:detecting:1/9", 900), 2700)
+        self.assertEqual(_stall_threshold_for_stage("pass1:transcribing", 900), 900)
+
     def test_stall_watchdog_bounces_whisper_then_aborts(self):
         """If MinusPod's `stage` doesn't change for the threshold window,
         we should bounce whisper-server first; if it stalls a SECOND time,
@@ -1285,16 +1297,11 @@ class TestFailedEpisodeAbort(unittest.TestCase):
             clock[0] += 2000.0   # +33 min per call → > 15 min stall threshold
             return t
 
-        restart_calls = []
-
-        def fake_restart():
-            restart_calls.append(time.monotonic())
-            return True
-
         with patch.object(MinusPodClient, '__init__', lambda self, *a, **kw: None), \
              patch('pocketcasts_adfree.time.monotonic', side_effect=fake_monotonic), \
              patch('pocketcasts_adfree.time.sleep'), \
-             patch('pocketcasts_adfree._restart_whisper_if_wedged', side_effect=fake_restart):
+             patch('pocketcasts_adfree._bounce_service_for_stall',
+                   return_value=(True, "whisper-server")):
             mp = MinusPodClient.__new__(MinusPodClient)
             mp.base_url = "http://localhost:8000"
             mp.client = MagicMock()
@@ -1310,9 +1317,45 @@ class TestFailedEpisodeAbort(unittest.TestCase):
                         max_wallclock_seconds=10**9,  # disable wallclock cap
                         stall_threshold_seconds=60,
                     )
-        # Whisper should have been bounced exactly once before the abort.
-        self.assertEqual(len(restart_calls), 1)
         self.assertIn("stuck on stage", str(ctx.exception))
+        self.assertIn("whisper-server.log", str(ctx.exception))
+
+    def test_stall_watchdog_bounces_ollama_for_detecting(self):
+        """Ad detection stalls should restart Ollama, not whisper."""
+        from pocketcasts_adfree import MinusPodClient
+        clock = [0.0]
+
+        def fake_monotonic():
+            t = clock[0]
+            clock[0] += 2000.0
+            return t
+
+        bounce_calls = []
+
+        def fake_bounce(stage):
+            bounce_calls.append(stage)
+            return True, "Ollama"
+
+        with patch.object(MinusPodClient, '__init__', lambda self, *a, **kw: None), \
+             patch('pocketcasts_adfree.time.monotonic', side_effect=fake_monotonic), \
+             patch('pocketcasts_adfree.time.sleep'), \
+             patch('pocketcasts_adfree._bounce_service_for_stall', side_effect=fake_bounce):
+            mp = MinusPodClient.__new__(MinusPodClient)
+            mp.base_url = "http://localhost:8000"
+            mp.client = MagicMock()
+            mp.client.stream.return_value = self._make_resp(503, {"Retry-After": "1"})
+            with patch.object(mp, "get_status", return_value={
+                "currentJob": {"stage": "pass1:detecting:1/9", "progress": 50, "elapsed": 60}
+            }), patch.object(mp, "get_episode", return_value=None):
+                with self.assertRaises(TimeoutError) as ctx:
+                    mp.download_processed_audio(
+                        "slug", "ep-1", Path("/tmp"),
+                        max_retries=50, retry_delay=0,
+                        max_wallclock_seconds=10**9,
+                        stall_threshold_seconds=60,
+                    )
+        self.assertEqual(bounce_calls, ["pass1:detecting:1/9"])
+        self.assertIn("ollama.log", str(ctx.exception))
 
 
 class TestUpNextTitleMatching(unittest.TestCase):

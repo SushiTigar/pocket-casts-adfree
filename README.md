@@ -97,23 +97,17 @@ per episode.
 
 ## Quick start
 
-> Already installed Ollama, whisper.cpp, and MinusPod? You're three commands
-> away.
+> Already installed Ollama, whisper.cpp, and MinusPod? One command.
 
 ```bash
-cp .env.example .env       # then edit and add your Pocket Casts credentials
-source venv/bin/activate
-./start_services.sh        # starts Ollama, Whisper (native Metal), MinusPod
+cp .env.example .env       # add your Pocket Casts credentials
 source .env && python3 pocketcasts_adfree.py ui
 # Open http://localhost:5050
 ```
 
-You only need to restart `start_services.sh` when:
-- the Ollama model changed,
-- whisper.cpp was rebuilt or its model swapped,
-- MinusPod source was patched.
-
-Credentials, system prompts, and MinusPod settings hot-reload without a restart.
+The UI auto-starts Ollama, Whisper, and MinusPod in the background on every
+launch — no separate `./start_services.sh` step required. MinusPod is also
+auto-updated from upstream on each start.
 
 ## First-time setup
 
@@ -215,11 +209,18 @@ echo 'OPENAI_MODEL=qwen3:14b' >> .env
 ### 6. Launch
 
 ```bash
-./start_services.sh
 source .env && python3 pocketcasts_adfree.py ui
 ```
 
-Open <http://localhost:5050>.
+Open <http://localhost:5050>. The UI starts Ollama, Whisper, and MinusPod
+automatically in the background — watch the floating log panel for progress.
+First launch takes ~60 s for MinusPod to initialise; subsequent starts are
+faster because services are already running.
+
+> **Manual service control:** `./start_services.sh` is still available if you
+> want to pre-warm services before launching the UI, or start them without the
+> UI at all (e.g. CLI use). It also handles the `--mlx` flag for MLX-based
+> LLM inference.
 
 ## Web UI
 
@@ -270,10 +271,10 @@ MinusPod ad detection.
 
 | Service | Port | Managed via | Configured by |
 |---------|------|-------------|---------------|
-| [Ollama](#ollama--llm-provider) | 11434 | `brew services` (preferred) | `OPENAI_MODEL` env, `start_services.sh` |
+| [Ollama](#ollama--llm-provider) | 11434 | `brew services` (preferred) | `OPENAI_MODEL` env |
 | [Whisper](#whispercpp--transcription) | 8765 | Native binary or Docker | `scripts/setup_whisper.sh`, models in `whisper.cpp/models/` |
-| [MinusPod](#minuspod-patches) | 8000 | Flask under `MinusPod/venv/` | `start_services.sh` (env vars) |
-| [Pipeline UI](#web-ui) | 5050 | This repo | `pocketcasts_adfree.py ui` |
+| [MinusPod](#minuspod-patches) | 8000 | Flask under `MinusPod/venv/` — **auto-updated on every start** | env vars in `services_manager.py` |
+| [Pipeline UI](#web-ui) | 5050 | This repo | `python3 pocketcasts_adfree.py ui` |
 
 The panel won't let you stop the UI itself (it'd kill the panel that's
 hosting it).
@@ -281,9 +282,12 @@ hosting it).
 ## CLI
 
 ```bash
-source .env
+source .env && source venv/bin/activate
 
-# Test the pipeline end-to-end on a single feed
+# Launch the dashboard (auto-starts all services)
+python3 pocketcasts_adfree.py ui
+
+# Test the pipeline end-to-end on a single feed (services must be running)
 python3 pocketcasts_adfree.py test --rss-url 'https://feeds.simplecast.com/54nAGcIl'
 
 # Process every feed registered in MinusPod
@@ -291,9 +295,6 @@ python3 pocketcasts_adfree.py auto
 
 # Filter by podcast name (case-insensitive substring)
 python3 pocketcasts_adfree.py auto --filter 'daily'
-
-# Launch the dashboard
-python3 pocketcasts_adfree.py ui
 ```
 
 ## Configuration reference
@@ -330,7 +331,9 @@ only what you need.
 | `OLLAMA_MAX_LOADED_MODELS` | `1` | How many models Ollama keeps resident. Bumping this silently doubles memory if MinusPod swaps detection ↔ verification ↔ chapters models. |
 | `OLLAMA_KEEP_ALIVE` | `30s` | How long Ollama keeps the model loaded after the last request. Short values quiet the fans between episodes; longer values save the ~30 s reload cost. |
 | `EPISODE_MAX_WALLCLOCK_SECONDS` | `5400` (90 min) | Hard cap on a single episode. If exceeded the orchestrator gives up and moves to the next one so the queue stays unblocked. |
-| `EPISODE_STALL_THRESHOLD_SECONDS` | `900` (15 min) | If MinusPod's reported processing stage doesn't change for this long, restart `whisper-server`. Same threshold a second time aborts the episode. |
+| `EPISODE_STALL_THRESHOLD_SECONDS` | `900` (15 min) | If MinusPod's stage doesn't change this long during transcription, restart `whisper-server`. Same threshold twice aborts the episode. |
+| `EPISODE_STALL_THRESHOLD_LLM_SECONDS` | `2700` (45 min) | Higher cap during ad detection / verify / review — each LLM window can take many minutes on large models. |
+| `LLM_TIMEOUT_LOCAL` | `1200` (20 min) | MinusPod per-window Ollama timeout (was 10 min; too tight for `qwen3.5-addetect`). |
 
 ## Architecture
 
@@ -398,13 +401,17 @@ See [`patches/README.md`](patches/README.md) for line-by-line detail.
 | `No module named httpx` | `source venv/bin/activate && pip install -r requirements.txt` |
 | Upload fails with 403 / "subscription required" | Your Pocket Casts account is on the free tier. Custom-file upload is a [Plus](https://pocketcasts.com/plus/) feature. |
 | `Could not find RSS for: [name]` | The pipeline resolves feeds via the iTunes Search API. Pass `--rss-url` directly or add the feed manually in MinusPod. |
-| MinusPod "Circuit breaker OPEN" | The LLM endpoint failed repeatedly. Check `ollama list` (or your remote endpoint), then `./start_services.sh`. |
+| MinusPod "Circuit breaker OPEN" | The LLM endpoint failed repeatedly. Check `ollama list` (or your remote endpoint). The UI auto-restarts MinusPod on next launch. |
 | Fans still spinning after a job | The pipeline auto-unloads Ollama. Force it: `curl -s -X POST http://localhost:11434/api/generate -H "Content-Type: application/json" -d '{"model":"<your-model>","keep_alive":"0s"}'` |
+| `start_services.sh` not needed? | Correct — the UI auto-starts everything. `start_services.sh` is still useful for pre-warming services before the UI, or for `--mlx` mode. |
+| MinusPod patch failed to apply after auto-update | A new upstream release changed a file our patch touches. Run `cd MinusPod && git diff > ../patches/minuspod-local.patch` to regenerate after manually resolving. |
+| Stuck on "Starting transcription" for a long time | Normal for 2+ hour episodes (many 5–10 min Whisper chunks). Check `/tmp/minuspod.log` for `pass1:transcribing N/M` or `Chunk N complete`. If the log stops mid-chunk for 15+ min, restart Whisper via the Services panel. `start_services.sh` now uses 5-min chunks and skips loudnorm preprocessing. |
 | Transcription much slower than expected | You're probably on the Docker whisper image. Switch to the native binary via the Services panel (Metal on macOS, CPU/CUDA elsewhere). |
 | One episode takes 30+ minutes | A 4-hour show = ~30 LLM windows. With `qwen3.5:35b-a3b` that's ~30 × 1.5 min = 45 min. Switch to `qwen3:14b` (`echo 'OPENAI_MODEL=qwen3:14b' >> .env`) — same 30 windows, ~3 × faster. |
 | Mac kernel panics or hard freezes during a job | The default model is ~22 GB resident. Combined with Whisper Metal buffers (~2 GB), browser, IDE, etc. it can OOM the GPU on a 36 GB machine. The dashboard now shows a memory warning before each job; heed it, switch to `qwen3:14b`, or set `OLLAMA_NUM_PARALLEL=1` (already the default). |
 | Whisper crash with `kIOGPUCommandBufferCallbackErrorInnocentVictim` | Metal has a hard 8-command-buffer limit. The launcher now forces `--processors 1 --threads ≤8`; if you customised it, lower those numbers. |
-| Queue stalls on one episode forever | A single episode is now wallclock-capped at 90 min (`EPISODE_MAX_WALLCLOCK_SECONDS`). If MinusPod's reported stage doesn't change for 15 min (`EPISODE_STALL_THRESHOLD_SECONDS`) the pipeline restarts whisper-server, then aborts the episode so the queue keeps moving. Both knobs are env-tunable. |
+| Aborted on `pass1:detecting:N/M` | Ad detection uses **Ollama**, not Whisper. Large models (`qwen3.5-addetect`) can exceed 10 min per window — use `OPENAI_MODEL=qwen3:14b` on ≤36 GB Macs, or raise `LLM_TIMEOUT_LOCAL`. The stall watchdog now restarts Ollama (not Whisper) for detecting stages and waits up to 45 min (`EPISODE_STALL_THRESHOLD_LLM_SECONDS`). |
+| Queue stalls on one episode forever | Wallclock cap 90 min (`EPISODE_MAX_WALLCLOCK_SECONDS`). Transcription stalls bounce whisper; LLM stalls bounce Ollama. See `EPISODE_STALL_THRESHOLD_*` above. |
 | Ad still partially in outro | Increase `TAIL_GAP_MIN_SECONDS` (smaller threshold = more aggressive) or `AD_END_PAD_TAIL`. See `patches/README.md`. |
 | Custom-file thumbnail stuck on the generic icon | Pocket Casts caches the colour fallback for ~1 minute after upload. The image does eventually render on every device — it's cosmetic only. |
 
@@ -444,8 +451,10 @@ cd MinusPod
 git diff > ../patches/minuspod-local.patch
 ```
 
-Update [`CHANGELOG.md`](CHANGELOG.md) under `[Unreleased]` for any user-facing
-change.
+This patch is automatically reapplied on every startup after a MinusPod
+upstream pull, so your local changes survive auto-updates. If a new upstream
+release conflicts with the patch, you'll see a warning in the startup log —
+resolve manually and regenerate.
 
 ## License & credits
 

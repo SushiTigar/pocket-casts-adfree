@@ -116,9 +116,62 @@ fi
 MINUSPOD_PORT=8000
 MINUSPOD_DIR="$SCRIPT_DIR/MinusPod"
 echo "[3/3] Starting MinusPod on port $MINUSPOD_PORT..."
+
+# --- Auto-update MinusPod from upstream ---
+_update_minuspod() {
+    local mp_dir="$1"
+    local patch_file="$SCRIPT_DIR/patches/minuspod-local.patch"
+    echo "  Checking for MinusPod updates..."
+    cd "$mp_dir" || return
+    # Fetch quietly; tolerate network failures (offline use)
+    if ! git fetch origin --quiet 2>/dev/null; then
+        echo "  (Could not reach GitHub — skipping update check)"
+        cd "$SCRIPT_DIR"
+        return
+    fi
+    local local_sha remote_sha
+    local_sha=$(git rev-parse HEAD 2>/dev/null)
+    remote_sha=$(git rev-parse origin/main 2>/dev/null \
+              || git rev-parse origin/master 2>/dev/null)
+    if [ -z "$remote_sha" ] || [ "$local_sha" = "$remote_sha" ]; then
+        echo "  Already at latest ($(git rev-parse --short HEAD))"
+        cd "$SCRIPT_DIR"
+        return
+    fi
+    echo "  Update available: $(git rev-parse --short HEAD) → $(git rev-parse --short "$remote_sha")"
+    # Discard any locally applied patch before pulling
+    git reset --hard HEAD --quiet
+    git clean -fd --quiet 2>/dev/null || true
+    if ! git pull --ff-only origin main 2>/dev/null && \
+       ! git pull --ff-only origin master 2>/dev/null; then
+        echo "  WARNING: git pull failed (non-fast-forward?). Skipping update."
+        cd "$SCRIPT_DIR"
+        return
+    fi
+    echo "  Pulled to $(git rev-parse --short HEAD)"
+    # Reapply our local patches on top of the new upstream
+    if [ -f "$patch_file" ]; then
+        if git apply "$patch_file" 2>/dev/null; then
+            echo "  Local patches applied cleanly."
+        else
+            echo "  WARNING: patch did not apply cleanly — manual merge may be needed."
+            echo "           See: patches/minuspod-local.patch"
+        fi
+    fi
+    # Reinstall Python deps if requirements changed
+    if [ -f "requirements.txt" ] && [ -f "venv/bin/activate" ]; then
+        # shellcheck disable=SC1091
+        source venv/bin/activate
+        pip install -r requirements.txt --quiet --disable-pip-version-check
+        echo "  Dependencies updated."
+    fi
+    cd "$SCRIPT_DIR"
+}
+
 if curl -s "http://localhost:$MINUSPOD_PORT/api/v1/health" | grep -q "healthy" 2>/dev/null; then
-    echo "  Already running"
+    echo "  Already running (skipping update check while running)"
 else
+    _update_minuspod "$MINUSPOD_DIR"
     (
         cd "$MINUSPOD_DIR/src"
         source ../venv/bin/activate
@@ -130,6 +183,9 @@ else
         WHISPER_BACKEND=openai-api \
         WHISPER_API_BASE_URL="http://localhost:$WHISPER_PORT/v1" \
         WHISPER_DEVICE=cpu \
+        WHISPER_SKIP_PREPROCESS=1 \
+        HTTP_TIMEOUT_WHISPER="${HTTP_TIMEOUT_WHISPER:-1800}" \
+        API_CHUNK_DURATION_SECONDS="${API_CHUNK_DURATION_SECONDS:-300}" \
         BASE_URL="http://localhost:$MINUSPOD_PORT" \
         HF_HOME="$MINUSPOD_DIR/data/.cache" \
         SKIP_VERIFICATION=true \
@@ -139,12 +195,21 @@ else
         OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}" \
         OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-1}" \
         OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:-30s}" \
+        LLM_TIMEOUT_LOCAL="${LLM_TIMEOUT_LOCAL:-1200}" \
         PYTHONPATH=. python -m flask --app main_app:app run --host 0.0.0.0 --port "$MINUSPOD_PORT" \
             > /tmp/minuspod.log 2>&1 &
     )
     echo "  PID: $!"
-    sleep 5
-    if curl -s "http://localhost:$MINUSPOD_PORT/api/v1/health" | grep -q "healthy"; then
+    # MinusPod blocks on LLM json_format probe (~30s) + RSS refresh before binding.
+    MINUSPOD_OK=false
+    for i in $(seq 1 24); do
+        if curl -s "http://localhost:$MINUSPOD_PORT/api/v1/health" | grep -q "healthy" 2>/dev/null; then
+            MINUSPOD_OK=true
+            break
+        fi
+        sleep 5
+    done
+    if [ "$MINUSPOD_OK" = true ]; then
         echo "  OK"
     else
         echo "  WARNING: MinusPod may still be starting. Check /tmp/minuspod.log"

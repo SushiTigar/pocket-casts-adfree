@@ -111,6 +111,9 @@
     .btn.primary:hover { opacity: 0.9; }
     .btn.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
     .btn.danger:hover { opacity: 0.9; }
+    .btn.warning { background: #d97706; border-color: #d97706; color: #fff; }
+    .btn.warning:hover { opacity: 0.9; }
+    .btn.warning.active { background: #059669; border-color: #059669; }
     .btn.small { padding: 4px 10px; font-size: 12px; }
     .search-input {
       flex: 1; min-width: 200px; padding: 8px 14px;
@@ -497,3 +500,84 @@
       .stat-value { font-size: 22px; }
       .episode-list { padding-left: 20px; }
     }
+
+    /* Services Quick Bar */
+    .services-quick-bar {
+      background: var(--card);
+      border-bottom: 1px solid var(--border);
+      padding: 10px 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      font-size: 13px;
+      flex-wrap: wrap;
+    }
+    .sq-left {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      flex-wrap: wrap;
+    }
+    .sq-ram-status {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .sq-label {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+    .sq-value {
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+    .sq-ram-bar-wrap {
+      width: 100px;
+      height: 6px;
+      background: var(--surface);
+      border-radius: 3px;
+      overflow: hidden;
+      display: inline-block;
+    }
+    .sq-ram-bar-fill {
+      height: 100%;
+      background: var(--accent2);
+      border-radius: 3px;
+      transition: width 0.3s ease, background-color 0.3s ease;
+    }
+    .sq-ram-bar-fill.warning { background: var(--warning); }
+    .sq-ram-bar-fill.danger { background: var(--danger); }
+    
+    .sq-services-status {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    .sq-service {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-weight: 500;
+    }
+    .sq-service .sq-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--danger);
+      box-shadow: 0 0 4px var(--danger);
+      transition: background-color 0.2s, box-shadow 0.2s;
+    }
+    .sq-service.up .sq-dot {
+      background: var(--accent2);
+      box-shadow: 0 0 4px var(--accent2);
+    }
+    .sq-service.warn .sq-dot {
+      background: var(--warning);
+      box-shadow: 0 0 4px var(--warning);
+    }
+    .sq-actions {
+      display: flex;
+      gap: 8px;
+    }
+
