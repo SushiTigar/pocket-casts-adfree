@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 import uuid as uuid_mod
@@ -120,7 +121,8 @@ def create_app(email=None, password=None):
         except Exception as exc:
             log.warning("Service auto-start encountered an issue: %s", exc)
 
-    threading.Thread(target=_startup_services, daemon=True, name="service-startup").start()
+    if "unittest" not in sys.modules and not os.environ.get("TESTING"):
+        threading.Thread(target=_startup_services, daemon=True, name="service-startup").start()
 
     def get_pc():
         nonlocal pc_client, pc_auth_error, pc_auth_error_at
