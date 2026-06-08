@@ -760,8 +760,11 @@ _pull_lock = threading.Lock()
 
 def start_all_services(whisper_backend: str = "native") -> dict:
     results = {}
-    # 1. Start Ollama first (required for model check)
-    results["ollama"] = start_ollama()
+    # 1. Start Ollama first (required for model check) only if using Ollama provider
+    if os.environ.get("LLM_PROVIDER", "ollama") == "ollama":
+        results["ollama"] = start_ollama()
+    else:
+        results["ollama"] = {"ok": True, "note": f"skipped (provider is {os.environ.get('LLM_PROVIDER')})"}
     # 2. Start Whisper
     results["whisper"] = start_whisper(backend=whisper_backend)
     # 3. Start MinusPod

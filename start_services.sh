@@ -19,13 +19,20 @@ done
 
 echo "=== Pocket Casts Ad-Free Pipeline: Starting Services ==="
 
+# Load environment variables if .env exists
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    source "$SCRIPT_DIR/.env"
+fi
+
 # 1. Start LLM backend (Ollama or MLX)
 LLM_PORT=11434
-LLM_PROVIDER=ollama
-OPENAI_BASE_URL="http://localhost:11434/v1"
-LLM_MODEL="qwen3.5-addetect"
+LLM_PROVIDER=${LLM_PROVIDER:-ollama}
+OPENAI_BASE_URL=${OPENAI_BASE_URL:-"http://localhost:11434/v1"}
+LLM_MODEL=${OPENAI_MODEL:-"qwen3.5-addetect"}
 
-if [ "$USE_MLX" = true ]; then
+if [ "$LLM_PROVIDER" != "ollama" ]; then
+    echo "[1/3] Skipping LLM backend startup (provider is $LLM_PROVIDER)..."
+elif [ "$USE_MLX" = true ]; then
     LLM_PORT=8800
     LLM_PROVIDER=ollama
     OPENAI_BASE_URL="http://localhost:$LLM_PORT/v1"
