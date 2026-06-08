@@ -639,6 +639,8 @@ def start_minuspod() -> dict:
     env = os.environ.copy()
     env.update({
         "DATA_DIR": str(MINUSPOD_DIR / "data"),
+        "DATA_PATH": str(MINUSPOD_DIR / "data"),
+        "MINUSPOD_DATA_DIR": str(MINUSPOD_DIR / "data"),
         "LLM_PROVIDER": env.get("LLM_PROVIDER", "ollama"),
         "OPENAI_BASE_URL": env.get("OPENAI_BASE_URL", "http://localhost:11434/v1"),
         "OPENAI_API_KEY": env.get("OPENAI_API_KEY", "not-needed"),
