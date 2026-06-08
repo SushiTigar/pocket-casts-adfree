@@ -639,10 +639,14 @@ def start_minuspod() -> dict:
     env = os.environ.copy()
     env.update({
         "DATA_DIR": str(MINUSPOD_DIR / "data"),
-        "LLM_PROVIDER": "ollama",
-        "OPENAI_BASE_URL": "http://localhost:11434/v1",
-        "OPENAI_API_KEY": "not-needed",
+        "LLM_PROVIDER": env.get("LLM_PROVIDER", "ollama"),
+        "OPENAI_BASE_URL": env.get("OPENAI_BASE_URL", "http://localhost:11434/v1"),
+        "OPENAI_API_KEY": env.get("OPENAI_API_KEY", "not-needed"),
         "OPENAI_MODEL": env.get("OPENAI_MODEL", "qwen3.5-addetect"),
+        "OPENROUTER_API_KEY": env.get("OPENROUTER_API_KEY", ""),
+        "AD_MERGE_GAP": env.get("AD_MERGE_GAP", "15.0"),
+        "AD_START_PAD": env.get("AD_START_PAD", "0.5"),
+        "AD_END_PAD": env.get("AD_END_PAD", "1.0"),
         "WHISPER_BACKEND": "openai-api",
         "WHISPER_API_BASE_URL": "http://localhost:8765/v1",
         "WHISPER_DEVICE": "cpu",
