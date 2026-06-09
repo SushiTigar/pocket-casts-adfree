@@ -646,6 +646,12 @@ def start_minuspod() -> dict:
         "OPENAI_API_KEY": env.get("OPENAI_API_KEY", "not-needed"),
         "OPENAI_MODEL": env.get("OPENAI_MODEL", "qwen3.5-addetect"),
         "OPENROUTER_API_KEY": env.get("OPENROUTER_API_KEY", ""),
+        "OPENROUTER_PROVIDER_ORDER": env.get("OPENROUTER_PROVIDER_ORDER", ""),
+        "OPENROUTER_ALLOW_FALLBACKS": env.get("OPENROUTER_ALLOW_FALLBACKS", ""),
+        "OPENROUTER_PROVIDER_SORT": env.get("OPENROUTER_PROVIDER_SORT", ""),
+        "OPENROUTER_PROVIDER_ONLY": env.get("OPENROUTER_PROVIDER_ONLY", ""),
+        "OPENROUTER_PROVIDER_IGNORE": env.get("OPENROUTER_PROVIDER_IGNORE", ""),
+        "ANTHROPIC_API_KEY": env.get("ANTHROPIC_API_KEY", ""),
         "AD_MERGE_GAP": env.get("AD_MERGE_GAP", "15.0"),
         "AD_START_PAD": env.get("AD_START_PAD", "0.5"),
         "AD_END_PAD": env.get("AD_END_PAD", "1.0"),
@@ -694,6 +700,11 @@ def start_minuspod() -> dict:
         ),
         timeout=60,
     )
+    if ok:
+        try:
+            sync_minuspod_model_from_env()
+        except Exception:
+            pass
     return {"ok": ok}
 
 
@@ -733,6 +744,30 @@ def get_minuspod_model() -> str | None:
     except Exception:
         pass
     return None
+
+
+def sync_minuspod_model_from_env() -> dict:
+    """Push ``OPENAI_MODEL`` from the environment into MinusPod's settings DB.
+
+    MinusPod persists the active model in SQLite. When switching from Ollama
+    to OpenRouter (or changing cloud models), a stale name like ``qwen3:14b``
+    is rejected by OpenRouter with HTTP 400 unless we sync the env var.
+    """
+    provider = os.environ.get("LLM_PROVIDER", "ollama")
+    if provider == "ollama":
+        return {"ok": True, "skipped": True, "reason": "ollama provider"}
+    model = os.environ.get("OPENAI_MODEL", "").strip()
+    if not model:
+        return {"ok": False, "error": "OPENAI_MODEL not set in environment"}
+    current = get_minuspod_model()
+    if current == model:
+        return {"ok": True, "unchanged": True, "model": model}
+    result = set_minuspod_model(model)
+    return {
+        "ok": result.get("ok", False),
+        "model": model,
+        "previous": current,
+    }
 
 
 def set_minuspod_model(model: str) -> dict:

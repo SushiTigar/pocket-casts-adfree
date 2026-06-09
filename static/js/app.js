@@ -127,6 +127,13 @@ let podcasts = [];
         const svcData = await api('/services');
         const services = svcData.services || [];
         const memory = svcData.memory || {};
+        const llmProvider = svcData.llm_provider || 'ollama';
+
+        // Show/hide Ollama quick-bar dot based on LLM provider
+        const ollamaDot = el('sq-svc-ollama');
+        if (ollamaDot) {
+          ollamaDot.style.display = llmProvider === 'ollama' ? '' : 'none';
+        }
 
         // 1. Update RAM Status
         if (memory && typeof memory.available_gb !== 'undefined') {
@@ -198,13 +205,13 @@ let podcasts = [];
       try {
         const res = await api('/services/all/start', { method: 'POST' });
         if (res.ok) {
-          addLog('info', 'Startup initiated. Services are starting...');
+          addLog('info', 'Startup initiated. Services are starting (this may take ~60s for MinusPod)...');
           let pings = 0;
           const pingInterval = setInterval(async () => {
             await checkStatus();
             pings++;
-            if (pings >= 10) clearInterval(pingInterval);
-          }, 3000);
+            if (pings >= 20) clearInterval(pingInterval);
+          }, 5000);
         } else {
           addLog('error', 'Failed to start: ' + (res.error || 'unknown error'));
         }
@@ -648,7 +655,7 @@ let podcasts = [];
 
     // ───── Services panel ─────
     let servicesPollTimer = null;
-    let servicesState = { services: [], expandedLogs: new Set() };
+    let servicesState = { services: [], expandedLogs: new Set(), llm_provider: 'ollama' };
     let ollamaModelsCache = null;
 
     async function openServicesPanel() {
@@ -670,6 +677,7 @@ let podcasts = [];
         const d = await api('/services');
         servicesState.services = d.services || [];
         servicesState.memory = d.memory || null;
+        servicesState.llm_provider = d.llm_provider || 'ollama';
         if (document.getElementById('services-modal')) renderServicesModal();
       } catch (e) {
         addLog('error', 'Failed to refresh services: ' + e.message);
@@ -700,6 +708,8 @@ let podcasts = [];
 
       let body = '<div style="overflow:auto;flex:1">';
       for (const s of servicesState.services) {
+        // Hide Ollama entirely when using a cloud LLM provider
+        if (s.id === 'ollama' && servicesState.llm_provider !== 'ollama') continue;
         body += renderServiceRow(s, wasOpenLogs.has(s.id));
       }
       body += '</div>';
@@ -843,6 +853,12 @@ let podcasts = [];
       }
 
       return `<div style="padding:14px 16px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:12px;">
+        ${servicesState.llm_provider !== 'ollama' ? `
+        <div style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--text-muted)">
+          <span>🤖</span>
+          <span>LLM Provider: <strong style="color:var(--accent)">${esc(servicesState.llm_provider)}</strong> — Ollama is not needed and has been hidden.</span>
+        </div>
+        ` : `
         <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
           <div style="font-weight:600;font-size:12px">Model Selection:</div>
           <select id="ollama-model-sel" style="font-size:12px;padding:4px 10px;flex:1;min-width:200px;">${opts}</select>
@@ -854,6 +870,7 @@ let podcasts = [];
           <span>Recommended Model for your hardware: <code>${esc(recommendedModel)}</code></span>
         </div>
         ${pullStatusHtml}
+        `}
       </div>`;
     }
 

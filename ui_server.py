@@ -981,6 +981,7 @@ def create_app(email=None, password=None):
         return jsonify({
             "services": [s.as_dict() for s in services_manager.all_statuses()],
             "memory": services_manager.get_memory_pressure(),
+            "llm_provider": os.environ.get("LLM_PROVIDER", "ollama"),
         })
 
     @app.route("/api/system/memory", methods=["GET"])
@@ -1177,8 +1178,16 @@ def create_app(email=None, password=None):
             pass
 
     def _resume_services_and_clear_pause(job):
+        # Mid-episode pause keeps services running; only start what's down.
         try:
-            services_manager.start_all_services()
+            by_id = {s.id: s for s in services_manager.all_statuses()}
+            need_start = not (
+                by_id["minuspod"].healthy and by_id["whisper"].healthy
+            )
+            if need_start:
+                services_manager.start_all_services()
+            else:
+                services_manager.sync_minuspod_model_from_env()
         except Exception:
             pass
         job["pause_event"].clear()
@@ -1309,6 +1318,7 @@ def create_app(email=None, password=None):
             pc = get_pc()
             mp = MinusPodClient()
             mp.disable_auto_process()
+            mp.sync_model_from_env()
             mp.set_fast_system_prompt()
             mp.lower_confidence_threshold()
             state = load_state()
@@ -1517,6 +1527,7 @@ def create_app(email=None, password=None):
                             podcast_uuid=puuid,
                             original_episode_uuid=original_ep_uuid,
                             pause_event=pause_event,
+                            rss_url=rss_url if not is_custom_file else None,
                         )
                         job["processed"] += 1
                         if skip_event.is_set() and not file_uuid:
@@ -1530,7 +1541,10 @@ def create_app(email=None, password=None):
                             if skip_event.is_set():
                                 _job_log(job_id, "warn", f"  Skipped by user: {ep_title}")
                             else:
-                                _job_log(job_id, "info", f"  Already processed: {ep_title}")
+                                _job_log(
+                                    job_id, "warn",
+                                    f"  Finished without upload: {ep_title}",
+                                )
                     except Exception as e:
                         job["processed"] += 1
                         _job_log(job_id, "error", f"  Failed: {ep_title}: {e}")

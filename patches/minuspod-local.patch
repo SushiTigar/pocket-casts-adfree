@@ -467,3 +467,129 @@ index 025b9249..34be4eae 100644
  
                  # Move to next chunk
                  chunk_start = chunk_end
+diff --git a/src/config.py b/src/config.py
+index e048dc06..d3caa9b3 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -231,6 +231,56 @@ OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
+ OPENROUTER_HTTP_REFERER = 'https://github.com/ttlequals0/minuspod'
+ OPENROUTER_APP_TITLE = 'MinusPod'
+ 
++
++def _parse_csv_env_list(raw: str) -> list[str]:
++    return [part.strip() for part in raw.split(',') if part.strip()]
++
++
++def _parse_bool_env(name: str, default: Optional[bool] = None) -> Optional[bool]:
++    raw = os.environ.get(name)
++    if raw is None:
++        return default
++    return str(raw).strip().lower() in ('true', '1', 'yes')
++
++
++def get_openrouter_provider_config() -> Optional[dict]:
++    """Build OpenRouter ``provider`` routing object from environment.
++
++    See https://openrouter.ai/docs/guides/routing/provider-selection
++
++    Env vars:
++        OPENROUTER_PROVIDER_ORDER: comma-separated provider slugs to try in order
++            (e.g. ``GMICloud,Novita,Alibaba`` — copy exact slugs from the model's
++            Providers tab on openrouter.ai).
++        OPENROUTER_ALLOW_FALLBACKS: ``true``/``false``. Defaults to ``false`` when
++            ``OPENROUTER_PROVIDER_ORDER`` is set, otherwise unset (OpenRouter default).
++        OPENROUTER_PROVIDER_SORT: ``price``, ``throughput``, or ``latency``.
++        OPENROUTER_PROVIDER_ONLY: comma-separated allow-list of provider slugs.
++        OPENROUTER_PROVIDER_IGNORE: comma-separated deny-list of provider slugs.
++    """
++    order_raw = os.environ.get('OPENROUTER_PROVIDER_ORDER', '').strip()
++    sort_raw = os.environ.get('OPENROUTER_PROVIDER_SORT', '').strip()
++    only_raw = os.environ.get('OPENROUTER_PROVIDER_ONLY', '').strip()
++    ignore_raw = os.environ.get('OPENROUTER_PROVIDER_IGNORE', '').strip()
++
++    provider: dict = {}
++    if order_raw:
++        provider['order'] = _parse_csv_env_list(order_raw)
++    if only_raw:
++        provider['only'] = _parse_csv_env_list(only_raw)
++    if ignore_raw:
++        provider['ignore'] = _parse_csv_env_list(ignore_raw)
++    if sort_raw:
++        provider['sort'] = sort_raw
++
++    allow_fb = _parse_bool_env('OPENROUTER_ALLOW_FALLBACKS')
++    if allow_fb is not None:
++        provider['allow_fallbacks'] = allow_fb
++    elif order_raw:
++        provider['allow_fallbacks'] = False
++
++    return provider or None
++
+ MASTER_PASSPHRASE = os.environ.get('MINUSPOD_MASTER_PASSPHRASE')
+ 
+ 
+diff --git a/src/llm_client.py b/src/llm_client.py
+index 2eaf33ed..2e8dd871 100644
+--- a/src/llm_client.py
++++ b/src/llm_client.py
+@@ -47,6 +47,7 @@ from config import (
+     PROVIDER_OPENAI_COMPATIBLE,
+     PROVIDER_OLLAMA,
+     PROVIDERS_NON_ANTHROPIC,
++    get_openrouter_provider_config,
+ )
+ from llm_capabilities import (
+     get_pass_defaults,
+@@ -627,13 +628,15 @@ class OpenAICompatibleClient(LLMClient):
+         base_url: Optional[str] = None,
+         api_key: Optional[str] = None,
+         default_model: Optional[str] = None,
+-        extra_headers: Optional[Dict[str, str]] = None
++        extra_headers: Optional[Dict[str, str]] = None,
++        openrouter_provider: Optional[Dict[str, Any]] = None,
+     ):
+         super().__init__()
+         self.base_url = base_url or os.environ.get('OPENAI_BASE_URL', 'http://localhost:8000/v1')
+         self.api_key = api_key or get_effective_openai_api_key()
+         self.default_model = default_model or os.environ.get('OPENAI_MODEL', 'claude-sonnet-4-5-20250929')
+         self.extra_headers = extra_headers or {}
++        self.openrouter_provider = openrouter_provider
+         self._client = None
+         # Cache which token parameter each model accepts: "max_completion_tokens" or "max_tokens"
+         # Per-instance to avoid cross-contamination between clients with different base_urls
+@@ -720,8 +723,14 @@ class OpenAICompatibleClient(LLMClient):
+                 else:
+                     kw["response_format"] = response_format
+             reasoning_kwargs = translate_reasoning_effort(active_provider, reasoning)
+-            # extra_body merges if a caller already supplied one; we don't, so direct update is fine.
+-            kw.update(reasoning_kwargs)
++            for key, val in reasoning_kwargs.items():
++                if key != 'extra_body':
++                    kw[key] = val
++            extra_body = dict(reasoning_kwargs.get('extra_body') or {})
++            if self.openrouter_provider:
++                extra_body['provider'] = self.openrouter_provider
++            if extra_body:
++                kw['extra_body'] = extra_body
+             return kw
+ 
+         def _send(tok, tmp, reasoning):
+@@ -1199,13 +1208,17 @@ def _build_client(provider: str) -> Optional[LLMClient]:
+         return AnthropicClient()
+     elif provider == PROVIDER_OPENROUTER:
+         api_key = get_effective_openrouter_api_key() or 'not-needed'
++        or_provider = get_openrouter_provider_config()
++        if or_provider:
++            logger.info("OpenRouter provider routing active: %s", or_provider)
+         return OpenAICompatibleClient(
+             base_url=OPENROUTER_BASE_URL,
+             api_key=api_key,
+             extra_headers={
+                 'HTTP-Referer': OPENROUTER_HTTP_REFERER,
+                 'X-Title': OPENROUTER_APP_TITLE,
+-            }
++            },
++            openrouter_provider=or_provider,
+         )
+     elif provider in PROVIDERS_NON_ANTHROPIC:
+         raw_base_url = get_effective_base_url()

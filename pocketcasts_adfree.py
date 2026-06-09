@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import sys
 import subprocess
 import tempfile
@@ -141,6 +142,46 @@ def _restart_ollama_if_wedged() -> bool:
         return False
 
 
+def _restart_minuspod_if_wedged() -> bool:
+    """Restart MinusPod when cloud-LLM ad detection is hung. Returns True on success."""
+    try:
+        import services_manager
+    except Exception:
+        return False
+    try:
+        result = services_manager.restart_minuspod()
+        return bool(result.get("ok"))
+    except Exception as exc:
+        log.warning(f"  MinusPod restart failed: {exc}")
+        return False
+
+
+def _llm_provider_uses_ollama() -> bool:
+    return os.environ.get("LLM_PROVIDER", "ollama") == "ollama"
+
+
+def _reset_orphaned_episode_in_db(slug: str, episode_id: str) -> bool:
+    """Clear an episode stuck in ``processing`` with no active MinusPod worker."""
+    db_path = Path(__file__).parent / "MinusPod" / "data" / "podcast.db"
+    if not db_path.exists():
+        return False
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.execute(
+            """UPDATE episodes SET status='discovered'
+               WHERE episode_id=? AND status='processing'
+               AND podcast_id IN (SELECT id FROM podcasts WHERE slug=?)""",
+            (episode_id, slug),
+        )
+        conn.commit()
+        updated = cur.rowcount > 0
+        conn.close()
+        return updated
+    except Exception as exc:
+        log.error(f"  Failed to reset orphaned episode in DB: {exc}")
+        return False
+
+
 def _is_llm_stage(stage: str) -> bool:
     if not stage:
         return False
@@ -164,12 +205,12 @@ def _stall_threshold_for_stage(stage: str, base_threshold: int) -> int:
 
 def _bounce_service_for_stall(stage: str) -> tuple[bool, str]:
     """Restart the backend most likely wedged for this MinusPod stage."""
-    if _is_llm_stage(stage):
-        return _restart_ollama_if_wedged(), "Ollama"
     if _is_transcription_stage(stage):
         return _restart_whisper_if_wedged(), "whisper-server"
-    # Post-transcription work is almost always LLM-bound.
-    return _restart_ollama_if_wedged(), "Ollama"
+    if _llm_provider_uses_ollama():
+        return _restart_ollama_if_wedged(), "Ollama"
+    # Cloud LLM (OpenRouter, etc.) — Ollama is not involved; bounce MinusPod.
+    return _restart_minuspod_if_wedged(), "MinusPod"
 
 
 def _list_up_next_episodes(pc) -> list[dict]:
@@ -1066,6 +1107,8 @@ class MinusPodClient:
         # itself by hammering the reprocess endpoint.
         MAX_REPROCESS_TRIGGERS = 2
         reprocess_count = 0
+        MAX_ORPHAN_RECOVERY = 3
+        orphan_recovery_count = 0
         # Sample episode-status every N retry iterations to detect a
         # "permanently_failed" verdict without spamming MinusPod.
         STATUS_CHECK_EVERY = 3
@@ -1093,6 +1136,8 @@ class MinusPodClient:
                 # Reset reprocess budget — any 'failed' MinusPod state that appeared
                 # while paused was caused by transient issues, not a genuine error.
                 reprocess_count = 0
+                last_progress_at = time.monotonic()
+                service_bounced_for_stall = False
                 log.info("  Reprocess budget reset after pause/resume.")
 
             # Hard wallclock cap — this is the real safety net.
@@ -1193,19 +1238,31 @@ class MinusPodClient:
                                     )
                                 last_progress_at = time.monotonic()
                             else:
-                                log_hint = (
-                                    "~/Library/Logs/Homebrew/ollama/ollama.log"
-                                    if bounced_service_name == "Ollama"
-                                    else "/tmp/whisper-server.log"
-                                )
+                                if bounced_service_name == "Ollama":
+                                    log_hint = "~/Library/Logs/Homebrew/ollama/ollama.log"
+                                elif bounced_service_name == "MinusPod":
+                                    log_hint = "/tmp/minuspod.log"
+                                else:
+                                    log_hint = "/tmp/whisper-server.log"
                                 llm_hint = ""
-                                if _is_llm_stage(last_stage):
-                                    llm_hint = (
-                                        " Ad detection uses Ollama — if windows "
-                                        "keep timing out, set OPENAI_MODEL=qwen3:14b "
-                                        "in .env (faster on ≤36GB Macs) or raise "
-                                        "LLM_TIMEOUT_LOCAL in MinusPod's environment."
-                                    )
+                                if _is_llm_stage(last_stage) or not last_stage:
+                                    if _llm_provider_uses_ollama():
+                                        llm_hint = (
+                                            " Ad detection uses Ollama — if windows "
+                                            "keep timing out, set OPENAI_MODEL=qwen3:14b "
+                                            "in .env (faster on ≤36GB Macs) or raise "
+                                            "LLM_TIMEOUT_LOCAL in MinusPod's environment."
+                                        )
+                                    else:
+                                        provider = os.environ.get(
+                                            "LLM_PROVIDER", "openrouter",
+                                        )
+                                        llm_hint = (
+                                            f" Ad detection uses {provider} "
+                                            f"(LLM_PROVIDER={provider}) — verify "
+                                            "OPENAI_MODEL is valid for that API and "
+                                            "check /tmp/minuspod.log for LLM errors."
+                                        )
                                 raise TimeoutError(
                                     f"MinusPod stuck on stage "
                                     f"'{last_stage or 'unknown'}' for "
@@ -1229,28 +1286,49 @@ class MinusPodClient:
                                 
                                 # Auto-recovery for orphaned 'processing' state
                                 if status == "processing" and not current_job:
-                                    log.warning(f"  Detected orphaned processing status for {slug}/{episode_id} with no active job. Forcing database reset...")
+                                    orphan_recovery_count += 1
+                                    if orphan_recovery_count > MAX_ORPHAN_RECOVERY:
+                                        raise RuntimeError(
+                                            f"Episode {slug}/{episode_id} stuck in "
+                                            "orphaned 'processing' state after "
+                                            f"{MAX_ORPHAN_RECOVERY} recovery attempts. "
+                                            "MinusPod has no active worker for this "
+                                            "episode — check /tmp/minuspod.log."
+                                        )
+                                    log.warning(
+                                        f"  Detected orphaned processing status for "
+                                        f"{slug}/{episode_id} with no active job "
+                                        f"({orphan_recovery_count}/{MAX_ORPHAN_RECOVERY}). "
+                                        "Forcing database reset..."
+                                    )
                                     if progress_callback:
-                                        progress_callback("Orphaned job detected; resetting status to discovered...")
-                                    
-                                    # Update the database status directly to discovered
-                                    import sqlite3
-                                    try:
-                                        db_path = Path(__file__).parent / "MinusPod" / "data" / "podcast.db"
-                                        if db_path.exists():
-                                            conn = sqlite3.connect(str(db_path))
-                                            conn.execute("UPDATE episodes SET status='discovered' WHERE slug=? AND status='processing'", (episode_id,))
-                                            conn.commit()
-                                            conn.close()
-                                            log.info("  Successfully reset orphaned episode status to discovered in DB.")
-                                    except Exception as db_err:
-                                        log.error(f"  Failed to update episode status in DB: {db_err}")
+                                        progress_callback(
+                                            "Orphaned job detected; resetting status "
+                                            "to discovered..."
+                                        )
 
-                                    # Trigger reprocess
+                                    if _reset_orphaned_episode_in_db(slug, episode_id):
+                                        log.info(
+                                            "  Reset orphaned episode status to "
+                                            "discovered in DB."
+                                        )
+                                    else:
+                                        log.warning(
+                                            "  Orphaned episode DB reset matched no "
+                                            "rows (already cleared or wrong id?)."
+                                        )
+
                                     try:
-                                        self.reprocess_episode(slug, episode_id)
+                                        self.reprocess_episode(
+                                            slug, episode_id, mode="full",
+                                        )
                                     except Exception as e:
-                                        log.error(f"  Failed to trigger reprocess for orphaned episode: {e}")
+                                        log.error(
+                                            f"  Failed to trigger reprocess for "
+                                            f"orphaned episode: {e}"
+                                        )
+                                    last_progress_at = time.monotonic()
+                                    service_bounced_for_stall = False
                                     time.sleep(10)
                                     continue
 
@@ -1410,6 +1488,39 @@ class MinusPodClient:
             log.info("Set improved system prompt (~800 tokens)")
         except Exception as e:
             log.warning(f"Could not update system prompt: {e}")
+
+    def sync_model_from_env(self):
+        """Apply OPENAI_MODEL from the environment to MinusPod's settings DB.
+
+        Required when LLM_PROVIDER is not ollama — MinusPod otherwise keeps a
+        stale Ollama model name (e.g. qwen3:14b) that cloud APIs reject.
+        """
+        provider = os.environ.get("LLM_PROVIDER", "ollama")
+        if provider == "ollama":
+            return
+        model = os.environ.get("OPENAI_MODEL", "").strip()
+        if not model:
+            log.warning("LLM_PROVIDER=%s but OPENAI_MODEL is not set", provider)
+            return
+        try:
+            resp = self.client.get(f"{self.base_url}/api/v1/settings", timeout=5)
+            if resp.status_code == 200:
+                cm = resp.json().get("claudeModel")
+                current = cm.get("value") if isinstance(cm, dict) else cm
+                if current == model:
+                    return
+            self.client.put(
+                f"{self.base_url}/api/v1/settings/ad-detection",
+                json={
+                    "claudeModel": model,
+                    "verificationModel": model,
+                    "chaptersModel": model,
+                },
+                timeout=10,
+            )
+            log.info(f"Synced MinusPod ad-detection model from .env: {model}")
+        except Exception as e:
+            log.warning(f"Could not sync MinusPod model from .env: {e}")
 
     def lower_confidence_threshold(self):
         """Lower the minimum cut confidence to catch more borderline ads."""
@@ -1921,6 +2032,7 @@ def process_single_episode(
     podcast_uuid: str = None,
     original_episode_uuid: str = None,
     pause_event=None,
+    rss_url: str = None,
 ) -> str | None:
     """Process a single episode via MinusPod JIT and upload to Pocket Casts.
 
@@ -1948,44 +2060,44 @@ def process_single_episode(
         return None
 
     if ep_status in ("failed", "permanently_failed"):
-        log.warning(f"  Episode '{ep_title}' has status '{ep_status}' in MinusPod. Resetting feed...")
+        log.warning(
+            f"  Episode '{ep_title}' has status '{ep_status}' in MinusPod. "
+            "Triggering reprocess..."
+        )
+        # `full` clears cached transcript/ads and re-runs AI from scratch —
+        # needed when MinusPod has given up (`permanently_failed`).
+        reprocess_mode = "full" if ep_status == "permanently_failed" else "reprocess"
         if progress_callback:
-            progress_callback(f"Resetting failed episode (was: {ep_status})...")
+            progress_callback(
+                f"Episode failed in MinusPod ({ep_status}), "
+                f"requesting reprocess (mode={reprocess_mode})..."
+            )
         try:
-            # Get the feed's source URL before deleting
-            feed_info = mp.get_feed_info(feed_slug)
-            source_url = feed_info.get("sourceUrl") if feed_info else None
-            if source_url:
-                mp.delete_feed(feed_slug)
-                time.sleep(2)
-                result = mp.add_feed(source_url, max_episodes=10)
-                new_slug = result.get("slug")
-                time.sleep(5)
-                # Update feed_slug and re-fetch episodes to get the fresh one
-                if new_slug:
-                    feed_slug = new_slug
-                    new_episodes = mp.get_episodes(feed_slug)
-                    # Find the same episode in the refreshed list
-                    for new_ep in new_episodes:
-                        if _normalize_title(new_ep.get("title", "")) == _normalize_title(ep_title):
-                            episode = new_ep
-                            ep_id = new_ep["id"]
-                            ep_status = new_ep.get("status", "discovered")
-                            state_key = f"{feed_slug}:{ep_id}"
-                            log.info(f"  Feed reset successful. New status: {ep_status}")
-                            break
-                    else:
-                        log.error(f"  Could not find episode after feed reset")
-                        return None
-                else:
-                    log.error(f"  Feed re-add did not return a slug")
-                    return None
+            result = mp.reprocess_episode(feed_slug, ep_id, mode=reprocess_mode)
+            if result.get("already_processing"):
+                log.info("  MinusPod already reprocessing this episode.")
+                if progress_callback:
+                    progress_callback("MinusPod is already reprocessing this episode...")
             else:
-                log.error(f"  Cannot reset: no source URL for feed {feed_slug}")
-                return None
+                log.info(f"  Reprocess queued (mode={reprocess_mode}).")
+                if progress_callback:
+                    progress_callback(f"Reprocess queued (mode={reprocess_mode})")
+            time.sleep(3)
+            refreshed = mp.get_episode(feed_slug, ep_id)
+            if refreshed:
+                episode = refreshed
+                ep_id = refreshed["id"]
+                ep_status = refreshed.get("status", ep_status)
+                state_key = f"{feed_slug}:{ep_id}"
+                log.info(f"  Episode status after reprocess request: {ep_status}")
         except Exception as e:
-            log.error(f"  Feed reset failed: {e}")
-            return None
+            # Don't abort — download_processed_audio has its own reprocess
+            # retry budget when it sees failed / permanently_failed states.
+            log.warning(f"  Reprocess request failed: {e} — download loop will retry")
+            if progress_callback:
+                progress_callback(
+                    f"Reprocess request failed ({e}); will retry during download..."
+                )
 
     log.info(f"  Downloading ad-free audio ({ep_status}): {ep_title}")
     if progress_callback:
@@ -2236,6 +2348,7 @@ def test_single_episode(pc_email, pc_password, rss_url):
     pc = PocketCastsClient(pc_email, pc_password)
     mp = MinusPodClient()
     mp.disable_auto_process()
+    mp.sync_model_from_env()
     mp.set_fast_system_prompt()
     mp.lower_confidence_threshold()
 
@@ -2261,7 +2374,9 @@ def test_single_episode(pc_email, pc_password, rss_url):
 
     state = load_state()
     target = episodes[0]
-    file_uuid = process_single_episode(pc, mp, feed_slug, target, output_dir, state)
+    file_uuid = process_single_episode(
+        pc, mp, feed_slug, target, output_dir, state, rss_url=rss_url,
+    )
 
     if file_uuid:
         log.info(f"\nPIPELINE COMPLETE - uploaded and queued in Up Next")
@@ -2271,6 +2386,7 @@ def run_automation(pc_email, pc_password, rss_urls=None, podcast_filter=None):
     pc = PocketCastsClient(pc_email, pc_password)
     mp = MinusPodClient()
     mp.disable_auto_process()
+    mp.sync_model_from_env()
     mp.set_fast_system_prompt()
     mp.lower_confidence_threshold()
     state = load_state()
@@ -2293,7 +2409,10 @@ def run_automation(pc_email, pc_password, rss_urls=None, podcast_filter=None):
         slug = feed["slug"]
         log.info(f"\nProcessing feed: {feed.get('title', slug)}")
         for ep in mp.get_episodes(slug):
-            process_single_episode(pc, mp, slug, ep, output_dir, state)
+            process_single_episode(
+                pc, mp, slug, ep, output_dir, state,
+                rss_url=feed.get("sourceUrl"),
+            )
 
     log.info("\nAutomation run complete!")
 

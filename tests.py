@@ -1357,6 +1357,44 @@ class TestFailedEpisodeAbort(unittest.TestCase):
         self.assertEqual(bounce_calls, ["pass1:detecting:1/9"])
         self.assertIn("ollama.log", str(ctx.exception))
 
+    def test_bounce_service_uses_minuspod_for_cloud_llm(self):
+        from pocketcasts_adfree import _bounce_service_for_stall
+        with patch.dict(os.environ, {"LLM_PROVIDER": "openrouter"}, clear=False), \
+             patch("pocketcasts_adfree._restart_minuspod_if_wedged",
+                   return_value=True) as m_mp:
+            ok, name = _bounce_service_for_stall("pass1:detecting:1/9")
+        self.assertTrue(ok)
+        self.assertEqual(name, "MinusPod")
+        m_mp.assert_called_once()
+
+    def test_orphaned_recovery_resets_db_and_reprocesses(self):
+        """Broken SQL (episodes.slug) used to make orphan recovery a no-op."""
+        from pocketcasts_adfree import MinusPodClient, _reset_orphaned_episode_in_db
+        with patch.object(MinusPodClient, '__init__', lambda self, *a, **kw: None), \
+             patch('pocketcasts_adfree.time.sleep'), \
+             patch('pocketcasts_adfree._reset_orphaned_episode_in_db',
+                   return_value=True) as m_reset:
+            mp = MinusPodClient.__new__(MinusPodClient)
+            mp.base_url = "http://localhost:8000"
+            mp.client = MagicMock()
+            mp.client.stream.return_value = self._make_resp(
+                503, {"Retry-After": "1"},
+            )
+            with patch.object(mp, "get_status", return_value={"currentJob": None}), \
+                 patch.object(mp, "get_episode", return_value={
+                     "status": "processing",
+                 }), \
+                 patch.object(mp, "reprocess_episode", return_value={}) as m_re:
+                # STATUS_CHECK_EVERY=3 → need attempt>0 and attempt%3==0
+                mp.download_processed_audio(
+                    "dlc", "e6e9936c52a7", Path("/tmp"),
+                    max_retries=10, retry_delay=0,
+                    max_wallclock_seconds=10**9,
+                    stall_threshold_seconds=10**9,
+                )
+        m_reset.assert_called()
+        m_re.assert_called_with("dlc", "e6e9936c52a7", mode="full")
+
 
 class TestUpNextTitleMatching(unittest.TestCase):
     """When a PC Up Next UUID isn't in MinusPod's ep_map, the fallback
