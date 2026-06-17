@@ -927,7 +927,7 @@ class PocketCastsClient:
                 "upNext": {
                     "serverModified": server_modified,
                     "changes": [{
-                        "action": 1,
+                        "action": 4,
                         "modified": now_ms,
                         "uuid": episode_uuid,
                     }],
