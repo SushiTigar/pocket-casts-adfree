@@ -444,10 +444,12 @@ let podcasts = [];
             (upNextByPodcast[ep.podcast_uuid] ||= []).push(ep);
           }
           for (const [puuid, eps] of Object.entries(upNextByPodcast)) {
+            const podData = podcasts.find(x => x.uuid === puuid);
             const podTitle = getPodcastTitle(puuid);
+            const podThumb = podData?.thumbnail || '';
             const isExp = expandedPodcasts.has(`upnext-${puuid}`);
             const hasSel = isPodcastSelected(puuid);
-            const isPat = podcasts.find(x => x.uuid === puuid)?.is_patreon;
+            const isPat = podData?.is_patreon;
             const allAdFree = eps.every(e => e.title.includes('(Ad-Free)'));
             const cls = ['podcast-card',
               hasSel ? 'selected' : '',
@@ -455,9 +457,12 @@ let podcasts = [];
               isPat ? 'patreon' : '',
               allAdFree ? 'processed' : ''
             ].filter(Boolean).join(' ');
-            html += `<div class="${cls}" style="margin-bottom:4px;">
+            html += `<div class="${cls}" data-uuid="${esc(puuid)}" style="margin-bottom:4px;">
               <div class="podcast-header" onclick="togglePodcast('upnext-${puuid}', '${puuid}')" style="padding:10px 14px;">
                 <span class="up-next-badge">Up Next</span>
+                <div class="podcast-thumb" aria-hidden="true">${podThumb
+                  ? `<img src="${esc(podThumb)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('thumb-missing'); this.remove();">`
+                  : `<span class="podcast-thumb-initial">${esc((podTitle || '?').charAt(0).toUpperCase())}</span>`}</div>
                 <div class="podcast-info" style="flex:1;min-width:0">
                   <div class="podcast-title">${esc(podTitle)}</div>
                   <div class="podcast-author" style="font-size:11px;color:var(--text-muted)">${eps.length} episode${eps.length > 1 ? 's' : ''} in queue</div>
