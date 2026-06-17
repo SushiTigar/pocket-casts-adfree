@@ -113,7 +113,8 @@ The UI auto-starts Whisper and MinusPod in the background on every launch.
 **Ollama is started only when `LLM_PROVIDER=ollama`** (the default); if you
 use a cloud LLM API instead, Ollama is skipped entirely. No separate
 `./start_services.sh` step is required. MinusPod is also auto-updated from
-upstream on each start.
+upstream on each start, and the
+[LLM cost-optimisation patch](#minuspod-patches) is re-applied on top.
 
 ## First-time setup
 
@@ -420,6 +421,9 @@ Set `LLM_PROVIDER` to choose how MinusPod runs ad detection. See
 |----------|---------|--------|
 | `WINDOW_SIZE_SECONDS` | `600` | Transcript window size handed to the LLM. |
 | `WINDOW_OVERLAP_SECONDS` | `120` | Overlap between consecutive windows. |
+| `LARGE_WINDOW_SECONDS` | `1200` | Window size used in place of `WINDOW_SIZE_SECONDS` for 1 M-context models (DeepSeek V4, Gemini Flash, Qwen Long, Llama 4 / 3.1-405B) on episodes longer than `2 × WINDOW_SIZE_SECONDS`. Cuts the per-episode LLM call count roughly in half on long episodes. |
+| `SKIP_VERIFICATION_UNDER_SECONDS` | `1200` (20 min) | Skip the verification pass on episodes shorter than this. Short episodes rarely have ads that survive pass 1, and verification doubles the LLM cost for near-zero yield. Set to `0` to disable. |
+| `ENABLE_PROMPT_CACHING` | `true` | Annotate the system prompt with `cache_control: ephemeral` so the provider can cache it across the ~22 windows of a long episode. Cached input tokens are reported in the response log; the cost calculator stays cache-unaware. |
 | `AD_DETECTION_MAX_TOKENS` | `4096` | Token budget per LLM call. |
 | `OLLAMA_NUM_PARALLEL` | `1` | *(Ollama only)* Concurrent requests. Each in-flight slot duplicates the KV cache. Increase only on machines with ≥48 GB free RAM. |
 | `OLLAMA_MAX_LOADED_MODELS` | `1` | *(Ollama only)* How many models Ollama keeps resident. Bumping this silently doubles memory if MinusPod swaps detection ↔ verification ↔ chapters models. |
@@ -479,28 +483,28 @@ when present).
 
 ## MinusPod patches
 
-Local modifications to MinusPod live as a single patch in
-[`patches/minuspod-local.patch`](patches/minuspod-local.patch). The pinned
-upstream commit is recorded in
-[`patches/MINUSPOD_BASE.txt`](patches/MINUSPOD_BASE.txt). To re-apply from a
-clean clone:
+Local modifications to MinusPod live as patches in
+[`patches/`](patches/). The pinned upstream commit is recorded in
+[`patches/MINUSPOD_BASE.txt`](patches/MINUSPOD_BASE.txt). `setup_minuspod.sh`
+applies them in order with `git apply --3way`; if a patch no longer applies
+cleanly against the pinned commit, the script warns and continues rather than
+failing the install.
 
-```bash
-./scripts/setup_minuspod.sh
-```
+| Patch | Purpose |
+|-------|---------|
+| [`minuspod-local.patch`](patches/minuspod-local.patch) | Honour `DATA_DIR`, env-tunable window sizes, `detect_tail_gap`, ad padding, `SKIP_VERIFICATION=true`. |
+| [`llm-cost-optimizations.patch`](patches/llm-cost-optimizations.patch) | The three LLM cost tunables documented under [MinusPod runtime](#minuspod-runtime-optional): large-window override for 1 M-context models, configurable `SKIP_VERIFICATION_UNDER_SECONDS`, and OpenRouter prompt caching on the system prompt. Adds the "Ad detection" panel in this UI. |
 
-Summary of what's patched:
+### Tuning without restart
 
-| File | Why we patch it |
-|------|-----------------|
-| `storage.py`, `database/__init__.py` | Honor `DATA_DIR` env var so we don't write to `/app/data`. |
-| `llm_client.py` | Disable Ollama "thinking mode" (`reasoning_effort: none`) for faster responses. |
-| `main_app/processing.py` | Wires in the new `detect_tail_gap` heuristic; honors `SKIP_VERIFICATION=true`. |
-| `config.py` | Read `WINDOW_SIZE_SECONDS` / `WINDOW_OVERLAP_SECONDS` from the environment. |
-| `roll_detector.py` | Tighter pre-roll regexes plus the new `detect_tail_gap` for outros Whisper failed to transcribe. Tunable via `TAIL_GAP_MIN_SECONDS`. |
-| `audio_processor.py` | Pad ad boundaries 1.5 s before / 2 s after; tail-of-file ads get 5 s after (`AD_END_PAD_TAIL`). |
-
-See [`patches/README.md`](patches/README.md) for line-by-line detail.
+The three LLM cost tunables are exposed in the dashboard under **Ad
+detection**. Changes land in the MinusPod database immediately and take effect
+on the next episode processed — no service restart required. The dashboard
+GETs `/api/v1/settings` to read the current values (showing whether each is at
+the default, set in the DB, or overridden by an env var) and PUTs
+`/api/v1/settings/ad-detection` to write. Unknown keys are rejected before the
+request reaches MinusPod, and MinusPod's own cross-field validation
+(`LARGE_WINDOW_SECONDS >= WINDOW_SIZE_SECONDS`) is surfaced back to the UI.
 
 ## Troubleshooting
 
