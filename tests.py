@@ -26,6 +26,7 @@ from pocketcasts_adfree import (
     _sanitize_published_date,
     is_patreon_feed,
     find_rss_url_for_podcast,
+    get_podcast_artwork_url,
     load_state,
     save_state,
     STATE_FILE,
@@ -2142,6 +2143,151 @@ class TestPocketCastsAuthErrorSurface(unittest.TestCase):
             "Auth-failure cache let repeated requests re-trigger login; "
             "this would extend Pocket Casts' lockout."
         )
+
+
+class TestPodcastArtworkLookup(unittest.TestCase):
+    """Artwork is fetched from iTunes Search API and cached on disk because
+    Pocket Casts' /user/podcast/list endpoint doesn't include any image URLs.
+    """
+
+    def _mock_itunes(self, results):
+        """Return a MagicMock that mimics httpx.get against itunes.apple.com."""
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.json.return_value = {"results": results}
+        return resp
+
+    @patch('pocketcasts_adfree._save_artwork_cache')
+    @patch('pocketcasts_adfree._load_artwork_cache', return_value={})
+    @patch('pocketcasts_adfree.httpx.get')
+    def test_empty_title_short_circuits(self, mock_get, mock_load, mock_save):
+        """No title → no iTunes call → empty string. We don't want to
+        hammer iTunes for podcasts whose title is empty/None."""
+        url = get_podcast_artwork_url("pod-a", "")
+        self.assertEqual(url, "")
+        self.assertEqual(url, get_podcast_artwork_url("pod-b", None))
+        mock_get.assert_not_called()
+        mock_save.assert_not_called()
+
+    @patch('pocketcasts_adfree._save_artwork_cache')
+    @patch('pocketcasts_adfree._load_artwork_cache', return_value={"pod-a": "https://cached.example/a.jpg"})
+    @patch('pocketcasts_adfree.httpx.get')
+    def test_cache_hit_skips_itunes(self, mock_get, mock_load, mock_save):
+        """If the uuid is already in the cache, never call iTunes — the URL
+        is stable and re-querying would just be wasted bandwidth."""
+        url = get_podcast_artwork_url("pod-a", "Some Podcast")
+        self.assertEqual(url, "https://cached.example/a.jpg")
+        mock_get.assert_not_called()
+        mock_save.assert_not_called()
+
+    @patch('pocketcasts_adfree._save_artwork_cache')
+    @patch('pocketcasts_adfree._load_artwork_cache', return_value={})
+    @patch('pocketcasts_adfree.httpx.get')
+    def test_exact_title_match_wins(self, mock_get, mock_load, mock_save):
+        """When iTunes returns the same podcast (by title), use its
+        artworkUrl600 — even if it appears second in the result list."""
+        mock_get.return_value = self._mock_itunes([
+            {"trackName": "Some Other Podcast",
+             "artworkUrl600": "https://wrong.example/other.jpg"},
+            {"trackName": "Some Podcast",
+             "artworkUrl600": "https://right.example/exact.jpg"},
+        ])
+        url = get_podcast_artwork_url("pod-a", "Some Podcast")
+        self.assertEqual(url, "https://right.example/exact.jpg")
+        mock_save.assert_called_once()
+        self.assertEqual(mock_save.call_args[0][0]["pod-a"],
+                         "https://right.example/exact.jpg")
+
+    @patch('pocketcasts_adfree._save_artwork_cache')
+    @patch('pocketcasts_adfree._load_artwork_cache', return_value={})
+    @patch('pocketcasts_adfree.httpx.get')
+    def test_falls_back_to_first_result_when_no_exact_match(self, mock_get, mock_load, mock_save):
+        """iTunes fuzzy search can return near-misses. If no result has
+        the exact title, we still return *something* rather than empty
+        — better a slightly-wrong cover than an initial-letter placeholder
+        for a real podcast the user actually subscribes to."""
+        mock_get.return_value = self._mock_itunes([
+            {"trackName": "Some Podcast (Bonus Episodes)",
+             "artworkUrl600": "https://fallback.example/bonus.jpg"},
+        ])
+        url = get_podcast_artwork_url("pod-a", "Some Podcast")
+        self.assertEqual(url, "https://fallback.example/bonus.jpg")
+
+    @patch('pocketcasts_adfree._save_artwork_cache')
+    @patch('pocketcasts_adfree._load_artwork_cache', return_value={})
+    @patch('pocketcasts_adfree.httpx.get')
+    def test_no_results_negatively_caches_empty(self, mock_get, mock_load, mock_save):
+        """iTunes returned zero results → cache "" so we don't re-query
+        on every dashboard refresh. The UI will show the initial-letter
+        placeholder until the user manually re-adds the feed."""
+        mock_get.return_value = self._mock_itunes([])
+        url = get_podcast_artwork_url("pod-a", "Niche Indie Podcast")
+        self.assertEqual(url, "")
+        mock_save.assert_called_once_with({"pod-a": ""})
+
+    @patch('pocketcasts_adfree._save_artwork_cache')
+    @patch('pocketcasts_adfree._load_artwork_cache', return_value={})
+    @patch('pocketcasts_adfree.httpx.get')
+    def test_network_error_negatively_caches_empty(self, mock_get, mock_load, mock_save):
+        """If iTunes is unreachable, don't propagate the exception to the
+        UI request — return "" and cache it. The dashboard keeps working."""
+        import httpx
+        mock_get.side_effect = httpx.ConnectError("iTunes down")
+        url = get_podcast_artwork_url("pod-a", "Any Podcast")
+        self.assertEqual(url, "")
+        mock_save.assert_called_once_with({"pod-a": ""})
+
+    @patch('pocketcasts_adfree._save_artwork_cache')
+    @patch('pocketcasts_adfree._load_artwork_cache', return_value={})
+    @patch('pocketcasts_adfree.httpx.get')
+    def test_non_200_status_negatively_caches(self, mock_get, mock_load, mock_save):
+        """A 4xx/5xx from iTunes (rate limit, geo-block) must not crash the
+        lookup — return "" and cache it."""
+        resp = MagicMock()
+        resp.status_code = 429
+        mock_get.return_value = resp
+        url = get_podcast_artwork_url("pod-a", "Any Podcast")
+        self.assertEqual(url, "")
+        mock_save.assert_called_once_with({"pod-a": ""})
+
+    @patch('ui_server.PocketCastsClient')
+    def test_podcast_artwork_endpoint_returns_url(self, MockPC):
+        """GET /api/podcast_artwork/<uuid> must return {"url": "..."}
+        and never 500, even if the underlying lookup fails."""
+        mock_pc = MagicMock()
+        mock_pc.get_subscriptions.return_value = [
+            {"uuid": "pod-a", "title": "Podcast A"},
+        ]
+        MockPC.return_value = mock_pc
+
+        with patch('ui_server.get_podcast_artwork_url',
+                   return_value="https://art.example/a.jpg"):
+            from ui_server import create_app
+            app = create_app("test@test.com", "testpass")
+            client = app.test_client()
+            resp = client.get('/api/podcast_artwork/pod-a')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"url": "https://art.example/a.jpg"})
+
+    @patch('ui_server.PocketCastsClient')
+    def test_podcast_artwork_endpoint_handles_failure(self, MockPC):
+        """Even when get_podcast_artwork_url raises, the endpoint must
+        return a clean JSON {"url": ""} rather than 500 — the dashboard
+        polls this on every load and must never break the page."""
+        mock_pc = MagicMock()
+        mock_pc.get_subscriptions.return_value = [
+            {"uuid": "pod-a", "title": "Podcast A"},
+        ]
+        MockPC.return_value = mock_pc
+
+        with patch('ui_server.get_podcast_artwork_url',
+                   side_effect=RuntimeError("boom")):
+            from ui_server import create_app
+            app = create_app("test@test.com", "testpass")
+            client = app.test_client()
+            resp = client.get('/api/podcast_artwork/pod-a')
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"url": ""})
 
 
 if __name__ == "__main__":

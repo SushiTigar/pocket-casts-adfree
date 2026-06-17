@@ -25,6 +25,7 @@ from pocketcasts_adfree import (
     PocketCastsAuthError,
     is_patreon_feed,
     find_rss_url_for_podcast,
+    get_podcast_artwork_url,
     load_state,
     save_state,
     process_single_episode,
@@ -382,6 +383,27 @@ def create_app(email=None, password=None):
             "episode_status": episode_status,
             "processed_podcast_uuids": list(processed_podcast_uuids),
         })
+
+    @app.route("/api/podcast_artwork/<podcast_uuid>")
+    def api_podcast_artwork(podcast_uuid):
+        """Return a high-res artwork URL for a single podcast.
+
+        PC's /user/podcast/list doesn't include artwork, so the dashboard
+        hits this endpoint per-podcast after loading subscriptions. Results
+        are cached on disk in podcast_artwork_cache.json — first call hits
+        iTunes, subsequent calls are free. Returns {"url": ""} on miss
+        so the UI keeps showing the initial-letter placeholder.
+        """
+        try:
+            pc = get_pc()
+            subs = pc.get_subscriptions()
+            pod = next((s for s in subs if s.get("uuid") == podcast_uuid), None)
+            title = (pod or {}).get("title", "")
+            url = get_podcast_artwork_url(podcast_uuid, title)
+            return jsonify({"url": url})
+        except Exception as e:  # noqa: BLE001
+            log.debug(f"podcast_artwork lookup failed: {e}")
+            return jsonify({"url": ""})
 
     def _get_up_next_episodes(pc):
         """Fetch the current Up Next episode list from Pocket Casts."""

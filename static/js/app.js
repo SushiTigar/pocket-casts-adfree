@@ -288,6 +288,31 @@ let podcasts = [];
 
 
 
+    async function fetchArtworkFor(p) {
+      try {
+        const d = await api('/podcast_artwork/' + encodeURIComponent(p.uuid));
+        if (d && d.url && !p.thumbnail) {
+          p.thumbnail = d.url;
+          swapPodcastThumb(p.uuid, d.url);
+        }
+      } catch (_) { /* leave placeholder */ }
+    }
+
+    function fetchMissingArtworks() {
+      if (!Array.isArray(podcasts)) return;
+      // Fire in parallel; each swap is idempotent and tiny. Sequential would
+      // add ~200ms per podcast of perceived delay; this finishes in one
+      // round-trip to iTunes for all of them.
+      podcasts.filter(p => !p.thumbnail).forEach(fetchArtworkFor);
+    }
+
+    function swapPodcastThumb(uuid, url) {
+      const card = document.querySelector(`.podcast-card[data-uuid="${esc(uuid)}"] .podcast-thumb`);
+      if (!card) return;
+      card.classList.remove('thumb-missing');
+      card.innerHTML = `<img src="${esc(url)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('thumb-missing'); this.remove();">`;
+    }
+
     async function loadSubscriptions() {
       try {
         const [d, filesResp] = await Promise.all([
@@ -305,6 +330,7 @@ let podcasts = [];
         el('stat-processed').textContent = d.processed_count || 0;
         clearAuthBanner();
         renderPodcasts();
+        fetchMissingArtworks();
       } catch(e) {
         if (e instanceof ApiError && e.body && e.body.error === 'pocketcasts_auth_failed') {
           renderAuthBanner(e);

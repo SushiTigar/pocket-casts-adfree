@@ -1920,6 +1920,72 @@ def _resolve_rss_via_itunes(podcast_title: str) -> str | None:
     return None
 
 
+ARTWORK_CACHE_FILE = Path(__file__).parent / "podcast_artwork_cache.json"
+
+
+def _load_artwork_cache() -> dict:
+    try:
+        if ARTWORK_CACHE_FILE.exists():
+            return json.loads(ARTWORK_CACHE_FILE.read_text())
+    except Exception:
+        pass
+    return {}
+
+
+def _save_artwork_cache(cache: dict) -> None:
+    try:
+        ARTWORK_CACHE_FILE.write_text(json.dumps(cache, indent=2))
+    except Exception as e:
+        log.debug(f"Could not write artwork cache: {e}")
+
+
+def get_podcast_artwork_url(podcast_uuid: str, podcast_title: str) -> str:
+    """Return a high-res artwork URL for a podcast, or "" if unknown.
+
+    Source priority:
+      1. Local cache (podcast_artwork_cache.json, keyed by uuid).
+      2. iTunes Search API — `artworkUrl600` is a reliable public CDN URL
+         that's already used by the official iOS/Android/web clients.
+         We do an exact title match (falling back to the first result)
+         to avoid grabbing the wrong podcast's art.
+      3. Empty string — the UI falls back to an initial-letter placeholder.
+
+    Result is cached permanently: iTunes artwork URLs are stable, and a
+    bad match won't change unless the user unsubscribes and resubscribes.
+    """
+    if not podcast_title:
+        return ""
+    cache = _load_artwork_cache()
+    if podcast_uuid in cache:
+        return cache[podcast_uuid]
+    try:
+        resp = httpx.get(
+            "https://itunes.apple.com/search",
+            params={"term": podcast_title, "media": "podcast", "limit": 3},
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            results = resp.json().get("results", [])
+            title_lower = podcast_title.lower().strip()
+            url = ""
+            for r in results:
+                if r.get("trackName", "").lower().strip() == title_lower:
+                    url = r.get("artworkUrl600", "")
+                    if url:
+                        break
+            if not url and results:
+                url = results[0].get("artworkUrl600", "")
+            cache[podcast_uuid] = url
+            _save_artwork_cache(cache)
+            return url
+    except Exception as e:
+        log.debug(f"Artwork lookup failed for {podcast_title}: {e}")
+    # Negative-cache so we don't hammer iTunes for unmatchable titles.
+    cache[podcast_uuid] = ""
+    _save_artwork_cache(cache)
+    return ""
+
+
 def find_rss_url_for_podcast(podcast_uuid: str, subscription_data: dict = None, pc=None) -> str | None:
     """Find the RSS feed URL for a Pocket Casts podcast.
 
