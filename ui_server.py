@@ -1700,6 +1700,16 @@ def create_app(email=None, password=None):
                     _job_log(job_id, "error", f"Failed to stop services: {e}")
             _maybe_start_next_job()
 
+    # Log the registered artwork endpoint at startup so the user can grep
+    # their server log to confirm they're running a build that has it. The
+    # "/api/podcast_artwork/<uuid>" endpoint is what backs the podcast
+    # thumbnail fetch in the UI — if it's missing, podcasts fall back to
+    # the letter placeholder forever.
+    if "unittest" not in sys.modules and not os.environ.get("TESTING"):
+        log.info("UI server ready. Artwork endpoint: /api/podcast_artwork/<uuid>")
+        log.info("If podcast thumbnails don't appear, click 'Retry artwork' "
+                 "in the top bar to re-fetch from iTunes.")
+
     return app
 
 

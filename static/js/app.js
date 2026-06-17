@@ -304,6 +304,13 @@ let podcasts = [];
         onerror="this.parentNode.classList.add('thumb-missing');this.outerHTML='<span class=\\'podcast-thumb-initial\\'>'+this.dataset.initial+'</span>';">`;
     }
 
+    function bumpArtworkStat() {
+      const el2 = el('stat-artwork');
+      if (!el2 || !Array.isArray(podcasts)) return;
+      const loaded = podcasts.filter(p => !!p.thumbnail).length;
+      el2.textContent = `${loaded}/${podcasts.length}`;
+    }
+
     async function fetchArtworkFor(p, bust) {
       try {
         const url = '/podcast_artwork/' + encodeURIComponent(p.uuid) +
@@ -312,13 +319,14 @@ let podcasts = [];
         if (d && d.url && !p.thumbnail) {
           p.thumbnail = d.url;
           swapPodcastThumb(p);
+          bumpArtworkStat();
         } else if (d && !d.url) {
-          console.debug(`[artwork] no iTunes result for "${p.title}" (${p.uuid})`);
+          console.log(`[artwork] no iTunes result for "${p.title}" (${p.uuid})`);
         } else if (!d) {
-          console.debug(`[artwork] endpoint returned empty for ${p.uuid}`);
+          console.log(`[artwork] endpoint returned empty for ${p.uuid}`);
         }
       } catch (e) {
-        console.debug(`[artwork] lookup failed for "${p.title}": ${e}`);
+        console.log(`[artwork] lookup failed for "${p.title}": ${e}`);
       }
     }
 
@@ -334,6 +342,7 @@ let podcasts = [];
       if (!Array.isArray(podcasts)) return;
       // Drop cached URLs so the endpoint will re-look-up. Also clears any
       // bad negative-cached entries from the on-disk cache.
+      el('stat-artwork').textContent = `0/${podcasts.length}`;
       for (const p of podcasts) {
         p.thumbnail = '';
         const card = document.querySelector(`.podcast-card[data-uuid="${esc(p.uuid)}"] .podcast-thumb`);
@@ -343,6 +352,7 @@ let podcasts = [];
         }
         await fetchArtworkFor(p, true);
       }
+      bumpArtworkStat();
     }
 
     function swapPodcastThumb(p) {
@@ -367,6 +377,7 @@ let podcasts = [];
         el('stat-eligible').textContent = d.eligible || 0;
         el('stat-patreon').textContent = d.patreon || 0;
         el('stat-processed').textContent = d.processed_count || 0;
+        el('stat-artwork').textContent = `0/${podcasts.length}`;
         clearAuthBanner();
         renderPodcasts();
         fetchMissingArtworks();
