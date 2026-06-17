@@ -44,6 +44,12 @@ OLLAMA_LOG_GUESSES = [
 ]
 UI_LOG = Path("/tmp/pocketcasts-ui.log")
 MINUSPOD_PATCH = ROOT / "patches" / "minuspod-local.patch"
+# Additional additive patches (LLM cost-optimisations, etc.) reapplied
+# on top of the core patch after each upstream update. Order matters:
+# each patch is applied to whatever the previous one left behind.
+MINUSPOD_ADDITIONAL_PATCHES = [
+    ROOT / "patches" / "llm-cost-optimizations.patch",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -577,14 +583,19 @@ def update_minuspod() -> dict:
 
         log.info("MinusPod pulled to %s", new_short)
 
-        # Reapply local patches on top of new upstream
-        if MINUSPOD_PATCH.exists():
-            patch_r = _run("git", "apply", str(MINUSPOD_PATCH))
+        # Reapply local patches on top of new upstream. The core patch
+        # is applied first; additional additive patches (e.g. LLM cost
+        # optimisations) are applied on top, each best-effort.
+        for patch_path in [MINUSPOD_PATCH, *MINUSPOD_ADDITIONAL_PATCHES]:
+            if not patch_path.exists():
+                continue
+            patch_r = _run("git", "apply", "--3way", str(patch_path))
             if patch_r.returncode == 0:
-                log.info("MinusPod local patches applied cleanly")
+                log.info("MinusPod patch applied cleanly: %s", patch_path.name)
             else:
                 log.warning(
-                    "MinusPod patch did not apply cleanly — manual merge needed.\n%s",
+                    "MinusPod patch did not apply cleanly: %s — manual merge needed.\n%s",
+                    patch_path.name,
                     patch_r.stderr.strip(),
                 )
 
@@ -786,6 +797,86 @@ def set_minuspod_model(model: str) -> dict:
         return {"ok": r.status_code < 400, "status_code": r.status_code}
     except Exception as e:
         raise ServiceError(f"MinusPod settings update failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# LLM cost-optimisation tunables (large window, skip pass 2, prompt caching)
+# ---------------------------------------------------------------------------
+
+def get_minuspod_settings() -> dict | None:
+    """Fetch the full /api/v1/settings payload from MinusPod, or None if
+    the backend is unreachable. The parent UI only consumes the few
+    fields it needs (`stageTunables` and `stageTunableDefaults`), so the
+    whole dict is returned verbatim and the JS picks out the keys.
+    """
+    try:
+        r = httpx.get("http://localhost:8000/api/v1/settings", timeout=5)
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return None
+
+
+def put_minuspod_stage_tunables(tunables: dict) -> dict:
+    """Push a subset of the stage-tunables payload to MinusPod.
+
+    The parent UI only manages the three cost-optimisation levers
+    (``largeWindowSeconds``, ``skipVerificationUnderSeconds``,
+    ``enablePromptCaching``). To avoid overwriting other tunables the
+    caller may have changed locally (e.g. via MinusPod's own UI or
+    another instance of this dashboard), we first GET the current
+    ``stageTunables`` and merge the supplied subset on top before
+    PUTting the full object back to ``/api/v1/settings/ad-detection``.
+    Unknown keys in ``tunables`` are ignored.
+    """
+    if not isinstance(tunables, dict):
+        raise ServiceError("tunables must be an object")
+    # Allow only the cost-opt keys through; reject obvious typos early so
+    # the JS gets a 400 with a useful message instead of a 200 that did
+    # nothing.
+    allowed = {
+        "largeWindowSeconds",
+        "skipVerificationUnderSeconds",
+        "enablePromptCaching",
+    }
+    unknown = set(tunables) - allowed
+    if unknown:
+        raise ServiceError(
+            f"Unknown tunable(s): {', '.join(sorted(unknown))}. "
+            f"Allowed: {', '.join(sorted(allowed))}"
+        )
+
+    current = get_minuspod_settings() or {}
+    existing = current.get("stageTunables") or {}
+    merged = dict(existing)
+    # Strip the wrapper shape ({value, isDefault, envOverride}) so we
+    # only forward the bare values the PUT endpoint expects.
+    for key, value in existing.items():
+        if isinstance(value, dict) and "value" in value:
+            merged[key] = value["value"]
+    for key, value in tunables.items():
+        merged[key] = value
+
+    try:
+        r = httpx.put(
+            "http://localhost:8000/api/v1/settings/ad-detection",
+            json=merged, timeout=10,
+        )
+    except Exception as e:
+        raise ServiceError(f"MinusPod settings update failed: {e}")
+    if r.status_code >= 400:
+        # MinusPod's handler returns JSON: {"ok": false, "error": "..."}
+        # for cross-field validation failures; surface that text instead
+        # of the bare status code.
+        try:
+            detail = r.json().get("error") or r.text
+        except Exception:
+            detail = r.text
+        raise ServiceError(
+            f"MinusPod rejected update (HTTP {r.status_code}): {detail}"
+        )
+    return {"ok": True, "status_code": r.status_code, "updated": list(tunables)}
 
 
 # ---------------------------------------------------------------------------

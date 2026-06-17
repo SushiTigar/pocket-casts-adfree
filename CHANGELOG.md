@@ -6,6 +6,35 @@ loosely tracks [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Ad detection — LLM cost optimisations panel** — new "Ad detection"
+  button in the dashboard toolbar opens a modal that surfaces three
+  tunables from MinusPod's stage-tunables system:
+  - **Large context window** (`largeWindowSeconds`, default 1200) —
+    when the model ID matches a 1M-context pattern (deepseek-v4,
+    gemini-2.5-flash, gemini-3-flash, gemini-flash, qwen-long,
+    llama-4-, llama-3.1-405b) **and** the episode is longer than 2×
+    the base window, the detector uses this larger window so a 60-min
+    episode takes 3 windows instead of 6.
+  - **Skip verification pass on short episodes**
+    (`skipVerificationUnderSeconds`, default 1200) — pass 2 doubles
+    LLM cost on every episode for near-zero yield on short ones. Set
+    to 0 to disable.
+  - **System-prompt caching** (`enablePromptCaching`, default on) —
+    annotate the system prompt with OpenRouter's `cache_control:
+    ephemeral` marker so the provider can cache it across the ~22
+    windows of a long episode. Saves roughly 1.2K tokens per window
+    at the cache-read rate (1/4.5× input). The `cached` count is
+    logged per request for visibility.
+  Backed by `GET /api/minuspod/settings` and
+  `PUT /api/minuspod/stage-tunables` proxy endpoints. The PUT proxy
+  merges the dashboard's three keys on top of the existing stage
+  tunables so other tunables set in MinusPod's own UI (e.g.
+  detectionTemperature) are preserved. New patch
+  `patches/llm-cost-optimizations.patch` captures the upstream-side
+  changes (config, prompts, ad_detector, llm_client, processing, API
+  surface, tests) for replay after a MinusPod update.
+
 ### Fixed
 - **500 from `/api/episodes/<uuid>` when MinusPod is down** — `list_feeds`
   and friends would propagate raw `httpx.ConnectError` out of the view,

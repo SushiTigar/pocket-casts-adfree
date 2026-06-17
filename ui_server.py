@@ -1200,6 +1200,33 @@ def create_app(email=None, password=None):
         except services_manager.ServiceError as e:
             return jsonify({"ok": False, "error": str(e)}), 400
 
+    @app.route("/api/minuspod/settings", methods=["GET"])
+    def api_minuspod_settings():
+        """Proxy GET /api/v1/settings from MinusPod. The parent UI uses
+        this for the cost-optimisation panel (large window, skip pass 2,
+        prompt caching). Returns 503 if MinusPod is unreachable so the
+        frontend can show a clear "MinusPod is down" hint instead of a
+        generic 500."""
+        data = services_manager.get_minuspod_settings()
+        if data is None:
+            return jsonify({
+                "error": "MinusPod is not reachable on localhost:8000. "
+                         "Start it from the Services panel and try again.",
+            }), 503
+        return jsonify(data)
+
+    @app.route("/api/minuspod/stage-tunables", methods=["PUT"])
+    def api_minuspod_stage_tunables_put():
+        """Proxy PUT to update the LLM cost-optimisation tunables in
+        MinusPod's settings DB. Body shape is a flat object containing
+        only the keys the parent UI manages; other tunables are
+        preserved by services_manager.put_minuspod_stage_tunables."""
+        body = request.get_json() or {}
+        try:
+            return jsonify(services_manager.put_minuspod_stage_tunables(body))
+        except services_manager.ServiceError as e:
+            return jsonify({"ok": False, "error": str(e)}), 400
+
     @app.route("/api/job/<job_id>")
     def api_job(job_id):
         job = processing_jobs.get(job_id)

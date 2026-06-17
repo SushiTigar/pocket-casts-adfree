@@ -7,12 +7,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${ROOT}/MinusPod"
 REPO="https://github.com/ttlequals0/MinusPod.git"
 PIN="61eb125a1e73ffdff6450b2d29d6e75772f5d00a"
+# Core local patch (may fail to apply if upstream drifted past the pin —
+# in that case, regenerate from a clean checkout: `git diff` → patch).
 PATCH="${ROOT}/patches/minuspod-local.patch"
-
-if [[ ! -f "${PATCH}" ]]; then
-    echo "Missing patch file: ${PATCH}" >&2
-    exit 1
-fi
+# Optional additive patches (LLM cost-optimisations, etc.). Each is
+# applied best-effort with `git apply --3way`; already-applied patches
+# are no-ops because the working tree already contains the changes.
+ADDITIONAL_PATCHES=(
+  "${ROOT}/patches/llm-cost-optimizations.patch"
+)
 
 if [[ ! -d "${TARGET}/.git" ]]; then
     echo "Cloning MinusPod into ${TARGET}..."
@@ -25,8 +28,22 @@ git fetch --quiet origin
 git reset --hard "${PIN}"
 git clean -fd
 
-echo "Applying ${PATCH}..."
-git apply "${PATCH}"
+if [[ -f "${PATCH}" ]]; then
+    echo "Applying ${PATCH}..."
+    if ! git apply --3way "${PATCH}"; then
+        echo "WARNING: ${PATCH} did not apply cleanly (likely upstream drift)." >&2
+        echo "         Regenerate it from a known-good checkout: cd MinusPod && git diff <pin> > ${PATCH}" >&2
+    fi
+fi
+
+for P in "${ADDITIONAL_PATCHES[@]}"; do
+    if [[ -f "${P}" ]]; then
+        echo "Applying ${P}..."
+        if ! git apply --3way "${P}"; then
+            echo "WARNING: ${P} did not apply cleanly. Check the output above." >&2
+        fi
+    fi
+done
 
 if [[ ! -d "venv" ]]; then
     echo "Creating Python virtualenv..."

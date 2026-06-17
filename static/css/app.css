@@ -645,3 +645,78 @@
     /* Shutdown UI is destructive — keep the visual cue but soften the border. */
     #btn-shutdown-ui { font-weight: 600; }
 
+    /* ───── Ad detection tunables modal ───── */
+    .tunable-section {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 14px;
+      background: var(--surface);
+    }
+    .tunable-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--text);
+    }
+    .tunable-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 10px;
+      line-height: 1.45;
+    }
+    .tunable-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--text);
+      margin: 6px 0;
+    }
+    .tunable-row > span:first-child {
+      flex: 0 0 auto;
+      min-width: 200px;
+    }
+    .tunable-row input[type="number"] {
+      width: 100px;
+      padding: 4px 6px;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 12px;
+    }
+    .tunable-row input[type="checkbox"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+    .tunable-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+    .tunable-hint.ok { color: var(--accent2); }
+    .tunable-hint.muted { color: var(--text-muted); }
+    .tunable-hint code {
+      background: var(--card);
+      padding: 1px 4px;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+      font-size: 11px;
+    }
+    .tunable-badge {
+      display: inline-block;
+      padding: 1px 6px;
+      border-radius: 8px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .tunable-badge.def { background: rgba(139,148,158,0.18); color: var(--text-muted); }
+    .tunable-badge.set { background: rgba(247,129,102,0.18); color: var(--accent); }
+    .tunable-badge.env { background: rgba(88,166,255,0.18); color: var(--info); }
+

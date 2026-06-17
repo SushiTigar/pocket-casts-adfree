@@ -2015,6 +2015,155 @@ class TestServicesEndpoints(unittest.TestCase):
         m.assert_called_once_with("qwen3:14b")
 
 
+class TestMinuspodSettingsEndpoints(unittest.TestCase):
+    """Proxy endpoints that surface the LLM cost-optimisation tunables
+    from MinusPod's settings DB to the parent UI. The parent UI only
+    manages three keys (largeWindowSeconds, skipVerificationUnderSeconds,
+    enablePromptCaching) so the tests focus on those, with regression
+    coverage for the merge-with-existing-tunables contract in the PUT
+    path."""
+
+    def setUp(self):
+        from ui_server import create_app
+        self._patches = [
+            patch("ui_server.PocketCastsClient"),
+            patch("ui_server.MinusPodClient"),
+        ]
+        for p in self._patches:
+            p.start()
+        self.app = create_app("test@test.com", "testpass")
+        self.client = self.app.test_client()
+
+    def tearDown(self):
+        for p in self._patches:
+            p.stop()
+
+    def test_get_minuspod_settings_returns_full_payload(self):
+        sample = {
+            "claudeModel": {"value": "deepseek/deepseek-v4-flash", "isDefault": False, "envOverride": False},
+            "stageTunables": {
+                "largeWindowSeconds": {"value": 1200, "isDefault": True, "envOverride": False},
+                "skipVerificationUnderSeconds": {"value": 1200, "isDefault": True, "envOverride": False},
+                "enablePromptCaching": {"value": True, "isDefault": True, "envOverride": False},
+                "detectionTemperature": {"value": 0.0, "isDefault": True, "envOverride": False},
+            },
+            "stageTunableDefaults": {
+                "largeWindowSeconds": 1200,
+                "skipVerificationUnderSeconds": 1200,
+                "enablePromptCaching": True,
+            },
+        }
+        with patch("ui_server.services_manager.get_minuspod_settings",
+                   return_value=sample):
+            r = self.client.get("/api/minuspod/settings")
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertEqual(body["stageTunables"]["largeWindowSeconds"]["value"], 1200)
+        self.assertEqual(body["stageTunableDefaults"]["enablePromptCaching"], True)
+
+    def test_get_minuspod_settings_returns_503_when_backend_down(self):
+        with patch("ui_server.services_manager.get_minuspod_settings",
+                   return_value=None):
+            r = self.client.get("/api/minuspod/settings")
+        self.assertEqual(r.status_code, 503)
+        body = r.get_json()
+        self.assertIn("error", body)
+        self.assertIn("not reachable", body["error"])
+
+    def test_put_stage_tunables_merges_with_existing(self):
+        # The parent UI only manages three keys; the proxy must preserve
+        # any other stage tunables the user has set in MinusPod's own UI
+        # (e.g. detectionTemperature). We verify by inspecting the JSON
+        # body the proxy sends to MinusPod's PUT.
+        existing_payload = {
+            "claudeModel": {"value": "deepseek/deepseek-v4-flash", "isDefault": False, "envOverride": False},
+            "stageTunables": {
+                "largeWindowSeconds": {"value": 1200, "isDefault": True, "envOverride": False},
+                "skipVerificationUnderSeconds": {"value": 1200, "isDefault": True, "envOverride": False},
+                "enablePromptCaching": {"value": True, "isDefault": True, "envOverride": False},
+                "detectionTemperature": {"value": 0.4, "isDefault": False, "envOverride": False},
+                "verificationTemperature": {"value": 0.2, "isDefault": False, "envOverride": False},
+            },
+            "stageTunableDefaults": {
+                "largeWindowSeconds": 1200,
+                "enablePromptCaching": True,
+            },
+        }
+        captured = {}
+        class _FakeResp:
+            status_code = 200
+            def json(self):
+                return {"ok": True, "error": None}
+            text = ""
+
+        def _fake_put(url, json=None, timeout=None):
+            captured["url"] = url
+            captured["json"] = json
+            return _FakeResp()
+
+        with patch("ui_server.services_manager.get_minuspod_settings",
+                   return_value=existing_payload), \
+             patch("ui_server.services_manager.httpx.put",
+                   side_effect=_fake_put):
+            r = self.client.put("/api/minuspod/stage-tunables", json={
+                "largeWindowSeconds": 1500,
+                "enablePromptCaching": False,
+            })
+        self.assertEqual(r.status_code, 200)
+        body = r.get_json()
+        self.assertTrue(body["ok"])
+        # The three keys we sent should be in the merged payload...
+        self.assertEqual(captured["json"]["largeWindowSeconds"], 1500)
+        self.assertEqual(captured["json"]["enablePromptCaching"], False)
+        # ...but detection/verification temperatures (set elsewhere) must survive.
+        self.assertEqual(captured["json"]["detectionTemperature"], 0.4)
+        self.assertEqual(captured["json"]["verificationTemperature"], 0.2)
+        # skipVerificationUnderSeconds defaults to True → 1200
+        self.assertEqual(captured["json"]["skipVerificationUnderSeconds"], 1200)
+
+    def test_put_stage_tunables_rejects_unknown_keys(self):
+        with patch("ui_server.services_manager.get_minuspod_settings",
+                   return_value={"stageTunables": {}}):
+            r = self.client.put("/api/minuspod/stage-tunables", json={
+                "largeWindowSeconds": 1500,
+                "bogusKey": "should-be-rejected",
+            })
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("Unknown tunable", r.get_json()["error"])
+        self.assertIn("bogusKey", r.get_json()["error"])
+
+    def test_put_stage_tunables_surfaces_minuspod_validation_error(self):
+        # MinusPod returns 400 with a JSON body when cross-field
+        # validation fails (e.g. largeWindowSeconds < windowSizeSeconds).
+        # The proxy must surface that error text to the frontend.
+        class _FakeResp:
+            status_code = 400
+            def json(self):
+                return {"ok": False, "error": "largeWindowSeconds must be greater than or equal to windowSizeSeconds"}
+            text = ""
+
+        with patch("ui_server.services_manager.get_minuspod_settings",
+                   return_value={"stageTunables": {}}), \
+             patch("ui_server.services_manager.httpx.put",
+                   return_value=_FakeResp()):
+            r = self.client.put("/api/minuspod/stage-tunables", json={
+                "largeWindowSeconds": 100,  # below the base 300
+            })
+        self.assertEqual(r.status_code, 400)
+        body = r.get_json()
+        self.assertIn("largeWindowSeconds", body["error"])
+        self.assertIn("HTTP 400", body["error"])
+
+    def test_put_stage_tunables_handles_minuspod_unreachable(self):
+        with patch("ui_server.services_manager.get_minuspod_settings",
+                   return_value=None):
+            r = self.client.put("/api/minuspod/stage-tunables", json={
+                "largeWindowSeconds": 1500,
+            })
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("MinusPod settings update failed", r.get_json()["error"])
+
+
 class TestPocketCastsAuthErrorSurface(unittest.TestCase):
     """Auth failures must surface as JSON, not Werkzeug HTML 500 pages.
 

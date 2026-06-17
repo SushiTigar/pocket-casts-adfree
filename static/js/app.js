@@ -1075,6 +1075,195 @@ let podcasts = [];
       }, 2000);
     }
 
+    // ───── Ad detection tunables panel (LLM cost optimisations) ─────
+    // The four cost levers live in MinusPod's stage-tunables system. The
+    // React UI is not built for this fork, so this dashboard owns the
+    // settings surface. We only manage the three keys the dashboard
+    // documents (largeWindowSeconds, skipVerificationUnderSeconds,
+    // enablePromptCaching); the other ~20 stage tunables are editable
+    // via MinusPod's own UI at http://localhost:8000/ui/.
+    let adTunablesState = null;
+    let adTunablesSaving = false;
+
+    const LARGE_CONTEXT_PATTERNS = [
+      'deepseek-v4', 'gemini-2.5-flash', 'gemini-3-flash',
+      'gemini-flash', 'qwen-long', 'llama-4-', 'llama-3.1-405b',
+    ];
+
+    function _unpackTunable(t) {
+      // MinusPod returns the wrapped shape `{value, isDefault, envOverride}`.
+      // For the form we want the bare value; the default/override flags are
+      // surfaced as a small badge next to each field.
+      if (t === null || t === undefined) return { value: null, isDefault: true, envOverride: false };
+      if (typeof t === 'object' && 'value' in t) return t;
+      return { value: t, isDefault: false, envOverride: false };
+    }
+
+    async function openAdTunablesPanel() {
+      const modal = document.createElement('div');
+      modal.id = 'ad-tunables-modal';
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px;';
+      modal.innerHTML = `<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;max-width:640px;width:100%;max-height:88vh;overflow:hidden;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)">
+          <div>
+            <div style="font-weight:600">Ad detection — LLM cost optimisations</div>
+            <div style="font-size:11px;color:var(--text-muted)">Stored in MinusPod's settings DB. Takes effect on the next episode.</div>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn small" id="ad-tunables-refresh">Refresh</button>
+            <button class="btn small" id="ad-tunables-close">Close</button>
+          </div>
+        </div>
+        <div id="ad-tunables-body" style="overflow:auto;flex:1;padding:16px"></div>
+      </div>`;
+      modal.addEventListener('click', e => { if (e.target === modal) closeAdTunablesPanel(); });
+      document.body.appendChild(modal);
+      modal.querySelector('#ad-tunables-close').onclick = closeAdTunablesPanel;
+      modal.querySelector('#ad-tunables-refresh').onclick = () => loadAdTunables();
+      await loadAdTunables();
+    }
+
+    function closeAdTunablesPanel() {
+      const m = document.getElementById('ad-tunables-modal');
+      if (m) m.remove();
+    }
+
+    async function loadAdTunables() {
+      const body = document.getElementById('ad-tunables-body');
+      if (!body) return;
+      body.innerHTML = '<div style="color:var(--text-muted);font-size:12px">Loading…</div>';
+      try {
+        const data = await api('/minuspod/settings');
+        adTunablesState = data;
+        renderAdTunablesBody(data);
+      } catch (e) {
+        body.innerHTML = `<div class="svc-warn">Could not reach MinusPod: ${esc(e.message)}<br><br>
+          Start it from the <strong>Services</strong> panel, then click <em>Refresh</em>.</div>`;
+      }
+    }
+
+    function renderAdTunablesBody(data) {
+      const body = document.getElementById('ad-tunables-body');
+      if (!body) return;
+      const t = (data && data.stageTunables) || {};
+      const def = (data && data.stageTunableDefaults) || {};
+      const model = ((data && data.claudeModel) || {}).value
+                 || ((data && data.claudeModel) || '')
+                 || (typeof (data && data.claudeModel) === 'string' ? data.claudeModel : '');
+      const modelText = (typeof model === 'string' && model) ? model : 'unknown';
+      const triggersLongContext = LARGE_CONTEXT_PATTERNS.some(p => modelText.includes(p));
+      const large = _unpackTunable(t.largeWindowSeconds);
+      const skip = _unpackTunable(t.skipVerificationUnderSeconds);
+      const cache = _unpackTunable(t.enablePromptCaching);
+
+      const fmtSec = (v) => {
+        if (v === null || v === undefined) return '—';
+        const n = Number(v);
+        if (!Number.isFinite(n)) return String(v);
+        if (n === 0) return '0 (off)';
+        if (n < 60) return `${n}s`;
+        const m = Math.floor(n / 60);
+        const s = n % 60;
+        return s ? `${m}m ${s}s` : `${m} min`;
+      };
+
+      const badge = (t) => {
+        if (t.envOverride) return '<span class="tunable-badge env" title="Overridden by environment variable">env</span>';
+        if (t.isDefault) return '<span class="tunable-badge def" title="Using built-in default">default</span>';
+        return '<span class="tunable-badge set" title="User-set value">custom</span>';
+      };
+
+      const longContextHint = triggersLongContext
+        ? `<div class="tunable-hint ok">Current model <code>${esc(modelText)}</code> matches a 1M-context pattern — the large-window override is active for long episodes.</div>`
+        : `<div class="tunable-hint muted">Current model <code>${esc(modelText)}</code> does <em>not</em> match a 1M-context pattern (deepseek-v4, gemini-flash, qwen-long, llama-4, llama-3.1-405b). The large-window override will be a no-op until you switch models.</div>`;
+
+      body.innerHTML = `
+        <div class="tunable-section">
+          <div class="tunable-title">Large context window</div>
+          <div class="tunable-desc">When the model ID matches a 1M-context pattern <em>and</em> the episode is more than 2× the base window, the detector uses this larger window. A 60-min episode takes 3 windows instead of 6 with a 20-min window.</div>
+          ${longContextHint}
+          <label class="tunable-row">
+            <span>Large window (seconds)</span>
+            <input type="number" id="t-large" min="300" max="3600" step="60"
+              value="${esc(large.value ?? '')}" placeholder="${esc(def.largeWindowSeconds ?? 1200)}">
+            ${badge(large)}
+          </label>
+          <div class="tunable-hint muted">Default: ${esc(fmtSec(def.largeWindowSeconds))} (1200s = 20 min). Must be ≥ the base <code>windowSizeSeconds</code>.</div>
+        </div>
+
+        <div class="tunable-section">
+          <div class="tunable-title">Skip verification pass on short episodes</div>
+          <div class="tunable-desc">Pass 2 doubles LLM cost per episode for near-zero yield on short ones — the pre/mid/post-roll coverage in pass 1 is sized to catch them. Set to 0 to disable the skip.</div>
+          <label class="tunable-row">
+            <span>Skip pass 2 under (seconds)</span>
+            <input type="number" id="t-skip" min="0" max="86400" step="60"
+              value="${esc(skip.value ?? '')}" placeholder="${esc(def.skipVerificationUnderSeconds ?? 1200)}">
+            ${badge(skip)}
+          </label>
+          <div class="tunable-hint muted">Default: ${esc(fmtSec(def.skipVerificationUnderSeconds))} (20 min). Set to 0 to always run pass 2.</div>
+        </div>
+
+        <div class="tunable-section">
+          <div class="tunable-title">System-prompt caching</div>
+          <div class="tunable-desc">Annotate the system prompt with OpenRouter's <code>cache_control: ephemeral</code> marker so the provider can cache it across the ~22 windows of a long episode. Saves ~1.2K tokens per window at the cache-read rate (1/4.5× input). The <code>cached</code> count is logged per request for visibility.</div>
+          <label class="tunable-row">
+            <span>Enable prompt caching</span>
+            <input type="checkbox" id="t-cache" ${cache.value ? 'checked' : ''}>
+            ${badge(cache)}
+          </label>
+          <div class="tunable-hint muted">Default: enabled. Disable if your provider rejects the <code>cache_control</code> field.</div>
+        </div>
+
+        <div id="ad-tunables-status" class="tunable-hint muted" style="margin-top:8px"></div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
+          <button class="btn small" onclick="closeAdTunablesPanel()">Cancel</button>
+          <button class="btn small primary" id="ad-tunables-save" onclick="saveAdTunables()">Save</button>
+        </div>
+      `;
+    }
+
+    async function saveAdTunables() {
+      if (adTunablesSaving) return;
+      adTunablesSaving = true;
+      const status = document.getElementById('ad-tunables-status');
+      const saveBtn = document.getElementById('ad-tunables-save');
+      const large = document.getElementById('t-large').value;
+      const skip = document.getElementById('t-skip').value;
+      const cache = document.getElementById('t-cache').checked;
+      const body = {
+        largeWindowSeconds: Number(large),
+        skipVerificationUnderSeconds: Number(skip),
+        enablePromptCaching: cache,
+      };
+      saveBtn.disabled = true;
+      status.textContent = 'Saving…';
+      status.style.color = 'var(--text-muted)';
+      try {
+        const r = await fetch('/api/minuspod/stage-tunables', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const j = await r.json();
+        if (r.ok && j.ok) {
+          status.textContent = `Saved (${j.updated.join(', ')}). Next episode will use the new values.`;
+          status.style.color = 'var(--accent2)';
+          addLog('success', 'Ad detection tunables saved');
+        } else {
+          status.textContent = `Save failed: ${j.error || ('HTTP ' + r.status_code)}`;
+          status.style.color = 'var(--danger)';
+          addLog('error', 'Ad detection tunables save failed: ' + (j.error || ('HTTP ' + r.status_code)));
+        }
+      } catch (e) {
+        status.textContent = 'Save failed: ' + e.message;
+        status.style.color = 'var(--danger)';
+        addLog('error', 'Ad detection tunables save failed: ' + e.message);
+      } finally {
+        saveBtn.disabled = false;
+        adTunablesSaving = false;
+      }
+    }
+
     function renderPodcastGroup(list) {
       return list.map(p => {
         const isPat = p.is_patreon;
