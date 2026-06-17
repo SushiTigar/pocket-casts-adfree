@@ -10,6 +10,7 @@
 # Generated / runtime data ----------------------------------------------
 /processed_audio/
 /processed_episodes.json
+podcast_artwork_cache.json
 *.log
 .cache/
 
