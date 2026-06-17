@@ -320,13 +320,24 @@ let podcasts = [];
           p.thumbnail = d.url;
           swapPodcastThumb(p);
           bumpArtworkStat();
+        } else if (d && d.url && p.thumbnail === d.url) {
+          // already loaded — nothing to do
         } else if (d && !d.url) {
           console.log(`[artwork] no iTunes result for "${p.title}" (${p.uuid})`);
         } else if (!d) {
           console.log(`[artwork] endpoint returned empty for ${p.uuid}`);
         }
       } catch (e) {
-        console.log(`[artwork] lookup failed for "${p.title}": ${e}`);
+        // A 404 here is the strongest signal that the user is running an
+        // old UI server (predates the /api/podcast_artwork endpoint). Log
+        // it loudly so it's easy to spot in DevTools.
+        if (e && e.status === 404) {
+          console.error(`[artwork] /api/podcast_artwork/${p.uuid} returned 404 — ` +
+            'your UI server is older than commit 3724bf9. Restart it (Ctrl+C, ' +
+            'then `python -m pocketcasts_adfree` again) to pick up the endpoint.');
+        } else {
+          console.log(`[artwork] lookup failed for "${p.title}": ${e && e.message || e}`);
+        }
       }
     }
 

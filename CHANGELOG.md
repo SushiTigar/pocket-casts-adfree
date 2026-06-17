@@ -7,6 +7,25 @@ loosely tracks [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Fixed
+- **500 from `/api/episodes/<uuid>` when MinusPod is down** — `list_feeds`
+  and friends would propagate raw `httpx.ConnectError` out of the view,
+  turning "MinusPod isn't running" into a useless 500. The endpoint now
+  does an upfront `health()` check and returns a clean 503 with a hint
+  ("start it from the Services panel"), with the individual calls also
+  wrapped in try/except as defence in depth. Tests:
+  `test_api_episodes_returns_503_when_minuspod_down`.
+- **Misleading pre-populated MinusPod transcripts** — the main episode flow
+  used to pass any cached Pocket Casts WebVTT into the LLM ad detector.
+  Pocket Casts' transcripts are usually only available for the first
+  ~1–2 minutes, which is exactly where the show's cold-open lives, so
+  pre-populated transcripts routinely caused the detector to delete the
+  intro. The pre-populate call is now removed from the main flow
+  (intact on `MinusPodClient` for callers that want it) and a source
+  guard test ensures it can't be re-introduced by accident.
+- **Cryptic "MinusPod is not reachable" from the job runner** — `_process_job`
+  used to bail with a generic stack trace if MinusPod was down at job
+  start. Now logs a clear "MinusPod is not reachable on startup" with
+  a hint to start it from the Services panel.
 - **"JSON.parse: unexpected character at line 1 column 1" in dashboard** —
   `/api/subscriptions` and `/api/files` returned Werkzeug's HTML 500 page
   whenever `PocketCastsClient.__init__` raised (most commonly an
@@ -44,6 +63,28 @@ loosely tracks [Semantic Versioning](https://semver.org/).
   episodes instead of clinging to ~22 GB of VRAM forever.
 
 ### Added
+- **Podcast cover art on the dashboard** — every podcast card now shows
+  a 48×48 thumbnail sourced from iTunes' Search API (no RSS scraping
+  required, no auth, no rate limits in practice), with a letter
+  placeholder fallback. Results are cached on disk in
+  `podcast_artwork_cache.json` so the dashboard doesn't re-hit iTunes
+  on every load. The same artwork is also rendered in the *In Up Next*
+  section so unsubscribed podcast covers stay visible there too.
+- **"Retry artwork" button + coverage stat card** — when a podcast can't
+  be resolved (e.g. title doesn't match anything in iTunes, or a CDN
+  image is broken), the thumbnail falls back to a letter placeholder
+  and the new 5th "Artwork" stat card (`N/M loaded`) makes the
+  coverage visible at a glance. The "Retry artwork" button in the
+  services bar busts the on-disk cache and re-looks-up every podcast,
+  useful after you've fixed the database or just want to refresh. The
+  backend honours `?bust=1` on `/api/podcast_artwork/<uuid>`. Broken
+  images also fall back to the letter placeholder via inline `onerror`
+  rather than leaving a blank 48×48 box.
+- **`.env.example` rewrite** — reorganised into REQUIRED / LLM BACKEND
+  / OPTIONAL with a 3-step quick-start decision tree and a side-by-side
+  comparison of the four LLM backends (Ollama, OpenRouter, OpenAI-
+  compatible, Anthropic). Each optional variable now has a "Change if…"
+  rationale comment.
 - **Memory preflight warning** — `/api/system/memory` (and the existing
   `/api/services` payload) now report total/available RAM and a
   human-readable warning when free memory dips below 8 GB. The job runner
@@ -90,6 +131,11 @@ loosely tracks [Semantic Versioning](https://semver.org/).
 - **`.env.example`, `LICENSE` (MIT), `CHANGELOG.md`** for first public release.
 
 ### Changed
+- **UI declutter** — the top Services Quick Bar is now collapsible
+  (chevron toggle, state persisted in `localStorage`) so it stops
+  dominating the dashboard when you don't need to look at it. Stat
+  cards tightened, history summary matched. All data still present,
+  just behind progressive disclosure.
 - **Processing Log auto-expands** whenever any new log line is emitted so
   progress, errors, and Whisper/LLM status are always visible.
 - **PREMIUM chip** on Patreon rows now sits inline at the right edge instead
