@@ -1035,6 +1035,9 @@ let podcasts = [];
                  aria-label="Select all eligible episodes" tabindex="0"
                  onclick="event.stopPropagation(); selectAllEpsInPodcast('${p.uuid}', ${willSelectAll})"
                  onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();event.stopPropagation();selectAllEpsInPodcast('${p.uuid}',${willSelectAll});}"></div>
+            <div class="podcast-thumb" aria-hidden="true">${p.thumbnail
+              ? `<img src="${esc(p.thumbnail)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('thumb-missing'); this.remove();">`
+              : `<span class="podcast-thumb-initial">${esc((p.title || '?').charAt(0).toUpperCase())}</span>`}</div>
             <div class="podcast-info">
               <div class="podcast-title">${esc(p.title)}</div>
               <div class="podcast-author">${esc(p.author || '')}</div>

@@ -1042,6 +1042,37 @@ class TestUIServerEndpoints(unittest.TestCase):
 
     @patch('ui_server.PocketCastsClient')
     @patch('ui_server.MinusPodClient')
+    def test_subscriptions_forwards_thumbnail(self, MockMP, MockPC):
+        """/api/subscriptions must forward the Pocket Casts thumbnail URL for
+        each podcast so the dashboard can render cover art. Older Pocket
+        Casts responses sometimes omit the field, so the key must default
+        to an empty string instead of erroring out.
+        """
+        mock_pc = MagicMock()
+        mock_pc.get_subscriptions.return_value = [
+            {"uuid": "pod-a", "title": "Podcast A", "author": "Author A",
+             "thumbnail": "https://example.com/a.jpg"},
+            {"uuid": "pod-b", "title": "Podcast B", "author": "Author B"},
+        ]
+        mock_pc.get_new_releases.return_value = []
+        mock_pc.client.post.return_value = MagicMock(
+            raise_for_status=MagicMock(), json=MagicMock(return_value={"episodes": []}))
+        mock_pc.get_files.return_value = {"files": []}
+        MockPC.return_value = mock_pc
+        MockMP.return_value = MagicMock()
+
+        from ui_server import create_app
+        app = create_app("test@test.com", "testpass")
+        client = app.test_client()
+        resp = client.get('/api/subscriptions')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        pods = {p["uuid"]: p for p in data["podcasts"]}
+        self.assertEqual(pods["pod-a"]["thumbnail"], "https://example.com/a.jpg")
+        self.assertEqual(pods["pod-b"]["thumbnail"], "")
+
+    @patch('ui_server.PocketCastsClient')
+    @patch('ui_server.MinusPodClient')
     def test_pc_episode_queue_endpoints(self, MockMP, MockPC):
         """POST /api/pc_episode/<uuid>/up_next queues an original episode;
         DELETE un-queues it. Used by the new per-episode controls in All

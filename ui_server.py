@@ -365,6 +365,7 @@ def create_app(email=None, password=None):
                 "uuid": p.get("uuid"),
                 "title": p.get("title", ""),
                 "author": p.get("author", ""),
+                "thumbnail": p.get("thumbnail", ""),
                 "is_patreon": is_pat,
             })
 
