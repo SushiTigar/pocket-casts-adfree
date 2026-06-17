@@ -122,7 +122,13 @@
       outline: none;
     }
     .search-input:focus { border-color: var(--accent); }
-    .select-all-wrap { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); }
+    .select-all-wrap { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text-muted); cursor: pointer; user-select: none; }
+    /* Native checkbox in the Select All label: enforce visibility + brand
+       color across browsers via accent-color (works in all modern engines). */
+    .select-all-wrap input[type="checkbox"] {
+      width: 16px; height: 16px; margin: 0; cursor: pointer;
+      accent-color: var(--accent2);
+    }
 
     /* Stats cards */
     .stats-bar {
@@ -206,9 +212,9 @@
     }
     .podcast-check {
       width: 18px; height: 18px; border-radius: 5px;
-      border: 2px solid var(--border); flex-shrink: 0; transition: all 0.15s;
+      border: 2px solid var(--text-muted); flex-shrink: 0; transition: all 0.15s;
       display: inline-flex; align-items: center; justify-content: center;
-      background: var(--card); cursor: pointer; margin: 0; padding: 0;
+      background: var(--bg); cursor: pointer; margin: 0; padding: 0;
       box-sizing: border-box; user-select: none;
     }
     .podcast-check:hover { border-color: var(--accent2); }
@@ -251,8 +257,9 @@
     .episode-item.played-ep { opacity: 0.6; }
     .ep-check {
       width: 16px; height: 16px; border-radius: 4px;
-      border: 2px solid var(--border); flex-shrink: 0;
+      border: 2px solid var(--text-muted); flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
+      background: var(--bg);
       transition: all 0.15s;
     }
     .episode-item.selected .ep-check { background: var(--accent2); border-color: var(--accent2); }
