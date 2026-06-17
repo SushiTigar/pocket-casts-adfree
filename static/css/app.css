@@ -127,19 +127,19 @@
     /* Stats cards */
     .stats-bar {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 14px; margin-bottom: 24px;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px; margin-bottom: 20px;
     }
     .stat-card {
-      padding: 18px 20px; border-radius: 12px;
+      padding: 12px 14px; border-radius: 10px;
       border: 1px solid var(--border); background: var(--card);
-      cursor: pointer; transition: all 0.15s; user-select: none;
+      cursor: pointer; transition: border-color 0.15s; user-select: none;
       position: relative;
     }
-    .stat-card:hover { border-color: var(--info); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    .stat-card:hover { border-color: var(--info); }
     .stat-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-    .stat-label { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
-    .stat-value { font-size: 30px; font-weight: 700; margin-top: 6px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+    .stat-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+    .stat-value { font-size: 24px; font-weight: 700; margin-top: 4px; line-height: 1.1; font-variant-numeric: tabular-nums; }
     .stat-value.accent { color: var(--accent); }
     .stat-value.green { color: var(--accent2); }
     .stat-value.blue { color: var(--info); }
@@ -204,24 +204,25 @@
       font-size: 12px; color: var(--text-muted); margin-top: 2px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     }
-    input[type="checkbox"].podcast-check {
-      appearance: none; -webkit-appearance: none;
+    .podcast-check {
       width: 18px; height: 18px; border-radius: 5px;
       border: 2px solid var(--border); flex-shrink: 0; transition: all 0.15s;
       display: inline-flex; align-items: center; justify-content: center;
       background: var(--card); cursor: pointer; margin: 0; padding: 0;
+      box-sizing: border-box; user-select: none;
     }
-    input[type="checkbox"].podcast-check:hover { border-color: var(--accent2); }
-    input[type="checkbox"].podcast-check:checked,
-    input[type="checkbox"].podcast-check:indeterminate {
+    .podcast-check:hover { border-color: var(--accent2); }
+    .podcast-check.checked,
+    .podcast-check.indeterminate {
       background: var(--accent2); border-color: var(--accent2);
     }
-    input[type="checkbox"].podcast-check:checked::after {
+    .podcast-check.checked::after {
       content: '\2713'; color: #000; font-size: 12px; font-weight: 700; line-height: 1;
     }
-    input[type="checkbox"].podcast-check:indeterminate::after {
+    .podcast-check.indeterminate::after {
       content: ''; width: 8px; height: 2px; background: #000; display: block;
     }
+    .podcast-check:focus-visible { outline: 2px solid var(--info); outline-offset: 2px; }
     .expand-icon {
       color: var(--text-muted); font-size: 12px; flex-shrink: 0;
       transition: transform 0.2s; margin-left: auto;
@@ -461,15 +462,15 @@
       background: var(--card); color: var(--text); font-size: 13px;
     }
     .history-summary {
-      display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-      gap: 12px; margin-bottom: 20px;
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 10px; margin-bottom: 16px;
     }
     .history-stat {
       background: var(--card); border: 1px solid var(--border);
-      border-radius: 10px; padding: 14px 16px;
+      border-radius: 10px; padding: 10px 14px;
     }
-    .history-stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
-    .history-stat-value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+    .history-stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); }
+    .history-stat-value { font-size: 20px; font-weight: 600; margin-top: 3px; }
     .history-table-wrap {
       background: var(--card); border: 1px solid var(--border);
       border-radius: 10px; overflow: hidden;
@@ -490,14 +491,22 @@
     .history-table .muted { color: var(--text-muted); }
     .history-table a { color: var(--accent); text-decoration: none; }
     .history-table a:hover { text-decoration: underline; }
+    .history-table th.actions-col, .history-table td.actions-col {
+      text-align: right; width: 1%; white-space: nowrap; padding-right: 10px; padding-left: 6px;
+    }
+    .history-table tr.history-row-suspect td:first-child {
+      box-shadow: inset 3px 0 0 var(--warning, #d97706);
+    }
+    .history-table tr.history-row-suspect td { background: rgba(217, 119, 6, 0.05); }
 
     @media (max-width: 640px) {
       .header { padding: 14px 16px; }
       .container { padding: 16px; }
       .toolbar { margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
       .stats-bar { gap: 8px; }
-      .stat-card { padding: 12px 14px; }
-      .stat-value { font-size: 22px; }
+      .stat-card { padding: 10px 12px; }
+      .stat-value { font-size: 20px; }
+      .services-quick-bar { padding: 8px 16px; }
       .episode-list { padding-left: 20px; }
     }
 
@@ -548,7 +557,7 @@
     }
     .sq-ram-bar-fill.warning { background: var(--warning); }
     .sq-ram-bar-fill.danger { background: var(--danger); }
-    
+
     .sq-services-status {
       display: flex;
       align-items: center;
@@ -579,5 +588,36 @@
     .sq-actions {
       display: flex;
       gap: 8px;
+      align-items: center;
     }
+    /* Default: actions are visible. When the bar is collapsed (user toggled
+       the chevron) we hide them so the row only shows status. */
+    .services-quick-bar.collapsed .sq-actions { display: none; }
+    .sq-reminder-text {
+      font-size: 11px;
+      color: var(--text-muted);
+      align-self: center;
+      margin-right: 4px;
+      opacity: 0.85;
+    }
+    .sq-toggle {
+      background: var(--card);
+      color: var(--text-muted);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      font-size: 12px;
+      padding: 0;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+    .sq-toggle:hover { color: var(--text); border-color: var(--accent); }
+    .services-quick-bar.collapsed .sq-toggle { transform: rotate(180deg); }
+    /* Shutdown UI is destructive — keep the visual cue but soften the border. */
+    #btn-shutdown-ui { font-weight: 600; }
 

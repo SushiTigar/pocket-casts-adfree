@@ -39,12 +39,13 @@
         <span class="sq-service" id="sq-svc-minuspod"><span class="sq-dot"></span> MinusPod</span>
       </div>
     </div>
-    <div class="sq-actions">
-      <span class="sq-reminder-text" style="font-size:11px;color:var(--text-muted);align-self:center;margin-right:8px;opacity:0.85;">⚠️ Shut down services before leaving!</span>
+    <div class="sq-actions" id="sq-actions">
+      <span class="sq-reminder-text">Shut down services before leaving</span>
       <button class="btn small primary" id="btn-start-all" onclick="startAllServices()">Start All</button>
       <button class="btn small danger" id="btn-stop-all" onclick="stopAllServices()">Stop All</button>
-      <button class="btn small danger" id="btn-shutdown-ui" onclick="shutdownUI()" style="font-weight:600;border:1px dashed var(--danger);" title="Stop all services and shut down this Web UI server.">Shutdown UI</button>
+      <button class="btn small danger" id="btn-shutdown-ui" onclick="shutdownUI()" title="Stop all services and shut down this Web UI server.">Shutdown UI</button>
     </div>
+    <button class="sq-toggle" id="sq-toggle" onclick="toggleServicesBar()" title="Show/hide controls" aria-label="Toggle controls">&#9662;</button>
   </div>
 
   <div class="container">
@@ -114,10 +115,11 @@
             <th>Podcast</th>
             <th class="num">Ads</th>
             <th class="num">Time saved</th>
+            <th class="actions-col">Actions</th>
           </tr>
         </thead>
         <tbody id="history-rows">
-          <tr><td colspan="5" class="empty-state-cell">Loading history...</td></tr>
+          <tr><td colspan="6" class="empty-state-cell">Loading history...</td></tr>
         </tbody>
       </table>
     </div>

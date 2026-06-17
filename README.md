@@ -91,9 +91,12 @@ The hard parts (transcription, ad detection, audio surgery) come from
                   cleaned `.mp3`  →  uploaded to Pocket Casts
 ```
 
-Whenever Pocket Casts already has its own AI transcript for an episode, the
-pipeline uses that and skips Whisper entirely — usually saving 10–30 minutes
-per episode.
+When Pocket Casts already has its own AI transcript for an episode, the
+pipeline still uses Whisper locally — the PC transcript is checked against
+the audio as a confidence check, but it is never used as the ad-detector
+input. PC transcripts are produced from the show's own content and omit
+dynamically-inserted host-read ads; feeding one to the ad detector would
+guarantee it finds nothing to cut.
 
 ## Quick start
 

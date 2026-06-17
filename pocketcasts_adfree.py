@@ -182,6 +182,48 @@ def _reset_orphaned_episode_in_db(slug: str, episode_id: str) -> bool:
         return False
 
 
+def _reset_stuck_episode_in_db(slug: str, episode_id: str) -> tuple[bool, str]:
+    """Reset any stuck MinusPod episode (``processing``/``failed``/``permanently_failed``)
+    back to ``discovered`` so ``reprocess_episode`` can re-queue it.
+
+    Unlike ``_reset_orphaned_episode_in_db`` (which only matches the orphaned
+    ``processing`` state surfaced during the in-loop recovery), this covers
+    the user-facing reset button that has to clear episodes MinusPod has
+    permanently given up on.
+
+    Returns ``(ok, previous_status)``. ``previous_status`` is one of
+    ``"processing" | "failed" | "permanently_failed" | "not_stuck" | "db_missing" | "db_error"``.
+    """
+    db_path = Path(__file__).parent / "MinusPod" / "data" / "podcast.db"
+    if not db_path.exists():
+        return False, "db_missing"
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.execute(
+            """SELECT status FROM episodes
+               WHERE episode_id=? AND status IN ('processing','failed','permanently_failed')
+               AND podcast_id IN (SELECT id FROM podcasts WHERE slug=?)""",
+            (episode_id, slug),
+        )
+        row = cur.fetchone()
+        if not row:
+            conn.close()
+            return False, "not_stuck"
+        previous_status = row[0]
+        conn.execute(
+            """UPDATE episodes SET status='discovered'
+               WHERE episode_id=?
+               AND podcast_id IN (SELECT id FROM podcasts WHERE slug=?)""",
+            (episode_id, slug),
+        )
+        conn.commit()
+        conn.close()
+        return True, previous_status
+    except Exception as exc:
+        log.error(f"  Failed to reset stuck episode in DB: {exc}")
+        return False, "db_error"
+
+
 def _is_llm_stage(stage: str) -> bool:
     if not stage:
         return False
@@ -2103,10 +2145,23 @@ def process_single_episode(
     if progress_callback:
         progress_callback(f"Downloading/processing: {ep_title}")
 
-    # Pre-populate transcript from Pocket Casts if available (skips Whisper).
+    # If Pocket Casts has a transcript for this episode, use it as a sync
+    # confidence check but DO NOT pre-populate it into MinusPod's ad
+    # detector input.
+    #
+    # Why: PC/RSS transcripts are produced from the show's own content
+    # and never include dynamically-inserted host-read ads. Feeding one
+    # into the ad detector guarantees it finds zero ads — the episode
+    # is uploaded "clean" with every ad still in it.
+    #
+    # The sync check is still useful: it catches episodes where the PC
+    # transcript is for the wrong language, the wrong cut, or stale, so
+    # the user sees a log warning if something looks off. The actual
+    # transcription always runs locally via Whisper so the ad detector
+    # has the full audio to work with.
+    #
     # Requires a real Pocket Casts episode UUID — MinusPod IDs won't work.
-    disable_sync = os.environ.get("DISABLE_TRANSCRIPT_SYNC", "").lower() == "true"
-    if podcast_uuid and ep_status != "completed" and not disable_sync:
+    if podcast_uuid and ep_status != "completed":
         if not original_episode_uuid:
             log.info(f"  Could not match episode to Pocket Casts UUID (title matching failed)")
             if progress_callback:
@@ -2200,9 +2255,18 @@ def process_single_episode(
                                 is_synced = False
 
                     if is_synced:
-                        mp.pre_populate_transcript(feed_slug, ep_id, vtt)
+                        # PC transcript is in sync with the audio but
+                        # we deliberately do NOT hand it to MinusPod's
+                        # ad detector — it has no ad segments, so the
+                        # detector would find nothing to cut. Whisper
+                        # will re-transcribe the whole episode and the
+                        # ad detector will run on that. We still keep
+                        # the sync check above so the user sees a
+                        # warning if PC has a wrong-language or
+                        # wrong-cut transcript.
+                        log.info("  PC/RSS transcript verified in sync with audio — NOT pre-populating (PC transcripts omit dynamically inserted ads). Whisper will transcribe.")
                         if progress_callback:
-                            progress_callback("Using Pocket Casts transcript (skipping Whisper)")
+                            progress_callback("PC transcript verified — using Whisper to capture ads")
                     else:
                         vtt = None # Discard and fall back to Whisper
                         log.info("  SYNC VERIFICATION FAILED. Falling back to full Whisper transcription.")

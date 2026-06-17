@@ -40,6 +40,18 @@ let podcasts = [];
       }
     }
 
+    function toggleServicesBar() {
+      const bar = el('services-quick-bar');
+      const collapsed = bar.classList.toggle('collapsed');
+      localStorage.setItem('sq-collapsed', collapsed ? '1' : '0');
+    }
+    (function initServicesBar() {
+      if (localStorage.getItem('sq-collapsed') === '1') {
+        const bar = el('services-quick-bar');
+        if (bar) bar.classList.add('collapsed');
+      }
+    })();
+
     // Custom error type so callers can branch on Pocket Casts auth failures
     // and render the human-readable hint we attach server-side, instead of
     // the old generic "JSON.parse: unexpected character" surfaced when the
@@ -494,7 +506,6 @@ let podcasts = [];
       }
 
       el('podcast-list').innerHTML = html;
-      document.querySelectorAll('.podcast-check[data-indeterminate="1"]').forEach(c => { c.indeterminate = true; });
       updateProcessBtn();
     }
 
@@ -1011,12 +1022,19 @@ let podcasts = [];
 
         const checkState = headerCheckState(p.uuid);
 
+        const cbCls = ['podcast-check',
+          checkState === 'all' ? 'checked' : '',
+          checkState === 'some' ? 'indeterminate' : '',
+        ].filter(Boolean).join(' ');
+        const ariaChecked = checkState === 'all' ? 'true' : (checkState === 'some' ? 'mixed' : 'false');
+        const willSelectAll = checkState !== 'all';
+
         let html = `<div class="${cls}" data-uuid="${p.uuid}">
           <div class="podcast-header" onclick="togglePodcast('${p.uuid}')">
-            <input type="checkbox" class="podcast-check" aria-label="Select all eligible episodes"
-              ${checkState === 'all' ? 'checked' : ''}
-              ${checkState === 'some' ? 'data-indeterminate="1"' : ''}
-              onclick="event.stopPropagation(); selectAllEpsInPodcast('${p.uuid}', this.checked)">
+            <div class="${cbCls}" role="checkbox" aria-checked="${ariaChecked}"
+                 aria-label="Select all eligible episodes" tabindex="0"
+                 onclick="event.stopPropagation(); selectAllEpsInPodcast('${p.uuid}', ${willSelectAll})"
+                 onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();event.stopPropagation();selectAllEpsInPodcast('${p.uuid}',${willSelectAll});}"></div>
             <div class="podcast-info">
               <div class="podcast-title">${esc(p.title)}</div>
               <div class="podcast-author">${esc(p.author || '')}</div>
@@ -1492,7 +1510,7 @@ let podcasts = [];
         historyEntries = d.entries || [];
         renderHistory();
       } catch (e) {
-        el('history-rows').innerHTML = `<tr><td colspan="5" class="empty-state-cell">Failed to load history: ${esc(e.message)}</td></tr>`;
+        el('history-rows').innerHTML = `<tr><td colspan="6" class="empty-state-cell">Failed to load history: ${esc(e.message)}</td></tr>`;
       }
     }
 
@@ -1520,20 +1538,70 @@ let podcasts = [];
       `;
 
       if (!rows.length) {
-        el('history-rows').innerHTML = `<tr><td colspan="5" class="empty-state-cell">No matching entries.</td></tr>`;
+        el('history-rows').innerHTML = `<tr><td colspan="6" class="empty-state-cell">No matching entries.</td></tr>`;
         return;
       }
       el('history-rows').innerHTML = rows.map(r => {
         const dt = r.processed_at ? new Date(r.processed_at) : null;
         const dateStr = dt ? dt.toLocaleString('en-US', { month:'short', day:'numeric', year:'numeric', hour:'numeric', minute:'2-digit' }) : '—';
-        return `<tr>
+        // Highlight rows that look suspicious so the user knows the reset
+        // button is the right next step. "deleted" means the ad-free file
+        // vanished from Pocket Casts; "no-effect" means processing recorded
+        // a marker but the cut produced 0 ads removed (often a sign the
+        // ad-detection pipeline silently failed and MinusPod is now stuck).
+        const suspect = r.deleted || (r.ads_removed == null && r.time_saved_secs == null);
+        const actionCls = suspect ? 'btn small warning' : 'btn small';
+        const actionTitle = suspect
+          ? 'MinusPod state may be stuck — reset so the episode can be reprocessed.'
+          : 'Reset MinusPod state and re-queue for processing.';
+        return `<tr class="${suspect ? 'history-row-suspect' : ''}">
           <td>${dateStr}</td>
           <td title="${esc(r.title || '')}">${esc(r.title || '')}</td>
           <td>${esc(r.podcast_title || '')}</td>
           <td class="num">${r.ads_removed != null ? r.ads_removed : '—'}</td>
           <td class="num">${r.time_saved_secs != null ? formatDuration(r.time_saved_secs) : '—'}</td>
+          <td class="actions-col">
+            <button class="${actionCls}" title="${actionTitle}"
+              onclick="resetMinusPodState('${esc(r.slug || '')}', '${esc(r.episode_id || '')}', '${esc(r.title || '').replace(/'/g, '&#39;')}')">Reset</button>
+          </td>
         </tr>`;
       }).join('');
+    }
+
+    async function resetMinusPodState(slug, episodeId, title) {
+      if (!slug || !episodeId) {
+        addLog('error', 'Reset failed: missing slug or episode id.');
+        return;
+      }
+      const ok = confirm(
+        `Reset MinusPod state for "${title || episodeId}"?\n\n` +
+        `This clears any stuck 'processing' / 'failed' / 'permanently_failed' ` +
+        `status in MinusPod's database and asks MinusPod to reprocess the ` +
+        `episode. Your local 'processed' marker in Pocket Casts Ad-Free is ` +
+        `not touched.\n\nContinue?`
+      );
+      if (!ok) return;
+      addLog('info', `Resetting MinusPod state: ${slug}/${episodeId}…`);
+      try {
+        const r = await api(`/episodes/${encodeURIComponent(slug)}/${encodeURIComponent(episodeId)}/reset`, {
+          method: 'POST',
+        });
+        if (r.db_reset) {
+          let msg = `Reset ${slug}/${episodeId} (was '${r.previous_status}').`;
+          if (r.reprocess_triggered) msg += ' Reprocess queued — watch the log.';
+          else if (r.already_processing) msg += ' MinusPod is already reprocessing it.';
+          else if (r.reprocess_error) msg += ` Reprocess request failed: ${r.reprocess_error}`;
+          addLog('success', msg);
+        } else if (r.previous_status === 'not_stuck') {
+          addLog('info', `No stuck state to clear for ${slug}/${episodeId} (already healthy).`);
+        } else {
+          addLog('error', `Reset failed for ${slug}/${episodeId}: ${r.message || r.previous_status}`);
+        }
+      } catch (e) {
+        addLog('error', `Reset request failed: ${e.message}`);
+      }
+      await loadHistory();
+      await loadSubscriptions();
     }
 
     function downloadHistoryCsv() {

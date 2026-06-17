@@ -30,6 +30,7 @@ from pocketcasts_adfree import (
     process_single_episode,
     unload_ollama_models,
     _normalize_title,
+    _reset_stuck_episode_in_db,
 )
 import services_manager
 
@@ -934,6 +935,64 @@ def create_app(email=None, password=None):
         if cleared:
             save_state(state)
         return jsonify({"cleared": cleared, "uuid": podcast_uuid})
+
+    @app.route("/api/episodes/<slug>/<episode_id>/reset", methods=["POST"])
+    def api_reset_episode(slug, episode_id):
+        """Reset a stuck MinusPod episode (processing/failed/permanently_failed)
+        back to 'discovered' and trigger reprocess.
+
+        This is the user-facing escape hatch for episodes that got wedged
+        inside MinusPod's own DB after a crash, pause-mid-failure, or a
+        Whisper/Ollama backend hiccup. The local processed marker in
+        processed_episodes.json is intentionally NOT touched — clearing that
+        is a separate decision the user can make via 'Reset processed' on
+        the dashboard.
+        """
+        try:
+            db_ok, prev_status = _reset_stuck_episode_in_db(slug, episode_id)
+        except Exception as exc:  # noqa: BLE001
+            log.error("api_reset_episode: DB reset failed: %s", exc)
+            return jsonify({"error": f"db reset failed: {exc}"}), 500
+
+        reprocess_triggered = False
+        already_processing = False
+        reprocess_error = None
+        if db_ok:
+            try:
+                mp = MinusPodClient()
+                res = mp.reprocess_episode(slug, episode_id, mode="full")
+                already_processing = bool(res.get("already_processing"))
+                reprocess_triggered = not already_processing
+            except Exception as exc:  # noqa: BLE001
+                reprocess_error = str(exc)
+                log.error("api_reset_episode: reprocess failed: %s", exc)
+
+        if not db_ok and prev_status == "not_stuck":
+            return jsonify({
+                "slug": slug,
+                "episode_id": episode_id,
+                "db_reset": False,
+                "previous_status": prev_status,
+                "message": "Episode is not in a stuck state (already 'discovered' or 'done').",
+            }), 200
+        if not db_ok:
+            return jsonify({
+                "slug": slug,
+                "episode_id": episode_id,
+                "db_reset": False,
+                "previous_status": prev_status,
+                "message": f"Could not reset episode: {prev_status}.",
+            }), 500 if prev_status == "db_error" else 404
+
+        return jsonify({
+            "slug": slug,
+            "episode_id": episode_id,
+            "db_reset": True,
+            "previous_status": prev_status,
+            "reprocess_triggered": reprocess_triggered,
+            "already_processing": already_processing,
+            "reprocess_error": reprocess_error,
+        })
 
     @app.route("/api/history", methods=["GET"])
     def api_history():

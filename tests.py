@@ -795,6 +795,156 @@ class TestUIServerEndpoints(unittest.TestCase):
 
     @patch('ui_server.PocketCastsClient')
     @patch('ui_server.MinusPodClient')
+    def test_reset_stuck_episode_resets_db_and_reprocesses(self, MockMP, MockPC):
+        """POST /api/episodes/<slug>/<episode_id>/reset clears a stuck
+        MinusPod row (processing/failed/permanently_failed → discovered)
+        and asks MinusPod to reprocess. The local processed_episodes.json
+        marker must NOT be touched."""
+        import pocketcasts_adfree as pf
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', delete=False
+        ) as tf:
+            json.dump({"processed": {
+                "podcast-a:ep1": {
+                    "title": "Stuck ep", "file_uuid": "f-1",
+                    "processed_at": "2026-04-15 09:00:00",
+                    "ads_removed": 0, "time_saved_secs": 0,
+                },
+            }}, tf)
+            tmp_state = Path(tf.name)
+        orig_state = pf.STATE_FILE
+        try:
+            pf.STATE_FILE = tmp_state
+            from ui_server import create_app
+            MockPC.return_value = MagicMock()
+            mock_mp = MagicMock()
+            mock_mp.reprocess_episode.return_value = {}
+            MockMP.return_value = mock_mp
+
+            app = create_app("test@test.com", "testpass")
+            client = app.test_client()
+            with patch('ui_server._reset_stuck_episode_in_db',
+                       return_value=(True, 'failed')) as m_reset:
+                resp = client.post('/api/episodes/podcast-a/ep1/reset')
+            self.assertEqual(resp.status_code, 200)
+            data = resp.get_json()
+            self.assertTrue(data["db_reset"])
+            self.assertEqual(data["previous_status"], "failed")
+            self.assertTrue(data["reprocess_triggered"])
+            self.assertFalse(data.get("already_processing"))
+            m_reset.assert_called_once_with("podcast-a", "ep1")
+            mock_mp.reprocess_episode.assert_called_once_with(
+                "podcast-a", "ep1", mode="full")
+            # Local marker must remain — the user only cleared MinusPod state.
+            remaining = pf.load_state().get("processed", {})
+            self.assertIn("podcast-a:ep1", remaining)
+        finally:
+            pf.STATE_FILE = orig_state
+            tmp_state.unlink(missing_ok=True)
+
+    @patch('ui_server.PocketCastsClient')
+    @patch('ui_server.MinusPodClient')
+    def test_reset_stuck_episode_already_processing(self, MockMP, MockPC):
+        """When MinusPod says it's already reprocessing, the endpoint
+        still returns 200 but flags already_processing=True and does NOT
+        call reprocess_episode."""
+        import pocketcasts_adfree as pf
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', delete=False
+        ) as tf:
+            json.dump({"processed": {}}, tf)
+            tmp_state = Path(tf.name)
+        orig_state = pf.STATE_FILE
+        try:
+            pf.STATE_FILE = tmp_state
+            from ui_server import create_app
+            MockPC.return_value = MagicMock()
+            mock_mp = MagicMock()
+            mock_mp.reprocess_episode.return_value = {"already_processing": True}
+            MockMP.return_value = mock_mp
+
+            app = create_app("test@test.com", "testpass")
+            client = app.test_client()
+            with patch('ui_server._reset_stuck_episode_in_db',
+                       return_value=(True, 'processing')):
+                resp = client.post('/api/episodes/dlco/ep42/reset')
+            self.assertEqual(resp.status_code, 200)
+            data = resp.get_json()
+            self.assertTrue(data["db_reset"])
+            self.assertTrue(data["already_processing"])
+            self.assertFalse(data["reprocess_triggered"])
+            self.assertFalse(data.get("reprocess_error"))
+        finally:
+            pf.STATE_FILE = orig_state
+            tmp_state.unlink(missing_ok=True)
+
+    @patch('ui_server.PocketCastsClient')
+    @patch('ui_server.MinusPodClient')
+    def test_reset_stuck_episode_not_stuck(self, MockMP, MockPC):
+        """If the episode isn't in a stuck state the endpoint still
+        returns 200 with db_reset=False and previous_status='not_stuck',
+        and does NOT call reprocess_episode (nothing to reprocess)."""
+        import pocketcasts_adfree as pf
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', delete=False
+        ) as tf:
+            json.dump({"processed": {}}, tf)
+            tmp_state = Path(tf.name)
+        orig_state = pf.STATE_FILE
+        try:
+            pf.STATE_FILE = tmp_state
+            from ui_server import create_app
+            MockPC.return_value = MagicMock()
+            mock_mp = MagicMock()
+            MockMP.return_value = mock_mp
+
+            app = create_app("test@test.com", "testpass")
+            client = app.test_client()
+            with patch('ui_server._reset_stuck_episode_in_db',
+                       return_value=(False, 'not_stuck')):
+                resp = client.post('/api/episodes/dlco/ep42/reset')
+            self.assertEqual(resp.status_code, 200)
+            data = resp.get_json()
+            self.assertFalse(data["db_reset"])
+            self.assertEqual(data["previous_status"], "not_stuck")
+            mock_mp.reprocess_episode.assert_not_called()
+        finally:
+            pf.STATE_FILE = orig_state
+            tmp_state.unlink(missing_ok=True)
+
+    @patch('ui_server.PocketCastsClient')
+    @patch('ui_server.MinusPodClient')
+    def test_reset_stuck_episode_db_missing(self, MockMP, MockPC):
+        """If MinusPod has no row for the episode at all, return 404 so
+        the UI can surface a clear 'episode unknown' error."""
+        import pocketcasts_adfree as pf
+        with tempfile.NamedTemporaryFile(
+            mode='w', suffix='.json', delete=False
+        ) as tf:
+            json.dump({"processed": {}}, tf)
+            tmp_state = Path(tf.name)
+        orig_state = pf.STATE_FILE
+        try:
+            pf.STATE_FILE = tmp_state
+            from ui_server import create_app
+            MockPC.return_value = MagicMock()
+            mock_mp = MagicMock()
+            MockMP.return_value = mock_mp
+
+            app = create_app("test@test.com", "testpass")
+            client = app.test_client()
+            with patch('ui_server._reset_stuck_episode_in_db',
+                       return_value=(False, 'db_missing')):
+                resp = client.post('/api/episodes/dlco/ep42/reset')
+            self.assertEqual(resp.status_code, 404)
+            self.assertFalse(resp.get_json()["db_reset"])
+            mock_mp.reprocess_episode.assert_not_called()
+        finally:
+            pf.STATE_FILE = orig_state
+            tmp_state.unlink(missing_ok=True)
+
+    @patch('ui_server.PocketCastsClient')
+    @patch('ui_server.MinusPodClient')
     def test_processed_list_and_clear(self, MockMP, MockPC):
         """GET lists entries, DELETE with keys removes a single one, DELETE
         with {all: true} wipes everything. Uses an isolated state file so
@@ -993,7 +1143,15 @@ class TestUIServerEndpoints(unittest.TestCase):
 
 
 class TestTranscriptPrePopulation(unittest.TestCase):
-    """VTT parsing and DB insertion must handle edge cases."""
+    """`pre_populate_transcript` is kept as a utility for future use, but the
+    main `process_single_episode` flow no longer calls it. PC/RSS transcripts
+    omit dynamically-inserted host-read ads, so feeding one to MinusPod's ad
+    detector would guarantee it finds nothing to cut.
+
+    These tests guard the helper itself (VTT parsing + DB insert) so it stays
+    usable for callers that have a *complete* transcript (e.g. a transcript
+    that does include the ad reads, or a sidecar VTT use case).
+    """
 
     def test_vtt_to_minuspod_format(self):
         """Verify VTT timestamp conversion to MinusPod's format."""
@@ -1018,8 +1176,8 @@ Second segment
             if len(parts) == 3:
                 return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
             elif len(parts) == 2:
-                return int(parts[0]) * 60 + float(parts[1])
-            return float(parts[0])
+                return int(parts[0]) * 60 + float(ts_str.split(":")[1])
+            return float(ts_str.split(":")[0])
 
         def _fmt_ts(seconds):
             h = int(seconds // 3600)
@@ -1053,6 +1211,23 @@ Second segment
         self.assertEqual(len(lines), 2)
         self.assertIn("[00:00:00.000 --> 00:00:05.123] Hello world", lines[0])
         self.assertIn("[00:01:30.456 --> 00:01:35.789] Second segment", lines[1])
+
+    def test_main_flow_does_not_pre_populate(self):
+        """Regression guard: `process_single_episode` must never call
+        `pre_populate_transcript` from the PC/RSS transcript branch, even
+        when the VTT passes sync verification. The whole point of the
+        branch is just a sync confidence check; pre-populating would
+        poison the ad-detector input with an ad-free transcript and
+        cause the episode to ship with all its ads still in it."""
+        import inspect
+        from pocketcasts_adfree import process_single_episode
+        src = inspect.getsource(process_single_episode)
+        self.assertNotIn(
+            "pre_populate_transcript(",
+            src,
+            "process_single_episode must not call pre_populate_transcript — "
+            "PC/RSS transcripts omit dynamically-inserted ads.",
+        )
 
 
 class TestEpisodeTitleMatching(unittest.TestCase):
