@@ -1412,6 +1412,13 @@ def create_app(email=None, password=None):
 
             pc = get_pc()
             mp = MinusPodClient()
+            try:
+                mp.health()
+            except Exception as e:  # noqa: BLE001
+                _job_log(job_id, "error",
+                         f"MinusPod is not reachable on startup ({e}). "
+                         "Start it from the Services panel and try again.")
+                raise
             mp.disable_auto_process()
             mp.sync_model_from_env()
             mp.set_fast_system_prompt()
