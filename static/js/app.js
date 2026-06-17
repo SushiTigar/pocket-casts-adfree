@@ -284,7 +284,6 @@ let podcasts = [];
     window.startAllServices = startAllServices;
     window.stopAllServices = stopAllServices;
     window.shutdownUI = shutdownUI;
-    window.retryAllArtwork = retryAllArtwork;
 
 
 
@@ -339,21 +338,6 @@ let podcasts = [];
       // add ~200ms per podcast of perceived delay; this finishes in one
       // round-trip to iTunes for all of them.
       podcasts.filter(p => !p.thumbnail).forEach(p => fetchArtworkFor(p, false));
-    }
-
-    async function retryAllArtwork() {
-      if (!Array.isArray(podcasts)) return;
-      // Drop cached URLs so the endpoint will re-look-up. Also clears any
-      // bad negative-cached entries from the on-disk cache.
-      for (const p of podcasts) {
-        p.thumbnail = '';
-        const card = document.querySelector(`.podcast-card[data-uuid="${esc(p.uuid)}"] .podcast-thumb`);
-        if (card) {
-          card.classList.remove('thumb-missing');
-          card.innerHTML = thumbHTML(p);
-        }
-        await fetchArtworkFor(p, true);
-      }
     }
 
     function swapPodcastThumb(p) {
