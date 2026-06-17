@@ -105,7 +105,7 @@ guarantee it finds nothing to cut.
 
 ```bash
 cp .env.example .env       # add Pocket Casts credentials + LLM settings
-source .env && python3 pocketcasts_adfree.py ui
+source venv/bin/activate && source .env && python3 pocketcasts_adfree.py ui
 # Open http://localhost:5050
 ```
 
