@@ -1939,7 +1939,8 @@ def _save_artwork_cache(cache: dict) -> None:
         log.debug(f"Could not write artwork cache: {e}")
 
 
-def get_podcast_artwork_url(podcast_uuid: str, podcast_title: str) -> str:
+def get_podcast_artwork_url(podcast_uuid: str, podcast_title: str,
+                            bust_cache: bool = False) -> str:
     """Return a high-res artwork URL for a podcast, or "" if unknown.
 
     Source priority:
@@ -1952,11 +1953,15 @@ def get_podcast_artwork_url(podcast_uuid: str, podcast_title: str) -> str:
 
     Result is cached permanently: iTunes artwork URLs are stable, and a
     bad match won't change unless the user unsubscribes and resubscribes.
+
+    Pass ``bust_cache=True`` to ignore the cache and re-look-up via iTunes
+    (and overwrite the cached value with whatever we get). The UI uses this
+    when the user clicks "Retry artwork" after a transient iTunes failure.
     """
     if not podcast_title:
         return ""
     cache = _load_artwork_cache()
-    if podcast_uuid in cache:
+    if not bust_cache and podcast_uuid in cache:
         return cache[podcast_uuid]
     try:
         resp = httpx.get(

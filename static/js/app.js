@@ -284,18 +284,42 @@ let podcasts = [];
     window.startAllServices = startAllServices;
     window.stopAllServices = stopAllServices;
     window.shutdownUI = shutdownUI;
+    window.retryAllArtwork = retryAllArtwork;
 
 
 
 
-    async function fetchArtworkFor(p) {
+    function thumbInitial(p) {
+      return (p.title || '?').charAt(0).toUpperCase();
+    }
+
+    function thumbHTML(p) {
+      const initial = thumbInitial(p);
+      if (!p.thumbnail) {
+        return `<span class="podcast-thumb-initial">${esc(initial)}</span>`;
+      }
+      // Inline onerror restores the letter on load failure (iTunes 404,
+      // geo-block, CORS, etc.) so the 48x48 slot never ends up blank.
+      return `<img src="${esc(p.thumbnail)}" alt="" loading="lazy" data-initial="${esc(initial)}"
+        onerror="this.parentNode.classList.add('thumb-missing');this.outerHTML='<span class=\\'podcast-thumb-initial\\'>'+this.dataset.initial+'</span>';">`;
+    }
+
+    async function fetchArtworkFor(p, bust) {
       try {
-        const d = await api('/podcast_artwork/' + encodeURIComponent(p.uuid));
+        const url = '/podcast_artwork/' + encodeURIComponent(p.uuid) +
+          (bust ? '?bust=1' : '');
+        const d = await api(url);
         if (d && d.url && !p.thumbnail) {
           p.thumbnail = d.url;
-          swapPodcastThumb(p.uuid, d.url);
+          swapPodcastThumb(p);
+        } else if (d && !d.url) {
+          console.debug(`[artwork] no iTunes result for "${p.title}" (${p.uuid})`);
+        } else if (!d) {
+          console.debug(`[artwork] endpoint returned empty for ${p.uuid}`);
         }
-      } catch (_) { /* leave placeholder */ }
+      } catch (e) {
+        console.debug(`[artwork] lookup failed for "${p.title}": ${e}`);
+      }
     }
 
     function fetchMissingArtworks() {
@@ -303,14 +327,29 @@ let podcasts = [];
       // Fire in parallel; each swap is idempotent and tiny. Sequential would
       // add ~200ms per podcast of perceived delay; this finishes in one
       // round-trip to iTunes for all of them.
-      podcasts.filter(p => !p.thumbnail).forEach(fetchArtworkFor);
+      podcasts.filter(p => !p.thumbnail).forEach(p => fetchArtworkFor(p, false));
     }
 
-    function swapPodcastThumb(uuid, url) {
-      const card = document.querySelector(`.podcast-card[data-uuid="${esc(uuid)}"] .podcast-thumb`);
+    async function retryAllArtwork() {
+      if (!Array.isArray(podcasts)) return;
+      // Drop cached URLs so the endpoint will re-look-up. Also clears any
+      // bad negative-cached entries from the on-disk cache.
+      for (const p of podcasts) {
+        p.thumbnail = '';
+        const card = document.querySelector(`.podcast-card[data-uuid="${esc(p.uuid)}"] .podcast-thumb`);
+        if (card) {
+          card.classList.remove('thumb-missing');
+          card.innerHTML = thumbHTML(p);
+        }
+        await fetchArtworkFor(p, true);
+      }
+    }
+
+    function swapPodcastThumb(p) {
+      const card = document.querySelector(`.podcast-card[data-uuid="${esc(p.uuid)}"] .podcast-thumb`);
       if (!card) return;
       card.classList.remove('thumb-missing');
-      card.innerHTML = `<img src="${esc(url)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('thumb-missing'); this.remove();">`;
+      card.innerHTML = thumbHTML(p);
     }
 
     async function loadSubscriptions() {
@@ -446,7 +485,6 @@ let podcasts = [];
           for (const [puuid, eps] of Object.entries(upNextByPodcast)) {
             const podData = podcasts.find(x => x.uuid === puuid);
             const podTitle = getPodcastTitle(puuid);
-            const podThumb = podData?.thumbnail || '';
             const isExp = expandedPodcasts.has(`upnext-${puuid}`);
             const hasSel = isPodcastSelected(puuid);
             const isPat = podData?.is_patreon;
@@ -457,12 +495,15 @@ let podcasts = [];
               isPat ? 'patreon' : '',
               allAdFree ? 'processed' : ''
             ].filter(Boolean).join(' ');
+            // For Up Next, podData may be undefined if the user has an episode
+            // queued for a podcast they've since unsubscribed from. Fall back
+            // to a synthesized object so thumbHTML() still renders the title
+            // initial.
+            const thumbObj = podData || { uuid: puuid, title: podTitle, thumbnail: '' };
             html += `<div class="${cls}" data-uuid="${esc(puuid)}" style="margin-bottom:4px;">
               <div class="podcast-header" onclick="togglePodcast('upnext-${puuid}', '${puuid}')" style="padding:10px 14px;">
                 <span class="up-next-badge">Up Next</span>
-                <div class="podcast-thumb" aria-hidden="true">${podThumb
-                  ? `<img src="${esc(podThumb)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('thumb-missing'); this.remove();">`
-                  : `<span class="podcast-thumb-initial">${esc((podTitle || '?').charAt(0).toUpperCase())}</span>`}</div>
+                <div class="podcast-thumb" aria-hidden="true">${thumbHTML(thumbObj)}</div>
                 <div class="podcast-info" style="flex:1;min-width:0">
                   <div class="podcast-title">${esc(podTitle)}</div>
                   <div class="podcast-author" style="font-size:11px;color:var(--text-muted)">${eps.length} episode${eps.length > 1 ? 's' : ''} in queue</div>
@@ -1066,9 +1107,7 @@ let podcasts = [];
                  aria-label="Select all eligible episodes" tabindex="0"
                  onclick="event.stopPropagation(); selectAllEpsInPodcast('${p.uuid}', ${willSelectAll})"
                  onkeydown="if(event.key===' '||event.key==='Enter'){event.preventDefault();event.stopPropagation();selectAllEpsInPodcast('${p.uuid}',${willSelectAll});}"></div>
-            <div class="podcast-thumb" aria-hidden="true">${p.thumbnail
-              ? `<img src="${esc(p.thumbnail)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('thumb-missing'); this.remove();">`
-              : `<span class="podcast-thumb-initial">${esc((p.title || '?').charAt(0).toUpperCase())}</span>`}</div>
+            <div class="podcast-thumb" aria-hidden="true">${thumbHTML(p)}</div>
             <div class="podcast-info">
               <div class="podcast-title">${esc(p.title)}</div>
               <div class="podcast-author">${esc(p.author || '')}</div>
