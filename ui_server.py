@@ -393,18 +393,13 @@ def create_app(email=None, password=None):
         are cached on disk in podcast_artwork_cache.json — first call hits
         iTunes, subsequent calls are free. Returns {"url": ""} on miss
         so the UI keeps showing the initial-letter placeholder.
-
-        Pass ?bust=1 to ignore the cache and re-look-up via iTunes. The UI
-        uses this from the "Retry artwork" button to clear stale negative
-        cache entries from a previous transient iTunes failure.
         """
-        bust = request.args.get("bust") in ("1", "true", "yes")
         try:
             pc = get_pc()
             subs = pc.get_subscriptions()
             pod = next((s for s in subs if s.get("uuid") == podcast_uuid), None)
             title = (pod or {}).get("title", "")
-            url = get_podcast_artwork_url(podcast_uuid, title, bust_cache=bust)
+            url = get_podcast_artwork_url(podcast_uuid, title)
             return jsonify({"url": url})
         except Exception as e:  # noqa: BLE001
             log.debug(f"podcast_artwork lookup failed: {e}")

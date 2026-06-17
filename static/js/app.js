@@ -303,10 +303,9 @@ let podcasts = [];
         onerror="this.parentNode.classList.add('thumb-missing');this.outerHTML='<span class=\\'podcast-thumb-initial\\'>'+this.dataset.initial+'</span>';">`;
     }
 
-    async function fetchArtworkFor(p, bust) {
+    async function fetchArtworkFor(p) {
       try {
-        const url = '/podcast_artwork/' + encodeURIComponent(p.uuid) +
-          (bust ? '?bust=1' : '');
+        const url = '/podcast_artwork/' + encodeURIComponent(p.uuid);
         const d = await api(url);
         if (d && d.url && !p.thumbnail) {
           p.thumbnail = d.url;
@@ -337,7 +336,7 @@ let podcasts = [];
       // Fire in parallel; each swap is idempotent and tiny. Sequential would
       // add ~200ms per podcast of perceived delay; this finishes in one
       // round-trip to iTunes for all of them.
-      podcasts.filter(p => !p.thumbnail).forEach(p => fetchArtworkFor(p, false));
+      podcasts.filter(p => !p.thumbnail).forEach(fetchArtworkFor);
     }
 
     function swapPodcastThumb(p) {

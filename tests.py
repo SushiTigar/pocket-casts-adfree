@@ -2250,47 +2250,6 @@ class TestPodcastArtworkLookup(unittest.TestCase):
         self.assertEqual(url, "")
         mock_save.assert_called_once_with({"pod-a": ""})
 
-    @patch('pocketcasts_adfree._save_artwork_cache')
-    @patch('pocketcasts_adfree._load_artwork_cache',
-           return_value={"pod-a": ""})  # negative-cached from prior failure
-    @patch('pocketcasts_adfree.httpx.get')
-    def test_bust_cache_ignores_negative_cache(self, mock_get, mock_load, mock_save):
-        """When the user clicks 'Retry artwork', the endpoint must bypass
-        the on-disk cache and re-query iTunes. Otherwise a podcast that's
-        transiently 404'd would be stuck on a letter placeholder forever."""
-        mock_get.return_value = self._mock_itunes([
-            {"trackName": "Any Podcast",
-             "artworkUrl600": "https://now.example/any.jpg"},
-        ])
-        url = get_podcast_artwork_url("pod-a", "Any Podcast", bust_cache=True)
-        self.assertEqual(url, "https://now.example/any.jpg")
-        # The fresh result must overwrite the negative cache entry so the
-        # next non-bust call returns it from cache (no re-query).
-        mock_save.assert_called_once_with(
-            {"pod-a": "https://now.example/any.jpg"})
-
-    @patch('pocketcasts_adfree._save_artwork_cache')
-    @patch('pocketcasts_adfree._load_artwork_cache')
-    @patch('pocketcasts_adfree.httpx.get')
-    def test_bust_cache_does_not_call_itunes_on_normal_call(self, mock_get, mock_load, mock_save):
-        """Sanity check: bust_cache=False (the default) must still respect
-        the cache and never call iTunes for a uuid we've already seen."""
-        cache = {}
-        mock_load.return_value = cache  # mutable, shared between calls
-        mock_save.side_effect = lambda c: cache.update(c)
-        mock_get.return_value = self._mock_itunes([
-            {"trackName": "Any Podcast",
-             "artworkUrl600": "https://cached.example/any.jpg"},
-        ])
-        # First call: cache empty, hits iTunes, populates cache.
-        url1 = get_podcast_artwork_url("pod-a", "Any Podcast", bust_cache=False)
-        self.assertEqual(url1, "https://cached.example/any.jpg")
-        # Second call: cache has the URL, must skip iTunes.
-        mock_get.reset_mock()
-        url2 = get_podcast_artwork_url("pod-a", "Any Podcast", bust_cache=False)
-        self.assertEqual(url2, "https://cached.example/any.jpg")
-        mock_get.assert_not_called()
-
     @patch('ui_server.PocketCastsClient')
     def test_podcast_artwork_endpoint_returns_url(self, MockPC):
         """GET /api/podcast_artwork/<uuid> must return {"url": "..."}
@@ -2329,60 +2288,6 @@ class TestPodcastArtworkLookup(unittest.TestCase):
             resp = client.get('/api/podcast_artwork/pod-a')
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), {"url": ""})
-
-    @patch('ui_server.PocketCastsClient')
-    def test_podcast_artwork_endpoint_passes_bust_query(self, MockPC):
-        """GET /api/podcast_artwork/<uuid>?bust=1 must forward bust_cache=True
-        to get_podcast_artwork_url so the 'Retry artwork' button can clear
-        stale negative-cache entries from a previous transient iTunes
-        failure. Without this, a podcast that 404'd once would stay on the
-        letter placeholder forever (no way to re-try)."""
-        mock_pc = MagicMock()
-        mock_pc.get_subscriptions.return_value = [
-            {"uuid": "pod-a", "title": "Podcast A"},
-        ]
-        MockPC.return_value = mock_pc
-
-        captured = {}
-        def fake_lookup(uuid, title, bust_cache=False):
-            captured["bust"] = bust_cache
-            captured["uuid"] = uuid
-            captured["title"] = title
-            return "https://retry.example/a.jpg"
-
-        with patch('ui_server.get_podcast_artwork_url', side_effect=fake_lookup):
-            from ui_server import create_app
-            app = create_app("test@test.com", "testpass")
-            client = app.test_client()
-            resp = client.get('/api/podcast_artwork/pod-a?bust=1')
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.get_json(), {"url": "https://retry.example/a.jpg"})
-        self.assertTrue(captured["bust"], "bust=1 must be forwarded as bust_cache=True")
-        self.assertEqual(captured["uuid"], "pod-a")
-        self.assertEqual(captured["title"], "Podcast A")
-
-    @patch('ui_server.PocketCastsClient')
-    def test_podcast_artwork_endpoint_default_does_not_bust(self, MockPC):
-        """Sanity check: the default request (no ?bust=) must NOT pass
-        bust_cache=True, otherwise we'd re-query iTunes on every page
-        load and hammer their API."""
-        mock_pc = MagicMock()
-        mock_pc.get_subscriptions.return_value = [
-            {"uuid": "pod-a", "title": "Podcast A"},
-        ]
-        MockPC.return_value = mock_pc
-
-        captured = {}
-        def fake_lookup(uuid, title, bust_cache=False):
-            captured["bust"] = bust_cache
-            return "https://x.example/a.jpg"
-
-        with patch('ui_server.get_podcast_artwork_url', side_effect=fake_lookup):
-            from ui_server import create_app
-            app = create_app("test@test.com", "testpass")
-            client = app.test_client()
-            client.get('/api/podcast_artwork/pod-a')
-        self.assertFalse(captured["bust"], "default must keep bust_cache=False")
 
 
 if __name__ == "__main__":

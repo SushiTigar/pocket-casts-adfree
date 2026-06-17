@@ -70,15 +70,7 @@ loosely tracks [Semantic Versioning](https://semver.org/).
   `podcast_artwork_cache.json` so the dashboard doesn't re-hit iTunes
   on every load. The same artwork is also rendered in the *In Up Next*
   section so unsubscribed podcast covers stay visible there too.
-- **"Retry artwork" button + coverage stat card** — when a podcast can't
-  be resolved (e.g. title doesn't match anything in iTunes, or a CDN
-  image is broken), the thumbnail falls back to a letter placeholder
-  and the new 5th "Artwork" stat card (`N/M loaded`) makes the
-  coverage visible at a glance. The "Retry artwork" button in the
-  services bar busts the on-disk cache and re-looks-up every podcast,
-  useful after you've fixed the database or just want to refresh. The
-  backend honours `?bust=1` on `/api/podcast_artwork/<uuid>`. Broken
-  images also fall back to the letter placeholder via inline `onerror`
+  Broken images fall back to the letter placeholder via inline `onerror`
   rather than leaving a blank 48×48 box.
 - **`.env.example` rewrite** — reorganised into REQUIRED / LLM BACKEND
   / OPTIONAL with a 3-step quick-start decision tree and a side-by-side
