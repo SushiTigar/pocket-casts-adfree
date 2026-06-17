@@ -1073,6 +1073,43 @@ class TestUIServerEndpoints(unittest.TestCase):
 
     @patch('ui_server.PocketCastsClient')
     @patch('ui_server.MinusPodClient')
+    def test_api_episodes_returns_503_when_minuspod_down(self, MockMP, MockPC):
+        """GET /api/episodes/<uuid> must return a clean 503 (not 500) when
+        MinusPod is unreachable. The 500 was caused by an un-guarded call
+        to list_feeds() that bubbled httpx.ConnectError out of the view.
+        """
+        import httpx
+        mock_pc = MagicMock()
+        mock_pc.get_subscriptions.return_value = [
+            {"uuid": "pod-a", "title": "Podcast A",
+             "url": "https://a.example/rss"},
+        ]
+        MockPC.return_value = mock_pc
+
+        # MinusPod is down: health() raises a connection error.
+        mock_mp = MagicMock()
+        mock_mp.health.side_effect = httpx.ConnectError(
+            "[Errno 61] Connection refused")
+        mock_mp.list_feeds.side_effect = httpx.ConnectError(
+            "[Errno 61] Connection refused")
+        MockMP.return_value = mock_mp
+
+        from ui_server import create_app
+        app = create_app("test@test.com", "testpass")
+        client = app.test_client()
+        resp = client.get('/api/episodes/pod-a')
+        self.assertEqual(resp.status_code, 503)
+        data = resp.get_json()
+        self.assertEqual(data["episodes"], [])
+        # The error message must mention MinusPod so the user knows
+        # where to look (Services panel).
+        self.assertIn("MinusPod", data["error"])
+        # And we must NOT have tried to hit list_feeds (the health check
+        # should have short-circuited first).
+        mock_mp.list_feeds.assert_not_called()
+
+    @patch('ui_server.PocketCastsClient')
+    @patch('ui_server.MinusPodClient')
     def test_pc_episode_queue_endpoints(self, MockMP, MockPC):
         """POST /api/pc_episode/<uuid>/up_next queues an original episode;
         DELETE un-queues it. Used by the new per-episode controls in All

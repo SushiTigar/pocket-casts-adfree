@@ -473,8 +473,21 @@ def create_app(email=None, password=None):
         if not rss_url:
             return jsonify({"episodes": [], "error": f"Could not find RSS for {title}"})
 
+        # Quick health check so a down MinusPod surfaces a clean 503 with a
+        # hint to the user, rather than a raw 500 from a refused connection.
+        try:
+            MinusPodClient().health()
+        except Exception as e:  # noqa: BLE001
+            return jsonify({
+                "episodes": [],
+                "error": f"MinusPod is not running (start it from the Services panel). ({e})",
+            }), 503
+
         mp = MinusPodClient()
-        existing_feeds = mp.list_feeds()
+        try:
+            existing_feeds = mp.list_feeds()
+        except Exception as e:  # noqa: BLE001
+            return jsonify({"episodes": [], "error": f"MinusPod unreachable: {e}"}), 503
         feed_slug = None
         for f in existing_feeds:
             if f.get("sourceUrl") == rss_url:
@@ -487,12 +500,12 @@ def create_app(email=None, password=None):
                 feed_slug = result.get("slug")
                 time.sleep(3)
             except Exception as e:
-                return jsonify({"episodes": [], "error": str(e)})
+                return jsonify({"episodes": [], "error": str(e)}), 503
 
         try:
             episodes = mp.get_episodes(feed_slug)
         except Exception as e:
-            return jsonify({"episodes": [], "error": str(e)})
+            return jsonify({"episodes": [], "error": str(e)}), 503
 
         # Fetch Pocket Casts' own episode metadata so we can surface play
         # status + expose the PC episode UUID needed for Queue/Un-queue
