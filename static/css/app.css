@@ -350,13 +350,18 @@
 
     /* IN UP NEXT rows for regular (non-custom-file) podcast episodes. */
     .file-row.up-next-row.selectable { cursor: pointer; }
+    .file-row.up-next-row.selectable:hover { background: rgba(88,166,255,0.08); }
     .file-row.up-next-row.selected {
       background: rgba(88, 166, 255, 0.10);
       border-left: 3px solid var(--info);
       padding-left: 7px;
     }
+    .file-row.up-next-row.selected .ep-check { background: var(--accent2); border-color: var(--accent2); }
+    .file-row.up-next-row.selected .ep-check::after { content: '\2713'; color: #000; font-size: 9px; font-weight: 700; }
     .file-row.up-next-row.done { opacity: 0.55; }
     .file-row.up-next-row.done .file-title { text-decoration: line-through; }
+    .file-row.up-next-row.done .ep-check { background: var(--text-muted); border-color: var(--text-muted); opacity: 0.5; }
+    .file-row.up-next-row.done .ep-check::after { content: '\2713'; color: var(--card); font-size: 9px; font-weight: 700; }
 
     /* Processed-state reset panel */
     .processed-panel {

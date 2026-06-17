@@ -679,7 +679,7 @@ let podcasts = [];
       const markLabel = ep.playing_status === 3 ? 'Mark unplayed' : 'Mark played';
       const markPlayed = ep.playing_status !== 3;
       return `<div class="${rowCls}" data-ep-uuid="${esc(ep.uuid)}" ${rowClick}>
-        <div class="file-thumb"></div>
+        <div class="ep-check"></div>
         <div class="file-info">
           <div class="file-title" title="${esc(ep.title)}">${esc(ep.title)}</div>
           <div class="file-meta">
