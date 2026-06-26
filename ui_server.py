@@ -1493,8 +1493,11 @@ def create_app(email=None, password=None):
                         try:
                             result = mp.add_feed(rss_url, max_episodes=10)
                             feed_slug = result.get("slug")
-                            _job_log(job_id, "info", f"Added feed to MinusPod: {feed_slug}")
-                            time.sleep(5)
+                            if feed_slug:
+                                _job_log(job_id, "info", f"Added feed to MinusPod: {feed_slug}")
+                                time.sleep(5)
+                            else:
+                                _job_log(job_id, "warn", f"Feed already exists but slug not found: {rss_url}")
                         except Exception as e:
                             _job_log(job_id, "error", f"Failed to add feed: {e}")
                             continue

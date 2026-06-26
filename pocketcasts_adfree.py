@@ -964,6 +964,28 @@ class MinusPodClient:
             json=body,
             timeout=60,
         )
+        if resp.status_code == 409:
+            log.info(f"  Feed already exists (409): {rss_url}")
+            error_msg = ""
+            try:
+                body = resp.json()
+                error_msg = body.get("error", "")
+                if body.get("slug"):
+                    return body
+            except Exception:
+                pass
+            slug_match = re.search(r'slug "([^"]+)"', error_msg)
+            if slug_match:
+                existing_slug = slug_match.group(1)
+                existing = self.list_feeds()
+                for f in existing:
+                    if f.get("slug") == existing_slug:
+                        return f
+            existing = self.list_feeds()
+            for f in existing:
+                if f.get("sourceUrl") == rss_url:
+                    return f
+            return {"slug": None, "sourceUrl": rss_url, "already_exists": True}
         resp.raise_for_status()
         return resp.json()
 
