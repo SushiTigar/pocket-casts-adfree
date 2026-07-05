@@ -1,5 +1,15 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: local <local@local>
+Date: Thu, 1 Jan 2026 00:00:00 +0000
+Subject: [PATCH] minuspod-local.patch (rebased on upstream d900bdd0)
+
+AD start/end padding via env vars (AD_START_PAD, AD_END_PAD, AD_END_PAD_TAIL).
+language_override in transcribe_chunked + progress_callback support.
+Merge SKIP_VERIFICATION into upstream verification pass.
+---
+
 diff --git a/docker-compose.whisper.yml b/docker-compose.whisper.yml
-index fe7667d9..10fedf60 100644
+index 2bfde6f4..6dadb6a7 100644
 --- a/docker-compose.whisper.yml
 +++ b/docker-compose.whisper.yml
 @@ -30,7 +30,7 @@
@@ -11,7 +21,7 @@ index fe7667d9..10fedf60 100644
      platform: linux/amd64
      container_name: whisper-server
      ports:
-@@ -52,13 +52,7 @@ services:
+@@ -56,13 +56,7 @@ services:
          --processors 1
          --dtw large.v3.turbo
          --no-flash-attn
@@ -27,13 +37,37 @@ index fe7667d9..10fedf60 100644
        test: ["CMD-SHELL", "curl -sf http://localhost:8765/health || exit 1"]
        interval: 30s
 diff --git a/src/audio_processor.py b/src/audio_processor.py
-index e650660a..ac280b94 100644
+index e9509868..bfa6775d 100644
 --- a/src/audio_processor.py
 +++ b/src/audio_processor.py
-@@ -120,6 +120,20 @@ class AudioProcessor:
-             if current_segment:
-                 merged_ads.append(current_segment)
+@@ -283,7 +283,57 @@ class AudioProcessor:
  
+             logger.info(f"Processing audio: {total_duration:.1f}s total, {len(ad_segments)} ad segments")
+ 
+-            ads = self.compute_applied_cuts(ad_segments, total_duration)
++# Sort ad segments by start time
++            sorted_segments = sorted(ad_segments, key=lambda x: x['start'])
++
++            # Merge segments with < 1 second gaps
++            merged_ads = []
++            current_segment = None
++
++            for ad in sorted_segments:
++                if current_segment and ad['start'] - current_segment['end'] < 1.0:
++                    # Extend current segment (use max to handle overlapping/contained ads)
++                    current_segment['end'] = max(current_segment['end'], ad['end'])
++                    if 'reason' in ad:
++                        current_segment['reason'] = current_segment.get('reason', '') + '; ' + ad['reason']
++                else:
++                    if current_segment:
++                        merged_ads.append(current_segment)
++                    current_segment = {'start': ad['start'], 'end': ad['end']}
++                    if 'reason' in ad:
++                        current_segment['reason'] = ad['reason']
++
++            if current_segment:
++                merged_ads.append(current_segment)
++
 +            # Expand ad boundaries to avoid leaving partial ad audio.
 +            # LLM-detected boundaries often land mid-word or mid-sentence;
 +            # padding ensures the entire ad transition is captured.
@@ -48,14 +82,28 @@ index e650660a..ac280b94 100644
 +                end_pad = AD_END_PAD_TAIL if (total_duration - ad['end']) <= tail_threshold else AD_END_PAD
 +                ad['end'] = min(total_duration, ad['end'] + end_pad)
 +
-             # Filter out short ad detections (< 10 seconds) - likely false positives
-             MIN_AD_DURATION_FOR_REMOVAL = 10.0  # seconds
-             ads = []
++            # Filter out short ad detections (< 10 seconds) - likely false positives
++            MIN_AD_DURATION_FOR_REMOVAL = 10.0  # seconds
++            ads = []
++            skipped_count = 0
++            for ad in merged_ads:
++                duration = ad['end'] - ad['start']
++                if duration >= MIN_AD_DURATION_FOR_REMOVAL:
++                    ads.append(ad)
++                else:
++                    skipped_count += 1
++                    logger.info(f"Skipping short ad ({duration:.1f}s < {MIN_AD_DURATION_FOR_REMOVAL}s): {ad.get('reason', 'unknown')[:50]}")
++
++            if skipped_count > 0:
++                logger.info(f"Skipped {skipped_count} short ad detections (< {MIN_AD_DURATION_FOR_REMOVAL}s)")
+             logger.info(f"After merging and filtering: {len(ads)} ad segments")
+             if not ads:
+                 # Every requested cut merged/filtered away: nothing to cut,
 diff --git a/src/config.py b/src/config.py
-index c47f710d..9707ece6 100644
+index 40c2e66e..fe07265f 100644
 --- a/src/config.py
 +++ b/src/config.py
-@@ -167,7 +167,9 @@ SUBPROCESS_VERSION_PROBE = 5         # ffmpeg -version, fpcalc -version
+@@ -480,7 +480,9 @@ SUBPROCESS_VERSION_PROBE = 5         # ffmpeg -version, fpcalc -version
  # LLM Timeouts (seconds)
  # ============================================================
  LLM_TIMEOUT_DEFAULT = 120.0          # Anthropic / fast cloud APIs
@@ -66,7 +114,7 @@ index c47f710d..9707ece6 100644
  LLM_RETRY_MAX_RETRIES = 3            # Default retries for cloud APIs
  LLM_RETRY_MAX_RETRIES_LOCAL = 2      # Fewer retries for local (each is slow)
  AD_DETECTION_MAX_TOKENS = int(os.environ.get('AD_DETECTION_MAX_TOKENS', '4096'))
-@@ -192,8 +194,11 @@ HTTP_TIMEOUT_PROBE = 5.0              # Short outbound: /version probes,
+@@ -505,8 +507,11 @@ HTTP_TIMEOUT_PROBE = 5.0              # Short outbound: /version probes,
  HTTP_TIMEOUT_API = 10.0               # Standard JSON API (LLM verify, PodcastIndex search)
  HTTP_TIMEOUT_EXTERNAL = 15.0          # Third-party scraping (pricing sources)
  HTTP_TIMEOUT_FETCH = 30.0             # RSS fetch, artwork / audio download
@@ -80,7 +128,7 @@ index c47f710d..9707ece6 100644
  
  # ============================================================
  # Chunked Transcription (OOM prevention for long episodes)
-@@ -204,7 +209,7 @@ CHUNK_MAX_DURATION_SECONDS = 3600    # Maximum chunk size (60 minutes)
+@@ -517,7 +522,7 @@ CHUNK_MAX_DURATION_SECONDS = 3600    # Maximum chunk size (60 minutes)
  CHUNK_DEFAULT_DURATION_SECONDS = 1800  # Default if memory detection fails (30 minutes)
  
  # API backend chunk duration (10 min = ~19MB WAV, under 25MB OpenAI API limit)
@@ -89,11 +137,177 @@ index c47f710d..9707ece6 100644
  
  # Whisper backend identifiers
  WHISPER_BACKEND_LOCAL = 'local'
+@@ -557,6 +562,62 @@ OPENROUTER_ROUTER_ALIASES = (
+     ('openrouter/auto', 'OpenRouter: Auto (routes to best model for the prompt)'),
+ )
+ 
++
++def _parse_csv_env_list(raw: str) -> list[str]:
++    return [part.strip() for part in raw.split(',') if part.strip()]
++
++
++def _parse_bool_env(name: str, default: Optional[bool] = None) -> Optional[bool]:
++    raw = os.environ.get(name)
++    if raw is None:
++        return default
++    return str(raw).strip().lower() in ('true', '1', 'yes')
++
++
++def get_openrouter_provider_config() -> Optional[dict]:
++    """Build OpenRouter ``provider`` routing object from environment.
++
++    See https://openrouter.ai/docs/guides/routing/provider-selection
++
++    Env vars:
++        OPENROUTER_PROVIDER_ORDER: comma-separated provider slugs to try in order
++            (e.g. ``GMICloud,Novita,Alibaba`` — copy exact slugs from the model's
++            Providers tab on openrouter.ai).
++        OPENROUTER_ALLOW_FALLBACKS: ``true``/``false``. Defaults to ``false`` when
++            ``OPENROUTER_PROVIDER_ORDER`` is set, otherwise unset (OpenRouter default).
++        OPENROUTER_PROVIDER_SORT: ``price``, ``throughput``, or ``latency``.
++        OPENROUTER_PROVIDER_ONLY: comma-separated allow-list of provider slugs.
++        OPENROUTER_PROVIDER_IGNORE: comma-separated deny-list of provider slugs.
++    """
++    order_raw = os.environ.get('OPENROUTER_PROVIDER_ORDER', '').strip()
++    sort_raw = os.environ.get('OPENROUTER_PROVIDER_SORT', '').strip()
++    only_raw = os.environ.get('OPENROUTER_PROVIDER_ONLY', '').strip()
++    ignore_raw = os.environ.get('OPENROUTER_PROVIDER_IGNORE', '').strip()
++
++    provider: dict = {}
++    if order_raw:
++        provider['order'] = _parse_csv_env_list(order_raw)
++    if only_raw:
++        provider['only'] = _parse_csv_env_list(only_raw)
++    if ignore_raw:
++        provider['ignore'] = _parse_csv_env_list(ignore_raw)
++    if sort_raw:
++        provider['sort'] = sort_raw
++
++    allow_fb = _parse_bool_env('OPENROUTER_ALLOW_FALLBACKS')
++    if allow_fb is not None:
++        provider['allow_fallbacks'] = allow_fb
++    elif order_raw:
++        provider['allow_fallbacks'] = False
++
++    return provider or None
++
++MASTER_PASSPHRASE = os.environ.get('MINUSPOD_MASTER_PASSPHRASE')
++
++
++def provider_crypto_ready() -> bool:
++    return bool(MASTER_PASSPHRASE)
++
+ # ============================================================
+ # LLM Pricing Configuration
+ # ============================================================
+@@ -782,6 +843,12 @@ STAGE_TUNABLE_DEFAULTS = {
+     # detection window geometry (global, not per-stage)
+     'window_size_seconds': WINDOW_SIZE_SECONDS,
+     'window_overlap_seconds': WINDOW_OVERLAP_SECONDS,
++    # LLM cost optimisations (global). These let the user dial the per-call
++    # cost of the ad detector without recompiling. See the CHANGELOG entry
++    # "LLM cost optimisations" for the design rationale.
++    'large_window_seconds': 1200,           # used for 1M-context models on long episodes
++    'skip_verification_under_seconds': 1200,  # skip pass 2 when episode is shorter than this
++    'enable_prompt_caching': True,         # mark system prompt for OpenRouter cache_control
+ }
+ 
+ STAGE_TUNABLE_ENV_VARS = {key: key.upper() for key in STAGE_TUNABLE_DEFAULTS}
+@@ -818,13 +885,54 @@ STAGE_TUNABLE_RANGES = {
+     # envelope the resolver checks against.
+     'window_size_seconds': (120, 1800),
+     'window_overlap_seconds': (0, 1770),
++    # LLM cost optimisations. large_window_seconds must be >= window_size_seconds
++    # (cross-field, enforced at the API layer). skip_verification_under_seconds=0
++    # disables the skip; otherwise any value in [60, 86400] is accepted.
++    'large_window_seconds': (300, 3600),
++    'skip_verification_under_seconds': (0, 86400),
+ }
+ 
+ STAGE_TUNABLE_REASONING_LEVELS = {"none", "low", "medium", "high"}
+ 
++# Subset of STAGE_TUNABLE_DEFAULTS whose values are booleans. Listed
++# explicitly (rather than detected from the default value) so the API layer
++# can dispatch on it without re-deriving the type. Mirrors the 'bool' kind
++# tag in STAGE_TUNABLE_PAYLOAD_KEYS -- the two lists must stay in sync; the
++# test suite enforces that.
++STAGE_TUNABLE_BOOL_KEYS = frozenset((
++    'enable_prompt_caching',
++))
++
++# Model ID substring patterns that indicate a long-context model (>= 1M
++# tokens). Substring match is intentional: OpenRouter and similar gateways
++# namespace model IDs (e.g. ``deepseek/deepseek-v4-flash``,
++# ``google/gemini-2.5-flash``), so anchoring a regex to the full ID would
++# miss every gateway-routed request. The check is case-insensitive.
++LARGE_CONTEXT_MODEL_PATTERNS = (
++    'deepseek-v4',
++    'gemini-2.5-flash',
++    'gemini-3-flash',
++    'gemini-flash',
++    'qwen-long',
++    'llama-4-',
++    'llama-3.1-405b',  # 128k, included for safety on borderline cases
++)
++
++
++def is_large_context_model(model_id: str) -> bool:
++    """True if ``model_id`` looks like a long-context model.
++
++    Substring match against LARGE_CONTEXT_MODEL_PATTERNS, case-insensitive.
++    Returns False for empty / None so callers don't need to guard.
++    """
++    if not model_id:
++        return False
++    mid = model_id.lower()
++    return any(pat in mid for pat in LARGE_CONTEXT_MODEL_PATTERNS)
++
+ 
+ def _coerce_tunable(key: str, raw: Any, source_label: str) -> Optional[Any]:
+-    """Coerce a stored or env value to int/float/enum. Returns None on bad value
++    """Coerce a stored or env value to int/float/enum/bool. Returns None on bad value
+     (caller treats None as 'use default')."""
+     if raw is None:
+         return None
+@@ -841,6 +949,21 @@ def _coerce_tunable(key: str, raw: Any, source_label: str) -> Optional[Any]:
+         )
+         return None
+ 
++    # Bool tunables are stored as "true"/"false" in the DB and accept the same
++    # truthy/falsy set on the way in. The kind lives in STAGE_TUNABLE_BOOL_KEYS
++    # so the API and resolver agree without duplicating the list. Garbage
++    # values (e.g. "perhaps") return None so the default is used -- the same
++    # fall-back-to-default contract as the other kinds.
++    if key in STAGE_TUNABLE_BOOL_KEYS:
++        if isinstance(raw, bool):
++            return raw
++        s = str(raw).strip().lower()
++        if s in _TRUTHY_STRINGS:
++            return True
++        if s in ('false', '0', 'no'):
++            return False
++        return None
++
+     range_ = STAGE_TUNABLE_RANGES.get(key)
+     if key.endswith('_temperature'):
+         try:
+@@ -970,6 +1093,11 @@ STAGE_TUNABLE_PAYLOAD_KEYS = (
+     ('ollamaNumCtx',                   'ollama_num_ctx',                  'ollama_ctx'),
+     ('windowSizeSeconds',              'window_size_seconds',             'int'),
+     ('windowOverlapSeconds',           'window_overlap_seconds',          'int'),
++    # LLM cost optimisations. large_window_seconds is cross-field constrained
++    # to be >= window_size_seconds at the API layer.
++    ('largeWindowSeconds',             'large_window_seconds',            'int'),
++    ('skipVerificationUnderSeconds',   'skip_verification_under_seconds', 'int'),
++    ('enablePromptCaching',            'enable_prompt_caching',           'bool'),
+ )
+ 
+ 
 diff --git a/src/database/__init__.py b/src/database/__init__.py
-index ab098b1d..8ed9b4bd 100644
+index 69eac3a2..6e76e855 100644
 --- a/src/database/__init__.py
 +++ b/src/database/__init__.py
-@@ -249,7 +249,7 @@ class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
+@@ -258,7 +258,7 @@ class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
      _instance = None
      _lock = threading.Lock()
  
@@ -102,7 +316,7 @@ index ab098b1d..8ed9b4bd 100644
          """Singleton pattern for database instance."""
          if cls._instance is None:
              with cls._lock:
-@@ -258,10 +258,14 @@ class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
+@@ -267,10 +267,14 @@ class Database(SchemaMixin, PodcastMixin, EpisodeMixin, SettingsMixin,
                      cls._instance._initialized = False
          return cls._instance
  
@@ -118,33 +332,201 @@ index ab098b1d..8ed9b4bd 100644
          self.data_dir = Path(data_dir)
          self.data_dir.mkdir(parents=True, exist_ok=True)
          self.db_path = self.data_dir / "podcast.db"
+diff --git a/src/llm_client.py b/src/llm_client.py
+index facfb639..b7abaff1 100644
+--- a/src/llm_client.py
++++ b/src/llm_client.py
+@@ -51,6 +51,7 @@ from config import (
+     PROVIDER_OPENROUTER,
+     PROVIDER_OLLAMA,
+     PROVIDERS_NON_ANTHROPIC,
++    get_openrouter_provider_config,
+ )
+ from llm_capabilities import (
+     get_pass_defaults,
+@@ -77,6 +78,43 @@ _JSON_FORMAT_SYSTEM_INSTRUCTION = (
+ )
+ 
+ 
++def _prompt_caching_enabled() -> bool:
++    """True when the user has enabled OpenRouter prompt caching.
++
++    Resolved at call time so Settings UI changes take effect without a
++    process restart. Imported lazily to avoid a circular import with config.
++    """
++    try:
++        from config import get_stage_tunable
++        return bool(get_stage_tunable('enable_prompt_caching'))
++    except Exception:
++        return False
++
++
++def _with_cache_control(system_message: Dict[str, Any]) -> Dict[str, Any]:
++    """Return a copy of ``system_message`` annotated for OpenRouter caching.
++
++    OpenRouter (and the upstream OpenAI Chat Completions API) honour the
++    ``cache_control: {"type": "ephemeral"}`` field on content blocks. We
++    only annotate the system prompt because (a) it's identical across
++    every window of a single episode -- the maximum possible hit rate --
++    and (b) the per-window transcript content varies so a cache key on
++    it would rarely hit in practice. Annotated as a content list (the
++    schema the OpenAI SDK accepts) so the same payload works for both
++    providers.
++    """
++    return {
++        'role': system_message['role'],
++        'content': [
++            {
++                'type': 'text',
++                'text': system_message['content'],
++                'cache_control': {'type': 'ephemeral'},
++            }
++        ],
++    }
++
++
+ def _log_content(label: str, content: str, max_length: int = 2000):
+     """Log LLM content at DEBUG level with intelligent truncation.
+ 
+@@ -631,13 +669,15 @@ class OpenAICompatibleClient(LLMClient):
+         base_url: Optional[str] = None,
+         api_key: Optional[str] = None,
+         default_model: Optional[str] = None,
+-        extra_headers: Optional[Dict[str, str]] = None
++        extra_headers: Optional[Dict[str, str]] = None,
++        openrouter_provider: Optional[Dict[str, Any]] = None,
+     ):
+         super().__init__()
+         self.base_url = base_url or os.environ.get('OPENAI_BASE_URL', DEFAULT_OPENAI_BASE_URL)
+         self.api_key = api_key or get_effective_openai_api_key()
+         self.default_model = default_model or os.environ.get('OPENAI_MODEL', 'claude-sonnet-4-5-20250929')
+         self.extra_headers = extra_headers or {}
++        self.openrouter_provider = openrouter_provider
+         self._client = None
+         # Cache which token parameter each model accepts: "max_completion_tokens" or "max_tokens"
+         # Per-instance to avoid cross-contamination between clients with different base_urls
+@@ -691,7 +731,10 @@ class OpenAICompatibleClient(LLMClient):
+         self._check_circuit_breaker()
+         self._ensure_client()
+ 
+-        all_messages = [{"role": "system", "content": system}] + messages
++        system_message = {"role": "system", "content": system}
++        if _prompt_caching_enabled():
++            system_message = _with_cache_control(system_message)
++        all_messages = [system_message] + messages
+ 
+         eff_max, eff_temp, eff_reasoning = _apply_pass_fallback(
+             episode_id, pass_name, max_tokens, temperature, reasoning_effort
+@@ -724,8 +767,14 @@ class OpenAICompatibleClient(LLMClient):
+                 else:
+                     kw["response_format"] = response_format
+             reasoning_kwargs = translate_reasoning_effort(active_provider, reasoning)
+-            # extra_body merges if a caller already supplied one; we don't, so direct update is fine.
+-            kw.update(reasoning_kwargs)
++            for key, val in reasoning_kwargs.items():
++                if key != 'extra_body':
++                    kw[key] = val
++            extra_body = dict(reasoning_kwargs.get('extra_body') or {})
++            if self.openrouter_provider:
++                extra_body['provider'] = self.openrouter_provider
++            if extra_body:
++                kw['extra_body'] = extra_body
+             return kw
+ 
+         def _send(tok, tmp, reasoning):
+@@ -756,12 +805,23 @@ class OpenAICompatibleClient(LLMClient):
+         finish_reason = getattr(response.choices[0], 'finish_reason', None) if response.choices else None
+         self._warn_if_truncated(finish_reason, eff_max, model)
+ 
++        # Extract prompt-cache read tokens when the provider surfaces them.
++        # OpenRouter populates response.usage.prompt_tokens_details.cached_tokens
++        # on every response; other gateways may not. The cost calculator is
++        # intentionally cache-unaware (it would need a per-model cache-read
++        # price table), so cached_input_tokens is reported for visibility only.
++        cached_input_tokens = 0
++        if response.usage is not None:
++            details = getattr(response.usage, 'prompt_tokens_details', None)
++            cached_input_tokens = int(getattr(details, 'cached_tokens', 0) or 0)
++
+         llm_response = LLMResponse(
+             content=content,
+             model=model,
+             usage={
+                 'input_tokens': response.usage.prompt_tokens,
+-                'output_tokens': response.usage.completion_tokens
++                'output_tokens': response.usage.completion_tokens,
++                'cached_input_tokens': cached_input_tokens,
+             } if response.usage else None,
+             raw_response=response
+         )
+@@ -769,11 +829,14 @@ class OpenAICompatibleClient(LLMClient):
+         # Log response
+         _log_content("OpenAI response", content)
+         if llm_response.usage:
++            cache_note = (
++                f" cached={cached_input_tokens}" if cached_input_tokens else ""
++            )
+             io_logger.info(
+                 f"OpenAI response: model={llm_response.model}"
+                 f" in={llm_response.usage['input_tokens']}"
+                 f" out={llm_response.usage['output_tokens']}"
+-                f" len={len(content)}"
++                f" len={len(content)}{cache_note}"
+             )
+ 
+         self._notify_usage(llm_response)
+@@ -1203,13 +1266,17 @@ def _build_client(provider: str) -> Optional[LLMClient]:
+         return AnthropicClient()
+     elif provider == PROVIDER_OPENROUTER:
+         api_key = get_effective_openrouter_api_key() or 'not-needed'
++        or_provider = get_openrouter_provider_config()
++        if or_provider:
++            logger.info("OpenRouter provider routing active: %s", or_provider)
+         return OpenAICompatibleClient(
+             base_url=OPENROUTER_BASE_URL,
+             api_key=api_key,
+             extra_headers={
+                 'HTTP-Referer': OPENROUTER_HTTP_REFERER,
+                 'X-Title': OPENROUTER_APP_TITLE,
+-            }
++            },
++            openrouter_provider=or_provider,
+         )
+     elif provider in PROVIDERS_NON_ANTHROPIC:
+         raw_base_url = get_effective_base_url()
 diff --git a/src/main_app/processing.py b/src/main_app/processing.py
-index 8b9ae7f8..71d5c0f2 100644
+index 32a433ac..cce6c193 100644
 --- a/src/main_app/processing.py
 +++ b/src/main_app/processing.py
-@@ -243,7 +243,20 @@ def _download_and_transcribe(slug, episode_id, episode_url, podcast_name):
- 
+@@ -31,6 +31,7 @@ from config import (
+     AUDIO_CUE_SNAP_CONFIDENCE, AUDIO_CUE_PAIR_CONFIDENCE,
+     AUDIO_CUE_PAIR_MIN_BREAK_SECONDS, AUDIO_CUE_PAIR_MAX_BREAK_SECONDS,
+     AUDIO_CUE_PAIR_MAX_BREAK_FRACTION, AUDIO_CUE_PAIR_ORIENT_WINDOW_SECONDS,
++    get_stage_tunable,
+ )
+ from llm_capabilities import (
+     PASS_AD_DETECTION_1, PASS_AD_DETECTION_2,
+@@ -285,8 +286,18 @@ def _download_and_transcribe(slug, episode_id, episode_url, podcast_name):
          status_service.update_job_stage("pass1:transcribing", 20)
          audio_logger.info(f"[{slug}:{episode_id}] Starting transcription")
--        segments = transcriber.transcribe_chunked(audio_path, podcast_name=podcast_name)
+         language_override = get_feed_language_override(db, slug)
 +
 +        def _transcribe_chunk_progress(done: int, total: int) -> None:
-+            # Reserve 20-25% of the pass-1 bar for chunked Whisper work so the
-+            # UI doesn't sit on a static "Starting transcription" for an hour.
 +            pct = 20.0 + (5.0 * done / max(total, 1))
 +            status_service.update_job_stage(
 +                f"pass1:transcribing {done}/{total}", pct,
 +            )
 +
-+        segments = transcriber.transcribe_chunked(
+         segments = transcriber.transcribe_chunked(
+-            audio_path, podcast_name=podcast_name, language_override=language_override,
 +            audio_path,
 +            podcast_name=podcast_name,
++            language_override=language_override,
 +            progress_callback=_transcribe_chunk_progress,
-+        )
+         )
          if not segments:
              raise Exception("Failed to transcribe audio")
- 
-@@ -380,7 +393,7 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
+@@ -511,7 +522,7 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
      """Append heuristic pre/post-roll and VAD-gap ads to ``all_ads`` in place."""
      if not segments:
          return
@@ -153,7 +535,7 @@ index 8b9ae7f8..71d5c0f2 100644
      preroll_ad = detect_preroll(segments, all_ads, podcast_name=podcast_name,
                                  skip_patterns=skip_patterns)
      if preroll_ad:
-@@ -392,6 +405,14 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
+@@ -523,6 +534,14 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
          all_ads.append(postroll_ad)
          audio_logger.info(f"[{slug}:{episode_id}] Heuristic post-roll: {postroll_ad['start']:.1f}s-{postroll_ad['end']:.1f}s")
  
@@ -168,16 +550,25 @@ index 8b9ae7f8..71d5c0f2 100644
      # VAD-gap detection (head/mid/tail)
      if _vad_gap_enabled(db):
          from vad_gap_detector import detect_vad_gaps
-@@ -451,7 +472,7 @@ def _gate_validation_by_confidence(slug, episode_id, validation_ads, min_cut_con
+@@ -582,7 +601,7 @@ def _gate_validation_by_confidence(slug, episode_id, validation_ads, min_cut_con
  
  def _refine_and_validate(slug, episode_id, all_ads, segments, audio_path,
                            episode_description, episode_duration, min_cut_confidence,
--                          podcast_name, skip_patterns=False):
-+                          podcast_name, skip_patterns=False, db=None):
+-                          podcast_name, skip_patterns=False, positional_prior=None):
++podcast_name, skip_patterns=False, positional_prior=None, db=None):
      """Pipeline stage: Refine ad boundaries, detect rolls, validate, gate by confidence.
  
      Returns (ads_to_remove, all_ads_with_validation).
-@@ -1144,7 +1165,10 @@ def _log_completion_summary(slug, episode_id, ads_to_remove, original_duration,
+@@ -1461,7 +1480,7 @@ def _log_completion_summary(slug, episode_id, pass1_cut_count, *, verification_c
+         if time_saved > 0:
+             db.increment_total_time_saved(time_saved)
+         audio_logger.info(
+-            f"[{slug}:{episode_id}] Complete: {original_duration/60:.1f}->{new_duration/60:.1f}min, "
++            f"[{slug}:{episode_id}] Complete: {(original_duration or 0)/60:.1f}->{(new_duration or 0)/60:.1f}min, "
+             f"{total_cuts} ads removed, {processing_time:.1f}s"
+         )
+     else:
+@@ -1475,7 +1494,10 @@ def _log_completion_summary(slug, episode_id, pass1_cut_count, *, verification_c
      mem_info = get_available_memory_gb()
      if mem_info is not None:
          mem_val, mem_desc = mem_info
@@ -189,7 +580,7 @@ index 8b9ae7f8..71d5c0f2 100644
  
      return token_totals
  
-@@ -1324,7 +1348,8 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+@@ -1891,7 +1913,8 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
          mem_info = get_available_memory_gb()
          if mem_info is not None:
              mem_val, mem_desc = mem_info
@@ -199,59 +590,94 @@ index 8b9ae7f8..71d5c0f2 100644
          min_cut_confidence = get_min_cut_confidence()
          audio_logger.info(f"[{slug}:{episode_id}] Confidence threshold: {min_cut_confidence:.0%}")
  
-@@ -1394,7 +1419,7 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+@@ -1972,7 +1995,7 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
              ads_to_remove, all_ads_with_validation = _refine_and_validate(
                  slug, episode_id, all_ads, segments, audio_path,
                  episode_description, episode_duration, min_cut_confidence, podcast_name,
--                skip_patterns=skip_patterns
-+                skip_patterns=skip_patterns, db=db
+-                skip_patterns=skip_patterns, positional_prior=positional_prior
++skip_patterns=skip_patterns, positional_prior=positional_prior, db=db
              )
              _check_cancel(cancel_event, slug, episode_id)
  
-@@ -1428,21 +1453,27 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+@@ -2011,7 +2034,7 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+             if not result:
+                 raise Exception(
+                     f"FFMPEG processing failed for {len(ads_to_remove)} ad segments "
+-                    f"({episode_duration / 60:.1f}min episode) - see audio processor logs above"
++                    f"({(episode_duration or 0) / 60:.1f}min episode) - see audio processor logs above"
+                 )
+             processed_path, applied_cuts = result
+ 
+@@ -2040,27 +2063,38 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
              original_duration = episode_duration
              _check_cancel(cancel_event, slug, episode_id)
  
 -            # Stage 6: Verification pass
--            current_pass = "pass2"
--            verification_count, v_ads_for_ui, processed_path = _run_verification_pass(
--                ctx, processed_path, ads_to_remove,
++# Stage 6: Verification pass.
++            # Skip when the episode is shorter than the user-configured
++            # threshold. Short episodes rarely have ads that survive pass 1
++            # (the pre-roll / mid-roll / post-roll coverage in the detector
++            # is sized to catch them), and verification doubles the LLM cost
++            # on those episodes for near-zero yield. 0 disables the skip.
+             current_pass = "pass2"
+-            verification_count, v_ads_for_ui, processed_path, verification_cue_count = _run_verification_pass(
+-                ctx, processed_path, applied_cuts,
 -                skip_patterns, min_cut_confidence,
 -                local_audio_processor, detection_progress_callback,
 -                original_segments=segments,
+-                # LLM-only reprocess maps the saved transcript through the cuts
+-                # for pass 2 instead of re-transcribing (issue #349).
+-                reuse_transcript=(reprocess_mode == 'llm'),
 -            )
--            _check_cancel(cancel_event, slug, episode_id)
-+            # Stage 6: Verification pass (skip if SKIP_VERIFICATION is set)
-+            skip_verification = os.environ.get('SKIP_VERIFICATION', 'true').lower() == 'true'
-+            verification_count = 0
-+            v_ads_for_ui = []
-+            if not skip_verification:
-+                current_pass = "pass2"
-+                verification_count, v_ads_for_ui, processed_path = _run_verification_pass(
-+                    ctx, processed_path, ads_to_remove,
+-            # Detection-event accounting, not unique cues (issue #350): a cue
+-            # in a region pass 1 left in the audio is re-detected here and
+-            # intentionally counts twice.
++            skip_under = get_stage_tunable('skip_verification_under_seconds')
++            if skip_under > 0 and episode_duration < skip_under:
++                audio_logger.info(
++                    f"[{slug}:{episode_id}] Skipping verification pass: "
++                    f"episode {episode_duration:.0f}s is below "
++                    f"skip_verification_under_seconds={skip_under:.0f}s threshold"
++                )
++                verification_count, v_ads_for_ui, processed_path, verification_cue_count = 0, [], processed_path, 0
++            else:
++                verification_count, v_ads_for_ui, processed_path, verification_cue_count = _run_verification_pass(
++                    ctx, processed_path, applied_cuts,
 +                    skip_patterns, min_cut_confidence,
 +                    local_audio_processor, detection_progress_callback,
 +                    original_segments=segments,
++                    reuse_transcript=(reprocess_mode == 'llm'),
 +                )
-+                _check_cancel(cancel_event, slug, episode_id)
++                # Merge pass 2 ads into combined list for UI
++                if v_ads_for_ui:
++                    all_ads_with_validation = list(all_ads_with_validation) + v_ads_for_ui
++                    all_ads_with_validation.sort(key=lambda x: x['start'])
++                    storage.save_combined_ads(slug, episode_id, all_ads_with_validation)
+             audio_cue_count += verification_cue_count
+             _check_cancel(cancel_event, slug, episode_id)
+ 
+             # Stage 6b: Optional loudness normalization (second ffmpeg pass).
+-            # Applied only to the FINAL settled output so the cut path
+-            # (filter_complex) and the ad-detection audio analyzers see
+-            # uncompressed dynamics.
+             normalize_raw = db.get_setting('audio_normalize_enabled')
+             if (normalize_raw or 'false').lower() == 'true':
+                 intensity = db.get_setting('audio_normalize_intensity') or 'normal'
+@@ -2085,12 +2119,6 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+                     )
+             _check_cancel(cancel_event, slug, episode_id)
  
 -            # Merge pass 2 ads into combined list for UI
 -            if v_ads_for_ui:
 -                all_ads_with_validation = list(all_ads_with_validation) + v_ads_for_ui
 -                all_ads_with_validation.sort(key=lambda x: x['start'])
 -                storage.save_combined_ads(slug, episode_id, all_ads_with_validation)
-+                # Merge pass 2 ads into combined list for UI
-+                if v_ads_for_ui:
-+                    all_ads_with_validation = list(all_ads_with_validation) + v_ads_for_ui
-+                    all_ads_with_validation.sort(key=lambda x: x['start'])
-+                    storage.save_combined_ads(slug, episode_id, all_ads_with_validation)
-+            else:
-+                audio_logger.info(f"[{slug}:{episode_id}] Verification pass skipped (SKIP_VERIFICATION=true)")
- 
+-
              new_duration = local_audio_processor.get_audio_duration(processed_path)
  
+             existing_episode = db.get_episode(slug, episode_id) or {}
 diff --git a/src/roll_detector.py b/src/roll_detector.py
-index 89618058..eb949f10 100644
+index f21e8721..87a31f5c 100644
 --- a/src/roll_detector.py
 +++ b/src/roll_detector.py
 @@ -56,10 +56,17 @@ AD_INDICATOR_PATTERNS = [
@@ -306,7 +732,7 @@ index 89618058..eb949f10 100644
      # Check if region is already covered
      if _region_covered(episode_start, show_start_time, existing_ads):
          return None
-@@ -230,3 +259,69 @@ def detect_postroll(
+@@ -234,3 +263,69 @@ def detect_postroll(
          'reason': f'Post-roll ad ({match_count} ad indicators after sign-off)',
          'detection_stage': 'heuristic_postroll',
      }
@@ -377,10 +803,10 @@ index 89618058..eb949f10 100644
 +        'detection_stage': 'heuristic_tail_gap',
 +    }
 diff --git a/src/storage.py b/src/storage.py
-index 4b73666e..d0ba2aac 100644
+index 0eecac18..143a4b82 100644
 --- a/src/storage.py
 +++ b/src/storage.py
-@@ -113,7 +113,8 @@ class Storage:
+@@ -118,7 +118,8 @@ class Storage:
          # /app/data is the in-container default.
          if data_dir is None:
              data_dir = (
@@ -391,19 +817,20 @@ index 4b73666e..d0ba2aac 100644
                  or "/app/data"
              )
 diff --git a/src/transcriber.py b/src/transcriber.py
-index 025b9249..34be4eae 100644
+index 176c113b..0ab0a402 100644
 --- a/src/transcriber.py
 +++ b/src/transcriber.py
-@@ -6,7 +6,7 @@ import re
+@@ -6,7 +6,8 @@ import re
  import subprocess
- import hashlib
  import requests
+ from concurrent.futures import ThreadPoolExecutor, as_completed
 -from typing import List, Dict, Optional, Tuple
 +from typing import Callable, List, Dict, Optional, Tuple
- from pathlib import Path
++from pathlib import Path
  
  from utils.audio import get_audio_duration
-@@ -636,9 +636,17 @@ class Transcriber:
+ from utils.time import format_vtt_timestamp
+@@ -717,9 +718,17 @@ class Transcriber:
                  logger.error("Whisper API base URL not configured")
                  return None
  
@@ -424,172 +851,780 @@ index 025b9249..34be4eae 100644
  
              # After preprocessing, compress to FLAC for upload (lossless, ~4-5x smaller than WAV).
              # Prevents 413 errors from APIs with tight upload limits (e.g. OpenRouter).
-@@ -1351,7 +1359,12 @@ class Transcriber:
-                 except OSError:
+@@ -1398,396 +1407,405 @@ class Transcriber:
                      pass
  
--    def transcribe_chunked(self, audio_path: str, podcast_name: str = None) -> List[Dict]:
-+    def transcribe_chunked(
-+        self,
-+        audio_path: str,
-+        podcast_name: str = None,
-+        progress_callback: Optional[Callable[[int, int], None]] = None,
-+    ) -> List[Dict]:
-         """Transcribe audio files with dynamic chunking to prevent OOM errors.
- 
-         This method:
-@@ -1413,6 +1426,8 @@ class Transcriber:
-             f"Starting chunked transcription: {duration/60:.1f} min audio in ~{num_chunks} chunks "
-             f"(chunk_size={chunk_duration/60:.0f}min, overlap={overlap}s) - {memory_reason}"
-         )
-+        if progress_callback:
-+            progress_callback(0, num_chunks)
- 
-         all_segments = []
-         chunk_start = 0
-@@ -1445,6 +1460,10 @@ class Transcriber:
-             )
- 
-             # Extract chunk using ffmpeg
-+            logger.info(
-+                f"Extracting audio chunk {chunk_num + 1}/{num_chunks} "
-+                f"({chunk_start/60:.1f}-{chunk_end_with_overlap/60:.1f} min)"
-+            )
-             chunk_path = extract_audio_chunk(audio_path, chunk_start, chunk_end_with_overlap)
-             if not chunk_path:
-                 logger.error(f"Failed to extract chunk {chunk_num + 1}")
-@@ -1499,6 +1518,8 @@ class Transcriber:
-                     f"Chunk {chunk_num} complete: {len(chunk_segments)} segments "
-                     f"(total: {len(all_segments)})"
+     def _transcribe_chunked_parallel_api(
+-        self,
+-        audio_path: str,
+-        podcast_name: Optional[str],
+-        duration: float,
+-        whisper_settings: Dict[str, str],
+-        language_override: Optional[str] = None,
+-    ) -> Optional[List[Dict]]:
+-        """Parallel chunked transcription for remote API backends.
+-
+-        Submits all chunks to a ThreadPoolExecutor; preserves chronological
+-        ordering at merge time so merge_overlapping_segments dedupes the
+-        overlap zone exactly as in the sequential path. Failure tolerance
+-        matches the sequential loop (~20% chunks may fail before abort).
+-        """
+-        chunk_settings = _get_chunk_settings()
+-        chunk_duration = chunk_settings['max_chunk_seconds']
+-        overlap = chunk_settings['chunk_overlap_seconds']
+-        max_workers = chunk_settings['concurrent_chunks']
+-
+-        # Single-shot if entire audio fits in one chunk
+-        if duration <= chunk_duration:
+-            logger.info(
+-                f"Audio duration {duration/60:.1f}min fits in one chunk "
+-                f"({chunk_duration}s), single-shot API transcription"
+-            )
+-            return self.transcribe(audio_path, podcast_name, language_override=language_override)
+-
+-        # Build chunk plan: list of (idx, start, end_with_overlap)
+-        plan: List[Tuple[int, float, float]] = []
+-        chunk_start = 0.0
+-        idx = 0
+-        while chunk_start < duration:
+-            chunk_end = min(chunk_start + chunk_duration, duration)
+-            chunk_end_with_overlap = (
+-                min(chunk_end + overlap, duration)
+-                if chunk_end < duration else chunk_end
+-            )
+-            plan.append((idx, chunk_start, chunk_end_with_overlap))
+-            idx += 1
+-            chunk_start = chunk_end
+-
+-        num_chunks = len(plan)
+-        max_failed_chunks = max(1, num_chunks // 5)
+-        logger.info(
+-            f"Starting parallel chunked transcription: {duration/60:.1f} min "
+-            f"in {num_chunks} chunks (chunk_size={chunk_duration}s, "
+-            f"overlap={overlap}s, workers={max_workers})"
+-        )
+-
+-        def _process_chunk(chunk_idx: int, c_start: float, c_end: float):
+-            chunk_path = extract_audio_chunk(audio_path, c_start, c_end)
+-            if not chunk_path:
+-                logger.error(f"Chunk {chunk_idx + 1}: ffmpeg extract failed")
+-                return chunk_idx, None
+-            try:
+-                segs = self._transcribe_via_api(
+-                    chunk_path, podcast_name, whisper_settings,
+-                    language_override=language_override,
+-                )
+-                if segs is None:
+-                    return chunk_idx, None
+-                # Adjust timestamps to be relative to full audio
+-                for seg in segs:
+-                    seg['start'] += c_start
+-                    seg['end'] += c_start
+-                    if seg.get('words'):
+-                        for word in seg['words']:
+-                            word['start'] += c_start
+-                            word['end'] += c_start
+-                return chunk_idx, segs
+-            except Exception as e:
+-                logger.error(f"Chunk {chunk_idx + 1} failed: {e}")
+-                return chunk_idx, None
+-            finally:
+-                if chunk_path and os.path.exists(chunk_path):
+-                    try:
+-                        os.unlink(chunk_path)
+-                    except OSError:
+-                        pass
+-
+-        results: List[Optional[List[Dict]]] = [None] * num_chunks
+-        failed = 0
+-        # Managed manually (not `with`) so an early abort can return promptly:
+-        # a `with` block's __exit__ calls shutdown(wait=True), which would
+-        # re-block on the in-flight workers and defeat the short-circuit.
+-        exe = ThreadPoolExecutor(max_workers=max_workers)
+-        try:
+-            futures = [
+-                exe.submit(_process_chunk, i, s, e) for i, s, e in plan
+-            ]
+-            for completed, fut in enumerate(as_completed(futures), 1):
+-                chunk_idx, segs = fut.result()
+-                results[chunk_idx] = segs
+-                if segs is None:
+-                    failed += 1
++            self,
++            audio_path: str,
++            podcast_name: Optional[str],
++            duration: float,
++            whisper_settings: Dict[str, str],
++            language_override: Optional[str] = None,
++        ) -> Optional[List[Dict]]:
++            """Parallel chunked transcription for remote API backends.
++    
++            Submits all chunks to a ThreadPoolExecutor; preserves chronological
++            ordering at merge time so merge_overlapping_segments dedupes the
++            overlap zone exactly as in the sequential path. Failure tolerance
++            matches the sequential loop (~20% chunks may fail before abort).
++            """
++            chunk_settings = _get_chunk_settings()
++            chunk_duration = chunk_settings['max_chunk_seconds']
++            overlap = chunk_settings['chunk_overlap_seconds']
++            max_workers = chunk_settings['concurrent_chunks']
++    
++            # Single-shot if entire audio fits in one chunk
++            if duration <= chunk_duration:
+                 logger.info(
+-                    f"Chunk {chunk_idx + 1} complete "
+-                    f"({completed}/{num_chunks}): "
+-                    f"{len(segs) if segs else 0} segments"
++                    f"Audio duration {duration/60:.1f}min fits in one chunk "
++                    f"({chunk_duration}s), single-shot API transcription"
                  )
-+                if progress_callback:
-+                    progress_callback(chunk_num, num_chunks)
- 
-                 # Move to next chunk
-                 chunk_start = chunk_end
-diff --git a/src/config.py b/src/config.py
-index e048dc06..d3caa9b3 100644
---- a/src/config.py
-+++ b/src/config.py
-@@ -231,6 +231,56 @@ OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1'
- OPENROUTER_HTTP_REFERER = 'https://github.com/ttlequals0/minuspod'
- OPENROUTER_APP_TITLE = 'MinusPod'
- 
-+
-+def _parse_csv_env_list(raw: str) -> list[str]:
-+    return [part.strip() for part in raw.split(',') if part.strip()]
-+
-+
-+def _parse_bool_env(name: str, default: Optional[bool] = None) -> Optional[bool]:
-+    raw = os.environ.get(name)
-+    if raw is None:
-+        return default
-+    return str(raw).strip().lower() in ('true', '1', 'yes')
-+
-+
-+def get_openrouter_provider_config() -> Optional[dict]:
-+    """Build OpenRouter ``provider`` routing object from environment.
-+
-+    See https://openrouter.ai/docs/guides/routing/provider-selection
-+
-+    Env vars:
-+        OPENROUTER_PROVIDER_ORDER: comma-separated provider slugs to try in order
-+            (e.g. ``GMICloud,Novita,Alibaba`` — copy exact slugs from the model's
-+            Providers tab on openrouter.ai).
-+        OPENROUTER_ALLOW_FALLBACKS: ``true``/``false``. Defaults to ``false`` when
-+            ``OPENROUTER_PROVIDER_ORDER`` is set, otherwise unset (OpenRouter default).
-+        OPENROUTER_PROVIDER_SORT: ``price``, ``throughput``, or ``latency``.
-+        OPENROUTER_PROVIDER_ONLY: comma-separated allow-list of provider slugs.
-+        OPENROUTER_PROVIDER_IGNORE: comma-separated deny-list of provider slugs.
-+    """
-+    order_raw = os.environ.get('OPENROUTER_PROVIDER_ORDER', '').strip()
-+    sort_raw = os.environ.get('OPENROUTER_PROVIDER_SORT', '').strip()
-+    only_raw = os.environ.get('OPENROUTER_PROVIDER_ONLY', '').strip()
-+    ignore_raw = os.environ.get('OPENROUTER_PROVIDER_IGNORE', '').strip()
-+
-+    provider: dict = {}
-+    if order_raw:
-+        provider['order'] = _parse_csv_env_list(order_raw)
-+    if only_raw:
-+        provider['only'] = _parse_csv_env_list(only_raw)
-+    if ignore_raw:
-+        provider['ignore'] = _parse_csv_env_list(ignore_raw)
-+    if sort_raw:
-+        provider['sort'] = sort_raw
-+
-+    allow_fb = _parse_bool_env('OPENROUTER_ALLOW_FALLBACKS')
-+    if allow_fb is not None:
-+        provider['allow_fallbacks'] = allow_fb
-+    elif order_raw:
-+        provider['allow_fallbacks'] = False
-+
-+    return provider or None
-+
- MASTER_PASSPHRASE = os.environ.get('MINUSPOD_MASTER_PASSPHRASE')
- 
- 
-diff --git a/src/llm_client.py b/src/llm_client.py
-index 2eaf33ed..2e8dd871 100644
---- a/src/llm_client.py
-+++ b/src/llm_client.py
-@@ -47,6 +47,7 @@ from config import (
-     PROVIDER_OPENAI_COMPATIBLE,
-     PROVIDER_OLLAMA,
-     PROVIDERS_NON_ANTHROPIC,
-+    get_openrouter_provider_config,
- )
- from llm_capabilities import (
-     get_pass_defaults,
-@@ -627,13 +628,15 @@ class OpenAICompatibleClient(LLMClient):
-         base_url: Optional[str] = None,
-         api_key: Optional[str] = None,
-         default_model: Optional[str] = None,
--        extra_headers: Optional[Dict[str, str]] = None
-+        extra_headers: Optional[Dict[str, str]] = None,
-+        openrouter_provider: Optional[Dict[str, Any]] = None,
-     ):
-         super().__init__()
-         self.base_url = base_url or os.environ.get('OPENAI_BASE_URL', 'http://localhost:8000/v1')
-         self.api_key = api_key or get_effective_openai_api_key()
-         self.default_model = default_model or os.environ.get('OPENAI_MODEL', 'claude-sonnet-4-5-20250929')
-         self.extra_headers = extra_headers or {}
-+        self.openrouter_provider = openrouter_provider
-         self._client = None
-         # Cache which token parameter each model accepts: "max_completion_tokens" or "max_tokens"
-         # Per-instance to avoid cross-contamination between clients with different base_urls
-@@ -720,8 +723,14 @@ class OpenAICompatibleClient(LLMClient):
+-                # Short-circuit like the sequential path: once the failure
+-                # budget is blown the run can't succeed, so stop instead of
+-                # burning a full HTTP timeout on each remaining doomed chunk.
+-                # Returning here still runs the finally below (pool shutdown).
+-                if failed > max_failed_chunks:
+-                    logger.error(
+-                        f"Too many failed chunks ({failed} > {max_failed_chunks}); "
+-                        f"aborting transcription early"
+-                    )
+-                    return None
+-        finally:
+-            # wait=False: return without blocking on in-flight workers (they
+-            # finish in the background and self-clean temp files via
+-            # _process_chunk's finally). cancel_futures drops queued chunks.
+-            exe.shutdown(wait=False, cancel_futures=True)
+-
+-        # Merge in chronological order so merge_overlapping_segments
+-        # dedupes overlap zones the same way the sequential path does.
+-        all_segments: List[Dict] = []
+-        failed_chunks: List[Tuple[float, float]] = []
+-        for chunk_idx, c_start, c_end in plan:
+-            chunk_segs = results[chunk_idx]
+-            if chunk_segs is None:
+-                failed_chunks.append((c_start, c_end))
+-                continue
+-            if not all_segments:
+-                all_segments = chunk_segs
+-            else:
+-                all_segments = merge_overlapping_segments(
+-                    all_segments, chunk_segs, c_start, overlap
++                return self.transcribe(audio_path, podcast_name, language_override=language_override)
++    
++            # Build chunk plan: list of (idx, start, end_with_overlap)
++            plan: List[Tuple[int, float, float]] = []
++            chunk_start = 0.0
++            idx = 0
++            while chunk_start < duration:
++                chunk_end = min(chunk_start + chunk_duration, duration)
++                chunk_end_with_overlap = (
++                    min(chunk_end + overlap, duration)
++                    if chunk_end < duration else chunk_end
+                 )
+-
+-        # The as_completed loop above already aborts (returns None) once the
+-        # failure budget is blown, so by here failures are within budget; the
+-        # surviving failed_chunks only feed the gap-summary log below.
+-        original_count = len(all_segments)
+-        all_segments = self.filter_hallucinations(all_segments)
+-        if len(all_segments) < original_count:
+-            logger.info(
+-                f"Filtered {original_count - len(all_segments)} "
+-                f"hallucination segments after merge"
+-            )
+-
+-        duration_min = all_segments[-1]['end'] / 60 if all_segments else 0
+-        if failed_chunks:
+-            gap_summary = ", ".join(
+-                f"{s/60:.1f}-{e/60:.1f}min" for s, e in failed_chunks
+-            )
+-            logger.warning(
+-                f"Parallel chunked transcription complete with "
+-                f"{len(failed_chunks)} gap(s): {gap_summary}. "
+-                f"Partial transcript returned."
+-            )
+-        logger.info(
+-            f"Parallel chunked transcription complete: "
+-            f"{len(all_segments)} segments, {duration_min:.1f} minutes "
+-            f"from {num_chunks} chunks"
+-        )
+-        return all_segments
+-
+-    def transcribe_chunked(
+-        self,
+-        audio_path: str,
+-        podcast_name: str = None,
+-        language_override: Optional[str] = None,
+-    ) -> List[Dict]:
+-        """Transcribe audio files with dynamic chunking to prevent OOM errors.
+-
+-        This method:
+-        1. Checks available memory and model size to calculate optimal chunk duration
+-        2. Processes audio in appropriately-sized chunks
+-        3. Catches OOM errors and retries with smaller chunks
+-        4. Clears GPU memory between chunks to limit peak usage
+-
+-        Args:
+-            audio_path: Path to the audio file to transcribe
+-            podcast_name: Optional podcast name for context-aware prompting
+-            language_override: Optional per-feed language; when set, takes
+-                precedence over the global whisper_language setting for this
+-                call only (forwarded to each chunk's transcribe()).
+-
+-        Returns:
+-            List of transcript segments with timestamps, or None on failure
+-        """
+-        # Get audio duration
+-        duration = self.get_audio_duration(audio_path)
+-        if duration is None:
+-            logger.error("Cannot determine audio duration for chunked transcription")
+-            return None
+-
+-        # Branch to parallel path for remote API backends - no GPU or
+-        # WhisperModelSingleton constraints, so chunks can run concurrently.
+-        whisper_settings = _get_whisper_settings()
+-        if whisper_settings['backend'] == WHISPER_BACKEND_API:
+-            return self._transcribe_chunked_parallel_api(
+-                audio_path, podcast_name, duration, whisper_settings,
+-                language_override=language_override,
+-            )
+-
+-        # Get current model and device for memory calculation
+-        model_name = WhisperModelSingleton.get_configured_model()
+-        device = os.getenv("WHISPER_DEVICE", "cpu")
+-
+-        # Calculate optimal chunk duration based on available memory
+-        chunk_duration, memory_reason = calculate_optimal_chunk_duration(
+-            model_name, device, whisper_backend=whisper_settings['backend']
+-        )
+-        overlap = CHUNK_OVERLAP_SECONDS
+-
+-        # If calculated chunk can handle the entire audio, try regular transcription first
+-        if duration <= chunk_duration:
+-            logger.info(
+-                f"Audio duration {duration/60:.1f}min fits in calculated chunk "
+-                f"({chunk_duration/60:.0f}min), trying regular transcription"
+-            )
+-            try:
+-                result = self.transcribe(audio_path, podcast_name, language_override=language_override)
+-                if result is not None:
+-                    return result
+-                # If transcribe returns None but didn't raise, fall through to chunked
+-                logger.warning("Regular transcription returned None, falling back to chunked")
+-            except Exception as e:
+-                error_str = str(e).lower()
+-                if 'out of memory' in error_str or 'oom' in error_str or 'cuda' in error_str:
+-                    logger.warning(f"OOM during regular transcription, falling back to chunked: {e}")
+-                    # Reduce chunk size for chunked attempt
+-                    chunk_duration = max(CHUNK_MIN_DURATION_SECONDS, chunk_duration // 2)
+-                    clear_gpu_memory()
+-                    WhisperModelSingleton.unload_model()
+-                else:
+-                    raise
+-
+-        # Calculate number of chunks
+-        num_chunks = max(1, int((duration - overlap) // (chunk_duration - overlap)) + 1)
+-        logger.info(
+-            f"Starting chunked transcription: {duration/60:.1f} min audio in ~{num_chunks} chunks "
+-            f"(chunk_size={chunk_duration/60:.0f}min, overlap={overlap}s) - {memory_reason}"
+-        )
+-
+-        all_segments = []
+-        chunk_start = 0
+-        chunk_num = 0
+-        oom_retry_count = 0
+-        max_oom_retries = 3
+-        failed_chunks: list[tuple[float, float]] = []
+-        # Tolerate a minority of failed chunks (e.g. flaky remote Whisper API)
+-        # rather than aborting the whole episode. Cap at ~20% of expected chunks.
+-        max_failed_chunks = max(1, num_chunks // 5)
+-
+-        while chunk_start < duration:
+-            # Calculate chunk end with overlap for next chunk
+-            chunk_end = min(chunk_start + chunk_duration, duration)
+-
+-            # For all but the last chunk, add overlap
+-            if chunk_end < duration:
+-                chunk_end_with_overlap = min(chunk_end + overlap, duration)
+-            else:
+-                chunk_end_with_overlap = chunk_end
+-
+-            # Recalculate num_chunks with current chunk_duration (may have changed due to OOM)
+-            remaining_duration = duration - chunk_start
+-            remaining_chunks = max(1, int((remaining_duration - overlap) // (chunk_duration - overlap)) + 1)
+-
++                plan.append((idx, chunk_start, chunk_end_with_overlap))
++                idx += 1
++                chunk_start = chunk_end
++    
++            num_chunks = len(plan)
++            max_failed_chunks = max(1, num_chunks // 5)
+             logger.info(
+-                f"Processing chunk {chunk_num + 1} (~{remaining_chunks} remaining): "
+-                f"{chunk_start/60:.1f}-{chunk_end_with_overlap/60:.1f} min "
+-                f"(chunk_size={chunk_duration/60:.0f}min)"
++                f"Starting parallel chunked transcription: {duration/60:.1f} min "
++                f"in {num_chunks} chunks (chunk_size={chunk_duration}s, "
++                f"overlap={overlap}s, workers={max_workers})"
+             )
+-
+-            # Extract chunk using ffmpeg
+-            chunk_path = extract_audio_chunk(audio_path, chunk_start, chunk_end_with_overlap)
+-            if not chunk_path:
+-                logger.error(f"Failed to extract chunk {chunk_num + 1}")
+-                return None
+-
++    
++            def _process_chunk(chunk_idx: int, c_start: float, c_end: float):
++                chunk_path = extract_audio_chunk(audio_path, c_start, c_end)
++                if not chunk_path:
++                    logger.error(f"Chunk {chunk_idx + 1}: ffmpeg extract failed")
++                    return chunk_idx, None
++                try:
++                    segs = self._transcribe_via_api(
++                        chunk_path, podcast_name, whisper_settings,
++                        language_override=language_override,
++                    )
++                    if segs is None:
++                        return chunk_idx, None
++                    # Adjust timestamps to be relative to full audio
++                    for seg in segs:
++                        seg['start'] += c_start
++                        seg['end'] += c_start
++                        if seg.get('words'):
++                            for word in seg['words']:
++                                word['start'] += c_start
++                                word['end'] += c_start
++                    return chunk_idx, segs
++                except Exception as e:
++                    logger.error(f"Chunk {chunk_idx + 1} failed: {e}")
++                    return chunk_idx, None
++                finally:
++                    if chunk_path and os.path.exists(chunk_path):
++                        try:
++                            os.unlink(chunk_path)
++                        except OSError:
++                            pass
++    
++            results: List[Optional[List[Dict]]] = [None] * num_chunks
++            failed = 0
++            # Managed manually (not `with`) so an early abort can return promptly:
++            # a `with` block's __exit__ calls shutdown(wait=True), which would
++            # re-block on the in-flight workers and defeat the short-circuit.
++            exe = ThreadPoolExecutor(max_workers=max_workers)
+             try:
+-                # Transcribe chunk (will handle its own batch sizing and retries)
+-                chunk_segments = self.transcribe(chunk_path, podcast_name, language_override=language_override)
+-
+-                if chunk_segments is None:
+-                    failed_chunks.append((chunk_start, chunk_end_with_overlap))
+-                    logger.error(
+-                        f"Chunk {chunk_num + 1} transcription failed "
+-                        f"({chunk_start/60:.1f}-{chunk_end_with_overlap/60:.1f} min); "
+-                        f"leaving transcript gap and continuing"
++                futures = [
++                    exe.submit(_process_chunk, i, s, e) for i, s, e in plan
++                ]
++                for completed, fut in enumerate(as_completed(futures), 1):
++                    chunk_idx, segs = fut.result()
++                    results[chunk_idx] = segs
++                    if segs is None:
++                        failed += 1
++                    logger.info(
++                        f"Chunk {chunk_idx + 1} complete "
++                        f"({completed}/{num_chunks}): "
++                        f"{len(segs) if segs else 0} segments"
+                     )
+-                    if len(failed_chunks) > max_failed_chunks:
++                    # Short-circuit like the sequential path: once the failure
++                    # budget is blown the run can't succeed, so stop instead of
++                    # burning a full HTTP timeout on each remaining doomed chunk.
++                    # Returning here still runs the finally below (pool shutdown).
++                    if failed > max_failed_chunks:
+                         logger.error(
+-                            f"Too many failed chunks ({len(failed_chunks)} > {max_failed_chunks}); "
+-                            f"aborting transcription"
++                            f"Too many failed chunks ({failed} > {max_failed_chunks}); "
++                            f"aborting transcription early"
+                         )
+                         return None
+-                    chunk_num += 1
+-                    chunk_start = chunk_end
++            finally:
++                # wait=False: return without blocking on in-flight workers (they
++                # finish in the background and self-clean temp files via
++                # _process_chunk's finally). cancel_futures drops queued chunks.
++                exe.shutdown(wait=False, cancel_futures=True)
++    
++            # Merge in chronological order so merge_overlapping_segments
++            # dedupes overlap zones the same way the sequential path does.
++            all_segments: List[Dict] = []
++            failed_chunks: List[Tuple[float, float]] = []
++            for chunk_idx, c_start, c_end in plan:
++                chunk_segs = results[chunk_idx]
++                if chunk_segs is None:
++                    failed_chunks.append((c_start, c_end))
+                     continue
+-
+-                # Reset OOM retry count on success
+-                oom_retry_count = 0
+-
+-                # Adjust timestamps to be relative to full audio
+-                for seg in chunk_segments:
+-                    seg['start'] += chunk_start
+-                    seg['end'] += chunk_start
+-                    # Adjust word timestamps too if present
+-                    if seg.get('words'):
+-                        for word in seg['words']:
+-                            word['start'] += chunk_start
+-                            word['end'] += chunk_start
+-
+-                # Merge with existing segments, handling overlap deduplication
+                 if not all_segments:
+-                    all_segments = chunk_segments
++                    all_segments = chunk_segs
                  else:
-                     kw["response_format"] = response_format
-             reasoning_kwargs = translate_reasoning_effort(active_provider, reasoning)
--            # extra_body merges if a caller already supplied one; we don't, so direct update is fine.
--            kw.update(reasoning_kwargs)
-+            for key, val in reasoning_kwargs.items():
-+                if key != 'extra_body':
-+                    kw[key] = val
-+            extra_body = dict(reasoning_kwargs.get('extra_body') or {})
-+            if self.openrouter_provider:
-+                extra_body['provider'] = self.openrouter_provider
-+            if extra_body:
-+                kw['extra_body'] = extra_body
-             return kw
- 
-         def _send(tok, tmp, reasoning):
-@@ -1199,13 +1208,17 @@ def _build_client(provider: str) -> Optional[LLMClient]:
-         return AnthropicClient()
-     elif provider == PROVIDER_OPENROUTER:
-         api_key = get_effective_openrouter_api_key() or 'not-needed'
-+        or_provider = get_openrouter_provider_config()
-+        if or_provider:
-+            logger.info("OpenRouter provider routing active: %s", or_provider)
-         return OpenAICompatibleClient(
-             base_url=OPENROUTER_BASE_URL,
-             api_key=api_key,
-             extra_headers={
-                 'HTTP-Referer': OPENROUTER_HTTP_REFERER,
-                 'X-Title': OPENROUTER_APP_TITLE,
--            }
-+            },
-+            openrouter_provider=or_provider,
-         )
-     elif provider in PROVIDERS_NON_ANTHROPIC:
-         raw_base_url = get_effective_base_url()
+                     all_segments = merge_overlapping_segments(
+-                        all_segments, chunk_segments, chunk_start, overlap
++                        all_segments, chunk_segs, c_start, overlap
+                     )
+-
+-                # Increment chunk counter only after successful processing
+-                chunk_num += 1
+-
++    
++            # The as_completed loop above already aborts (returns None) once the
++            # failure budget is blown, so by here failures are within budget; the
++            # surviving failed_chunks only feed the gap-summary log below.
++            original_count = len(all_segments)
++            all_segments = self.filter_hallucinations(all_segments)
++            if len(all_segments) < original_count:
+                 logger.info(
+-                    f"Chunk {chunk_num} complete: {len(chunk_segments)} segments "
+-                    f"(total: {len(all_segments)})"
++                    f"Filtered {original_count - len(all_segments)} "
++                    f"hallucination segments after merge"
+                 )
+-
+-                # Move to next chunk
+-                chunk_start = chunk_end
+-
+-            except Exception as e:
+-                error_str = str(e).lower()
+-                is_oom = 'out of memory' in error_str or 'oom' in error_str or 'cuda' in error_str
+-
+-                if is_oom and oom_retry_count < max_oom_retries:
+-                    oom_retry_count += 1
+-                    old_chunk_duration = chunk_duration
+-                    chunk_duration = max(CHUNK_MIN_DURATION_SECONDS, chunk_duration // 2)
+-
+-                    logger.warning(
+-                        f"OOM on chunk {chunk_num + 1} (attempt {oom_retry_count}/{max_oom_retries}). "
+-                        f"Reducing chunk size: {old_chunk_duration/60:.0f}min -> {chunk_duration/60:.0f}min"
++    
++            duration_min = all_segments[-1]['end'] / 60 if all_segments else 0
++            if failed_chunks:
++                gap_summary = ", ".join(
++                    f"{s/60:.1f}-{e/60:.1f}min" for s, e in failed_chunks
++                )
++                logger.warning(
++                    f"Parallel chunked transcription complete with "
++                    f"{len(failed_chunks)} gap(s): {gap_summary}. "
++                    f"Partial transcript returned."
++                )
++            logger.info(
++                f"Parallel chunked transcription complete: "
++                f"{len(all_segments)} segments, {duration_min:.1f} minutes "
++                f"from {num_chunks} chunks"
++            )
++            return all_segments
++    
++    def transcribe_chunked(
++            self,
++            audio_path: str,
++            podcast_name: str = None,
++            language_override: Optional[str] = None,
++            progress_callback: Optional[Callable[[int, int], None]] = None,
++        ) -> List[Dict]:
++            """Transcribe audio files with dynamic chunking to prevent OOM errors.
++    
++            This method:
++            1. Checks available memory and model size to calculate optimal chunk duration
++            2. Processes audio in appropriately-sized chunks
++            3. Catches OOM errors and retries with smaller chunks
++            4. Clears GPU memory between chunks to limit peak usage
++    
++            Args:
++                audio_path: Path to the audio file to transcribe
++                podcast_name: Optional podcast name for context-aware prompting
++                language_override: Optional per-feed language; when set, takes
++                    precedence over the global whisper_language setting for this
++                    call only (forwarded to each chunk's transcribe()).
++    
++            Returns:
++                List of transcript segments with timestamps, or None on failure
++            """
++            # Get audio duration
++            duration = self.get_audio_duration(audio_path)
++            if duration is None:
++                logger.error("Cannot determine audio duration for chunked transcription")
++                return None
++    
++            # Branch to parallel path for remote API backends - no GPU or
++            # WhisperModelSingleton constraints, so chunks can run concurrently.
++            whisper_settings = _get_whisper_settings()
++            if whisper_settings['backend'] == WHISPER_BACKEND_API:
++                return self._transcribe_chunked_parallel_api(
++                    audio_path, podcast_name, duration, whisper_settings,
++                    language_override=language_override,
++                )
++    
++            # Get current model and device for memory calculation
++            model_name = WhisperModelSingleton.get_configured_model()
++            device = os.getenv("WHISPER_DEVICE", "cpu")
++    
++            # Calculate optimal chunk duration based on available memory
++            chunk_duration, memory_reason = calculate_optimal_chunk_duration(
++                model_name, device, whisper_backend=whisper_settings['backend']
++            )
++            overlap = CHUNK_OVERLAP_SECONDS
++    
++            # If calculated chunk can handle the entire audio, try regular transcription first
++            if duration <= chunk_duration:
++                logger.info(
++                    f"Audio duration {duration/60:.1f}min fits in calculated chunk "
++                    f"({chunk_duration/60:.0f}min), trying regular transcription"
++                )
++                try:
++                    result = self.transcribe(audio_path, podcast_name, language_override=language_override)
++                    if result is not None:
++                        return result
++                    # If transcribe returns None but didn't raise, fall through to chunked
++                    logger.warning("Regular transcription returned None, falling back to chunked")
++                except Exception as e:
++                    error_str = str(e).lower()
++                    if 'out of memory' in error_str or 'oom' in error_str or 'cuda' in error_str:
++                        logger.warning(f"OOM during regular transcription, falling back to chunked: {e}")
++                        # Reduce chunk size for chunked attempt
++                        chunk_duration = max(CHUNK_MIN_DURATION_SECONDS, chunk_duration // 2)
++                        clear_gpu_memory()
++                        WhisperModelSingleton.unload_model()
++                    else:
++                        raise
++    
++            # Calculate number of chunks
++            num_chunks = max(1, int((duration - overlap) // (chunk_duration - overlap)) + 1)
++            logger.info(
++                f"Starting chunked transcription: {duration/60:.1f} min audio in ~{num_chunks} chunks "
++                f"(chunk_size={chunk_duration/60:.0f}min, overlap={overlap}s) - {memory_reason}"
++            )
++            if progress_callback:
++                progress_callback(0, num_chunks)
++    
++            all_segments = []
++            chunk_start = 0
++            chunk_num = 0
++            oom_retry_count = 0
++            max_oom_retries = 3
++            failed_chunks: list[tuple[float, float]] = []
++            # Tolerate a minority of failed chunks (e.g. flaky remote Whisper API)
++            # rather than aborting the whole episode. Cap at ~20% of expected chunks.
++            max_failed_chunks = max(1, num_chunks // 5)
++    
++            while chunk_start < duration:
++                # Calculate chunk end with overlap for next chunk
++                chunk_end = min(chunk_start + chunk_duration, duration)
++    
++                # For all but the last chunk, add overlap
++                if chunk_end < duration:
++                    chunk_end_with_overlap = min(chunk_end + overlap, duration)
++                else:
++                    chunk_end_with_overlap = chunk_end
++    
++                # Recalculate num_chunks with current chunk_duration (may have changed due to OOM)
++                remaining_duration = duration - chunk_start
++                remaining_chunks = max(1, int((remaining_duration - overlap) // (chunk_duration - overlap)) + 1)
++    
++                logger.info(
++                    f"Processing chunk {chunk_num + 1} (~{remaining_chunks} remaining): "
++                    f"{chunk_start/60:.1f}-{chunk_end_with_overlap/60:.1f} min "
++                    f"(chunk_size={chunk_duration/60:.0f}min)"
++                )
++    
++                # Extract chunk using ffmpeg
++                logger.info(
++                    f"Extracting audio chunk {chunk_num + 1}/{num_chunks} "
++                    f"({chunk_start/60:.1f}-{chunk_end_with_overlap/60:.1f} min)"
++                )
++                chunk_path = extract_audio_chunk(audio_path, chunk_start, chunk_end_with_overlap)
++                if not chunk_path:
++                    logger.error(f"Failed to extract chunk {chunk_num + 1}")
++                    return None
++    
++                try:
++                    # Transcribe chunk (will handle its own batch sizing and retries)
++                    chunk_segments = self.transcribe(chunk_path, podcast_name, language_override=language_override)
++    
++                    if chunk_segments is None:
++                        failed_chunks.append((chunk_start, chunk_end_with_overlap))
++                        logger.error(
++                            f"Chunk {chunk_num + 1} transcription failed "
++                            f"({chunk_start/60:.1f}-{chunk_end_with_overlap/60:.1f} min); "
++                            f"leaving transcript gap and continuing"
++                        )
++                        if len(failed_chunks) > max_failed_chunks:
++                            logger.error(
++                                f"Too many failed chunks ({len(failed_chunks)} > {max_failed_chunks}); "
++                                f"aborting transcription"
++                            )
++                            return None
++                        chunk_num += 1
++                        chunk_start = chunk_end
++                        continue
++    
++                    # Reset OOM retry count on success
++                    oom_retry_count = 0
++    
++                    # Adjust timestamps to be relative to full audio
++                    for seg in chunk_segments:
++                        seg['start'] += chunk_start
++                        seg['end'] += chunk_start
++                        # Adjust word timestamps too if present
++                        if seg.get('words'):
++                            for word in seg['words']:
++                                word['start'] += chunk_start
++                                word['end'] += chunk_start
++    
++                    # Merge with existing segments, handling overlap deduplication
++                    if not all_segments:
++                        all_segments = chunk_segments
++                    else:
++                        all_segments = merge_overlapping_segments(
++                            all_segments, chunk_segments, chunk_start, overlap
++                        )
++    
++                    # Increment chunk counter only after successful processing
++                    chunk_num += 1
++    
++                    logger.info(
++                        f"Chunk {chunk_num} complete: {len(chunk_segments)} segments "
++                        f"(total: {len(all_segments)})"
+                     )
+-
+-                    # Clean up and retry this chunk with smaller size
++                    if progress_callback:
++                        progress_callback(chunk_num, num_chunks)
++    
++                    # Move to next chunk
++                    chunk_start = chunk_end
++    
++                except Exception as e:
++                    error_str = str(e).lower()
++                    is_oom = 'out of memory' in error_str or 'oom' in error_str or 'cuda' in error_str
++    
++                    if is_oom and oom_retry_count < max_oom_retries:
++                        oom_retry_count += 1
++                        old_chunk_duration = chunk_duration
++                        chunk_duration = max(CHUNK_MIN_DURATION_SECONDS, chunk_duration // 2)
++    
++                        logger.warning(
++                            f"OOM on chunk {chunk_num + 1} (attempt {oom_retry_count}/{max_oom_retries}). "
++                            f"Reducing chunk size: {old_chunk_duration/60:.0f}min -> {chunk_duration/60:.0f}min"
++                        )
++    
++                        # Clean up and retry this chunk with smaller size
++                        clear_gpu_memory()
++                        WhisperModelSingleton.unload_model()
++                        # Don't advance chunk_start - retry from same position
++                        continue
++                    # Non-OOM error or max retries reached
++                    logger.error(f"Chunk {chunk_num + 1} failed: {e}")
++                    raise
++    
++                finally:
++                    # Clean up chunk file
++                    if chunk_path and os.path.exists(chunk_path):
++                        try:
++                            os.unlink(chunk_path)
++                        except OSError:
++                            pass
++    
++                    # Clear GPU cache between chunks (no reload cost)
+                     clear_gpu_memory()
+-                    WhisperModelSingleton.unload_model()
+-                    # Don't advance chunk_start - retry from same position
+-                    continue
+-                # Non-OOM error or max retries reached
+-                logger.error(f"Chunk {chunk_num + 1} failed: {e}")
+-                raise
+-
+-            finally:
+-                # Clean up chunk file
+-                if chunk_path and os.path.exists(chunk_path):
+-                    try:
+-                        os.unlink(chunk_path)
+-                    except OSError:
+-                        pass
+-
+-                # Clear GPU cache between chunks (no reload cost)
+-                clear_gpu_memory()
+-                logger.debug("Cleared GPU memory after chunk processing")
+-
+-        # Unload model once after all chunks complete to free VRAM
+-        # for downstream stages (audio analysis, fingerprinting, etc.)
+-        WhisperModelSingleton.unload_model()
+-        logger.info("Whisper model unloaded after chunked transcription")
+-
+-        # Final hallucination filtering on merged results
+-        original_count = len(all_segments)
+-        all_segments = self.filter_hallucinations(all_segments)
+-        if len(all_segments) < original_count:
+-            logger.info(f"Filtered {original_count - len(all_segments)} hallucination segments after merge")
+-
+-        duration_min = all_segments[-1]['end'] / 60 if all_segments else 0
+-        if failed_chunks:
+-            gap_summary = ", ".join(
+-                f"{s/60:.1f}-{e/60:.1f}min" for s, e in failed_chunks
+-            )
+-            logger.warning(
+-                f"Chunked transcription complete with {len(failed_chunks)} gap(s): "
+-                f"{gap_summary}. Partial transcript returned."
++                    logger.debug("Cleared GPU memory after chunk processing")
++    
++            # Unload model once after all chunks complete to free VRAM
++            # for downstream stages (audio analysis, fingerprinting, etc.)
++            WhisperModelSingleton.unload_model()
++            logger.info("Whisper model unloaded after chunked transcription")
++    
++            # Final hallucination filtering on merged results
++            original_count = len(all_segments)
++            all_segments = self.filter_hallucinations(all_segments)
++            if len(all_segments) < original_count:
++                logger.info(f"Filtered {original_count - len(all_segments)} hallucination segments after merge")
++    
++            duration_min = all_segments[-1]['end'] / 60 if all_segments else 0
++            if failed_chunks:
++                gap_summary = ", ".join(
++                    f"{s/60:.1f}-{e/60:.1f}min" for s, e in failed_chunks
++                )
++                logger.warning(
++                    f"Chunked transcription complete with {len(failed_chunks)} gap(s): "
++                    f"{gap_summary}. Partial transcript returned."
++                )
++            logger.info(
++                f"Chunked transcription complete: {len(all_segments)} segments, "
++                f"{duration_min:.1f} minutes from {chunk_num} chunks"
+             )
+-        logger.info(
+-            f"Chunked transcription complete: {len(all_segments)} segments, "
+-            f"{duration_min:.1f} minutes from {chunk_num} chunks"
+-        )
+-
+-        return all_segments
+-
++    
++            return all_segments
++    
+     def segments_to_text(self, segments: List[Dict]) -> str:
+         """Convert segments to readable text format."""
+         lines = []
+

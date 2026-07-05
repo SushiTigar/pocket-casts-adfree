@@ -1332,17 +1332,23 @@ def create_app(email=None, password=None):
     def _match_mp_episode_by_title(
         mp, feed_slug: str, pc_title: str,
         rss_url: str | None = None, job_log=None,
+        alt_titles: list[str] | None = None,
     ) -> dict | None:
         """Find the MinusPod episode in `feed_slug` whose title matches
         `pc_title`. Uses the same normalization as the rest of the pipeline
         (exact-normalized, then substring-normalized).
 
+        If `alt_titles` is provided, each entry is also tried against the
+        feed — this handles cases where Pocket Casts returns a stale/wrong
+        title (e.g. user renamed locally, or Up Next drifted) while
+        get_new_releases() carries the canonical RSS title.
+
         If no match is found AND `rss_url` is provided, re-add the feed with
         a larger window (maxEpisodes=500) so older Up Next items become
         matchable, then retry once.
         """
-        def _find(episodes: list[dict]) -> dict | None:
-            target = _normalize_title(pc_title)
+        def _find(episodes: list[dict], target_title: str) -> dict | None:
+            target = _normalize_title(target_title)
             if not target:
                 return None
             for e in episodes:
@@ -1362,9 +1368,15 @@ def create_app(email=None, password=None):
                 job_log("warn", f"  MinusPod get_episodes failed: {e}")
             return None
 
-        match = _find(episodes)
+        match = _find(episodes, pc_title)
         if match:
             return match
+
+        # Try alt_titles (e.g. RSS-canonical title from get_new_releases).
+        for alt in alt_titles or []:
+            match = _find(episodes, alt)
+            if match:
+                return match
 
         # Not found — ask MinusPod to ingest more history. add_feed with the
         # same sourceUrl is idempotent server-side (returns 409) but also
@@ -1395,7 +1407,16 @@ def create_app(email=None, password=None):
             if job_log:
                 job_log("warn", f"  MinusPod get_episodes (retry) failed: {e}")
             return None
-        return _find(episodes)
+
+        # Retry primary title first, then alts.
+        match = _find(episodes, pc_title)
+        if match:
+            return match
+        for alt in alt_titles or []:
+            match = _find(episodes, alt)
+            if match:
+                return match
+        return None
 
     def _process_job(job_id, selections):
         """Process selected episodes.
@@ -1574,10 +1595,18 @@ def create_app(email=None, password=None):
                         # that title against the MinusPod episode list for the
                         # same feed. If MinusPod doesn't have it yet, refresh
                         # with a larger window and retry once.
+                        # Resolve the episode's title/URL/duration from Pocket Casts.
+                        # Different PC endpoints return inconsistent data for the
+                        # same UUID: Up Next may have a stale user-renamed title,
+                        # get_podcast_episodes() may omit the title field entirely,
+                        # and get_new_releases() carries the canonical RSS title.
+                        # Try each source; the matching pass below can also try the
+                        # alternatives if the first one doesn't hit MinusPod.
                         pc_title = None
                         pc_url = ""
                         pc_published = ""
                         pc_duration = 0
+                        alt_titles: list[str] = []  # used by _match_mp_episode_by_title if primary misses
                         try:
                             for pce in _get_up_next_episodes(pc):
                                 if pce.get("uuid") == ep_id:
@@ -1599,12 +1628,34 @@ def create_app(email=None, password=None):
                                         break
                             except Exception:
                                 pass
+                        # Always harvest get_new_releases() — its title
+                        # can override Up Next's stale one (e.g. user renamed
+                        # the episode locally). The matching helper below tries
+                        # alt_titles if the primary title misses.
+                        try:
+                            for pce in pc.get_new_releases():
+                                if pce.get("uuid") == ep_id:
+                                    new_title = pce.get("title", "")
+                                    new_url = pce.get("url", "") or pc_url
+                                    new_published = pce.get("published", "") or pc_published
+                                    new_duration = int(pce.get("duration", 0) or 0) or pc_duration
+                                    if not pc_title:
+                                        pc_title = new_title
+                                        pc_url = new_url
+                                        pc_published = new_published
+                                        pc_duration = new_duration
+                                    elif _normalize_title(new_title) != _normalize_title(pc_title):
+                                        alt_titles.append(new_title)
+                                    break
+                        except Exception:
+                            pass
 
                         if pc_title and feed_slug:
                             mp_ep = _match_mp_episode_by_title(
                                 mp, feed_slug, pc_title,
                                 rss_url=rss_url if not is_custom_file else None,
                                 job_log=lambda lvl, msg: _job_log(job_id, lvl, msg),
+                                alt_titles=alt_titles,
                             )
                             if mp_ep:
                                 ep = dict(mp_ep)
