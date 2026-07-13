@@ -5,6 +5,7 @@ let podcasts = [];
     let expandedPodcasts = new Set();
     let podcastEpisodes = {};
     let loadingEpisodes = new Set();
+    let loadEpisodesErrors = new Set();
     let activeJobId = null;
     let pollTimer = null;
     let lastLogCursor = 0;
@@ -1348,6 +1349,9 @@ let podcasts = [];
 
     function renderEpisodeList(uuid) {
       const eps = podcastEpisodes[uuid];
+      if (loadEpisodesErrors.has(uuid)) {
+        return `<div class="episode-list"><div class="episodes-loading" style="color:#f85149">Failed to load episodes. <button class="btn small" onclick="event.stopPropagation(); loadEpisodes('${uuid}')">Retry</button></div></div>`;
+      }
       if (!eps) {
         if (!loadingEpisodes.has(uuid)) loadEpisodes(uuid);
         return `<div class="episode-list"><div class="episodes-loading">Loading episodes...</div></div>`;
@@ -1477,9 +1481,11 @@ let podcasts = [];
       try {
         const d = await api('/episodes/' + uuid);
         podcastEpisodes[uuid] = d.episodes || [];
+        loadEpisodesErrors.delete(uuid);
         renderPodcasts();
       } catch(e) {
-        podcastEpisodes[uuid] = [];
+        podcastEpisodes[uuid] = null;
+        loadEpisodesErrors.add(uuid);
         renderPodcasts();
       } finally {
         loadingEpisodes.delete(uuid);

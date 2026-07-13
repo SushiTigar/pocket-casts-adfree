@@ -1,6 +1,7 @@
 # Secrets ----------------------------------------------------------------
 .env
 *.env.local
+.continue
 
 # Vendored upstream repos — re-cloned + patched via scripts/setup_*.sh.
 # The local diffs live in patches/ and are version-controlled.
