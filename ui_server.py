@@ -27,6 +27,7 @@ from pocketcasts_adfree import (
     find_rss_url_for_podcast,
     get_podcast_artwork_url,
     load_state,
+    normalize_feed_url,
     save_state,
     process_single_episode,
     unload_ollama_models,
@@ -511,8 +512,9 @@ def create_app(email=None, password=None):
         except Exception as e:  # noqa: BLE001
             return jsonify({"episodes": [], "error": f"MinusPod unreachable: {e}"}), 503
         feed_slug = None
+        target = normalize_feed_url(rss_url)
         for f in existing_feeds:
-            if f.get("sourceUrl") == rss_url:
+            if normalize_feed_url(f.get("sourceUrl", "")) == target:
                 feed_slug = f["slug"]
                 break
 
@@ -523,6 +525,12 @@ def create_app(email=None, password=None):
                 time.sleep(3)
             except Exception as e:
                 return jsonify({"episodes": [], "error": str(e)}), 503
+
+        if not feed_slug:
+            return jsonify({
+                "episodes": [],
+                "error": f"Could not resolve MinusPod feed slug for {title} (add_feed returned no slug).",
+            }), 503
 
         try:
             episodes = mp.get_episodes(feed_slug)

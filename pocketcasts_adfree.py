@@ -36,6 +36,41 @@ logging.basicConfig(
 )
 log = logging.getLogger("pocketcasts-adfree")
 
+_TRACKING_QUERY_KEYS = {
+    "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
+    "fbclid", "gclid", "mc_cid", "mc_eid", "ref", "ref_src",
+}
+
+
+def normalize_feed_url(url: str) -> str:
+    """Normalize a feed URL for equality comparisons.
+
+    Strips trailing slashes, lowercases the host, drops common tracking
+    query params, and normalizes the scheme (http -> https). Used to
+    match Pocket Casts subscription RSS URLs against URLs already
+    stored in MinusPod, which often differ only in trivial formatting.
+    """
+    if not url:
+        return ""
+    try:
+        from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+        parts = urlsplit(url.strip())
+        scheme = "https" if parts.scheme in ("http", "https") else parts.scheme
+        netloc = parts.netloc.lower()
+        if netloc.startswith("www."):
+            netloc = netloc[4:]
+        path = parts.path.rstrip("/") or "/"
+        query_pairs = [
+            (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
+            if k.lower() not in _TRACKING_QUERY_KEYS
+        ]
+        query_pairs.sort()
+        query = urlencode(query_pairs)
+        return urlunsplit((scheme, netloc, path, query, ""))
+    except Exception:
+        return url.strip().rstrip("/")
+
+
 POCKETCASTS_API = "https://api.pocketcasts.com"
 POCKETCASTS_SHOWNOTES = "https://shownotes.pocketcasts.com"
 MINUSPOD_API = "http://localhost:8000"
@@ -982,8 +1017,9 @@ class MinusPodClient:
                     if f.get("slug") == existing_slug:
                         return f
             existing = self.list_feeds()
+            target = normalize_feed_url(rss_url)
             for f in existing:
-                if f.get("sourceUrl") == rss_url:
+                if normalize_feed_url(f.get("sourceUrl", "")) == target:
                     return f
             return {"slug": None, "sourceUrl": rss_url, "already_exists": True}
         resp.raise_for_status()
