@@ -23,6 +23,9 @@ from pocketcasts_adfree import (
     MinusPodClient,
     PocketCastsClient,
     PocketCastsAuthError,
+    _normalize_title,
+    _normalize_title_strong,
+    _retry_up_next,
     is_patreon_feed,
     find_rss_url_for_podcast,
     get_podcast_artwork_url,
@@ -441,19 +444,22 @@ def create_app(email=None, password=None):
             return swept
 
         # Build set of ad-free titles we already have (minus the (Ad-Free) tag).
+        # Uses the strong normalizer so titles whose RSS form differs from
+        # Pocket Casts' form (season tags, smart quotes, em-dashes, "Pt." vs
+        # "Part", HTML entities) still match.
         adfree_titles: set[str] = set()
         try:
             files_resp = pc.get_files() or {}
             for f in files_resp.get("files", []) if isinstance(files_resp, dict) else []:
                 t = (f.get("title") or "").strip()
                 if t.endswith(" (Ad-Free)"):
-                    adfree_titles.add(_normalize_title(t[: -len(" (Ad-Free)")]))
+                    adfree_titles.add(_normalize_title_strong(t[: -len(" (Ad-Free)")]))
         except Exception:
             pass
         for meta in processed.values():
             t = (meta.get("title") or "").strip()
             if t:
-                adfree_titles.add(_normalize_title(t))
+                adfree_titles.add(_normalize_title_strong(t))
 
         if not adfree_titles:
             return swept
@@ -468,11 +474,11 @@ def create_app(email=None, password=None):
                 continue  # already processed upload — keep it
             if podcast_uuid == "da7aba5e-f11e-f11e-f11e-da7aba5ef11e":
                 continue  # custom-files virtual podcast — not an original
-            norm = _normalize_title(title)
+            norm = _normalize_title_strong(title)
             if norm not in adfree_titles:
                 continue
             try:
-                pc.remove_from_up_next(ep_uuid)
+                _retry_up_next(pc.remove_from_up_next, ep_uuid)
                 if podcast_uuid:
                     try:
                         pc.mark_episode_played(ep_uuid, podcast_uuid)

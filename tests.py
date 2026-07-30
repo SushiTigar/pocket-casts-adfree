@@ -553,6 +553,156 @@ class TestUpNextQueueSafety(unittest.TestCase):
             self.assertNotEqual(change.get("published"), "1970-01-01T00:00:00Z",
                 "Epoch-0 input should be sanitized to a real date.")
 
+    def test_replace_in_up_next_batches_add_and_remove(self):
+        """replace_in_up_next must combine the add + remove into one
+        /up_next/sync call. Two separate calls would race on the
+        serverModified probe (second call could see stale data after the
+        first call's add has been applied) and leave the original in
+        Up Next. One network round-trip with both changes is correct."""
+        from pocketcasts_adfree import PocketCastsClient, USER_PODCAST_UUID
+        with patch.object(PocketCastsClient, '__init__', lambda self, *a, **kw: None):
+            pc = PocketCastsClient.__new__(PocketCastsClient)
+            pc.token = "fake"
+            pc.client = MagicMock()
+
+            fetch_resp = MagicMock(status_code=200, raise_for_status=MagicMock())
+            fetch_resp.json.return_value = {"serverModified": 999}
+            sync_resp = MagicMock(status_code=200, raise_for_status=MagicMock())
+            sync_resp.json.return_value = {}
+            pc.client.post = MagicMock(side_effect=[fetch_resp, sync_resp])
+
+            pc.replace_in_up_next(
+                "file-uuid", "Episode (Ad-Free)", "orig-uuid",
+                published="2026-04-21T15:41:28Z",
+            )
+
+            self.assertEqual(
+                pc.client.post.call_count, 2,
+                "replace_in_up_next must do exactly 2 posts: 1 fetch + 1 sync."
+            )
+            sync_body = pc.client.post.call_args_list[1][1]["json"]
+            changes = sync_body["upNext"]["changes"]
+            self.assertEqual(len(changes), 2,
+                "Both the add and the remove must be in the same sync batch.")
+            add_change = changes[0]
+            self.assertEqual(add_change["action"], 3)  # PLAY_LAST
+            self.assertEqual(add_change["uuid"], "file-uuid")
+            self.assertEqual(add_change["podcast"], USER_PODCAST_UUID)
+            self.assertEqual(add_change["published"], "2026-04-21T15:41:28Z")
+            remove_change = changes[1]
+            self.assertEqual(remove_change["action"], 4)  # REMOVE
+            self.assertEqual(remove_change["uuid"], "orig-uuid")
+
+    def test_replace_in_up_next_add_only_when_no_original(self):
+        """When original_uuid is falsy, only the add is batched — the
+        caller will fall back to the title-match sweep for the original."""
+        from pocketcasts_adfree import PocketCastsClient
+        with patch.object(PocketCastsClient, '__init__', lambda self, *a, **kw: None):
+            pc = PocketCastsClient.__new__(PocketCastsClient)
+            pc.token = "fake"
+            pc.client = MagicMock()
+            fetch_resp = MagicMock(status_code=200, raise_for_status=MagicMock())
+            fetch_resp.json.return_value = {"serverModified": 1}
+            sync_resp = MagicMock(status_code=200, raise_for_status=MagicMock())
+            sync_resp.json.return_value = {}
+            pc.client.post = MagicMock(side_effect=[fetch_resp, sync_resp])
+
+            pc.replace_in_up_next("file-uuid", "Episode (Ad-Free)", None)
+
+            changes = pc.client.post.call_args_list[1][1]["json"]["upNext"]["changes"]
+            self.assertEqual(len(changes), 1,
+                "Without an original UUID only the add change should be sent.")
+
+    def test_retry_up_next_retries_transient_failures(self):
+        """_retry_up_next must retry transient failures with backoff
+        and eventually raise the last exception when all attempts fail.
+        Without retries a single 5xx from Pocket Casts would leave the
+        user with an inconsistent queue (Ad-Free file in Up Next but
+        original also still queued)."""
+        from pocketcasts_adfree import _retry_up_next
+        calls = []
+        def flaky_fn():
+            calls.append(1)
+            if len(calls) < 3:
+                raise RuntimeError("transient 503")
+            return "ok"
+        result = _retry_up_next(flaky_fn, attempts=3, base_delay=0)
+        self.assertEqual(result, "ok")
+        self.assertEqual(len(calls), 3)
+
+    def test_retry_up_next_raises_after_exhausting_attempts(self):
+        from pocketcasts_adfree import _retry_up_next
+        def always_fail():
+            raise RuntimeError("persistent 500")
+        with self.assertRaises(RuntimeError):
+            _retry_up_next(always_fail, attempts=3, base_delay=0)
+
+
+class TestStrongTitleNormalization(unittest.TestCase):
+    """The strong normalizer bridges RSS-form and PC-form title differences
+    that the basic normalizer misses: smart quotes vs straight quotes, em-
+    dashes vs hyphens, season tags in different formats, 'Pt.' vs 'Part',
+    '#N' vs 'No. N', HTML entities, and unicode accents."""
+
+    def test_season_tag_variants_match(self):
+        from ui_server import _normalize_title_strong
+        self.assertEqual(
+            _normalize_title_strong("Episode 42: The Beginning (S2 E5)"),
+            _normalize_title_strong("Episode 42: The Beginning (Season 2 Episode 5)"),
+        )
+
+    def test_pt_vs_part(self):
+        from ui_server import _normalize_title_strong
+        self.assertEqual(
+            _normalize_title_strong("Title, Pt. 1"),
+            _normalize_title_strong("Title, Part 1"),
+        )
+
+    def test_ep_vs_episode(self):
+        from ui_server import _normalize_title_strong
+        self.assertEqual(
+            _normalize_title_strong("Title (Ep. 5)"),
+            _normalize_title_strong("Title (Episode 5)"),
+        )
+
+    def test_hash_number(self):
+        from ui_server import _normalize_title_strong
+        self.assertEqual(
+            _normalize_title_strong("Show Name #42"),
+            _normalize_title_strong("Show Name No. 42"),
+        )
+
+    def test_unicode_accents_folded(self):
+        from ui_server import _normalize_title_strong
+        self.assertEqual(
+            _normalize_title_strong("café"),
+            _normalize_title_strong("cafe"),
+        )
+
+    def test_html_entities_decoded(self):
+        from ui_server import _normalize_title_strong
+        # & should decode to & before normalization strips punctuation.
+        self.assertEqual(
+            _normalize_title_strong("Q&A"),
+            _normalize_title_strong("Q&A"),
+        )
+
+    def test_distinct_titles_do_not_match(self):
+        from ui_server import _normalize_title_strong
+        self.assertNotEqual(
+            _normalize_title_strong("Totally Different Episode"),
+            _normalize_title_strong("Another Show Episode"),
+        )
+
+    def test_basic_normalizer_still_works(self):
+        """Regression guard: don't break callers that depend on the
+        original _normalize_title behavior."""
+        from ui_server import _normalize_title
+        self.assertEqual(
+            _normalize_title("How To Change The World!"),
+            _normalize_title("how to change the world"),
+        )
+
 
 class TestTranscriptionFailureRecovery(unittest.TestCase):
     """The pipeline must restart Whisper when its Metal backend wedges,

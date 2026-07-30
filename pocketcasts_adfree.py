@@ -95,6 +95,44 @@ def _normalize_title(title: str) -> str:
     return t
 
 
+def _normalize_title_strong(title: str) -> str:
+    """Stronger title normalization for cross-source matching (e.g. RSS vs PC).
+
+    Used by the post-upload title-match sweep where one source is the
+    MinusPod RSS feed (often includes smart quotes, em-dashes, season tags,
+    HTML entities) and the other is the Pocket Casts queue (often uses
+    straight ASCII). Beyond :func:`_normalize_title`, this:
+
+    * Decodes HTML entities (``&`` -> ``&``).
+    * Unicode-normalizes (NFKD) and ASCII-folds so ``café``, ``café``
+      and ``cafe`` all collapse to ``cafe``.
+    * Strips common parenthetical season/episode tags: ``(S2 E5)``,
+      ``(Season 2 Episode 5)``, ``(S02E05)``, ``(Pt. 1)``.
+    * Folds ``Pt.`` -> ``Part``, ``Ep.`` -> ``Episode``, ``#`` -> ``No.``
+      so partial-numbering differences match.
+
+    Falls back to :func:`_normalize_title` if the underlying libraries
+    aren't available or input is invalid.
+    """
+    if not title:
+        return ""
+    try:
+        import html as _html
+        import unicodedata as _ud
+        s = _html.unescape(str(title))
+        s = _ud.normalize("NFKD", s)
+        s = s.encode("ascii", "ignore").decode("ascii")
+    except Exception:
+        s = str(title)
+    s = re.sub(r"\((?:[^)]*?(?:s\s*\d+\s*e\s*\d+|season|episode|ep\.?|pt\.?|part|no\.?|\bno\b)[^)]*?)\)", " ", s, flags=re.I)
+    s = re.sub(r"\[(?:\d+|s\s*\d+\s*e\s*\d+|season[^]]*|episode[^]]*|part[^]]*)\]", " ", s, flags=re.I)
+    s = re.sub(r"\bpt\.?\b", "part", s, flags=re.I)
+    s = re.sub(r"\bep\.?\b", "episode", s, flags=re.I)
+    s = re.sub(r"\bno\.?\s*(\d)", r"number \1", s, flags=re.I)
+    s = re.sub(r"#(\d)", r"number \1", s)
+    return _normalize_title(s)
+
+
 def _sanitize_published_date(published: str | None) -> str:
     """Return a safe ISO-8601 published date for Pocket Casts uploads.
 
@@ -971,6 +1009,98 @@ class PocketCastsClient:
         )
         resp.raise_for_status()
         log.info(f"  Removed original from Up Next: {episode_uuid[:12]}")
+
+    def replace_in_up_next(
+        self,
+        file_uuid: str,
+        upload_title: str,
+        original_uuid: str | None,
+        published: str | None = None,
+    ):
+        """Atomically add an uploaded file to Up Next and remove the original.
+
+        Pocket Casts' ``/up_next/sync`` endpoint processes a single diff
+        against ``serverModified``. Sending the add + remove in two
+        separate sync requests introduces a race window where the
+        server has applied the add but not yet persisted the new
+        ``serverModified``, causing the second ``_get_up_next_server_modified``
+        probe to return stale data and the remove to be silently rejected.
+
+        Batching the changes in one request avoids that race and uses a
+        single network round-trip.
+
+        If ``original_uuid`` is falsy, only the add is sent (caller will
+        fall back to the title-match sweep).
+        """
+        action = 3  # PLAY_LAST
+        now_ms = int(time.time() * 1000)
+        server_modified = self._get_up_next_server_modified()
+
+        changes: list[dict] = []
+        add_change: dict = {
+            "action": action,
+            "modified": now_ms,
+            "uuid": file_uuid,
+            "title": upload_title,
+            "podcast": USER_PODCAST_UUID,
+        }
+        sanitized = _sanitize_published_date(published) if published else None
+        if sanitized:
+            add_change["published"] = sanitized
+        changes.append(add_change)
+
+        if original_uuid:
+            changes.append({
+                "action": 4,  # REMOVE
+                "modified": now_ms,
+                "uuid": original_uuid,
+            })
+
+        resp = self.client.post(
+            f"{POCKETCASTS_API}/up_next/sync",
+            headers=self._headers(),
+            json={
+                "deviceTime": now_ms,
+                "version": "2",
+                "upNext": {
+                    "serverModified": server_modified,
+                    "changes": changes,
+                },
+            },
+        )
+        resp.raise_for_status()
+        log.info(
+            f"  Replace in Up Next: +{upload_title[:40]} "
+            f"({file_uuid[:12]})"
+            + (f" -orig({original_uuid[:12]})" if original_uuid else "")
+        )
+        return resp.json()
+
+
+def _retry_up_next(fn, *args, attempts: int = 3, base_delay: float = 1.0, **kwargs):
+    """Retry helper for transient /up_next/sync failures.
+
+    Pocket Casts occasionally returns 5xx or drops the connection when
+    the sync endpoint is under load (e.g. immediately after a file
+    upload, the file-upload worker and the up-next worker can race).
+    Without a retry, a single transient failure leaves the user with
+    an inconsistent queue — Ad-Free file in Up Next but original also
+    still queued. We retry with exponential backoff before giving up.
+    """
+    last_exc: Exception | None = None
+    for i in range(attempts):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            delay = base_delay * (2 ** i)
+            log.debug(
+                f"  Up Next op failed (attempt {i + 1}/{attempts}): {exc}. "
+                f"Retrying in {delay:.1f}s..."
+            )
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 class MinusPodClient:
@@ -2449,29 +2579,40 @@ def process_single_episode(
         if progress_callback: progress_callback("Upload failed: No UUID returned")
         return None
 
-    pc.add_to_up_next(file_uuid, upload_title, play_last=True, published=ep_published)
-
-    # Mark the original episode as played and remove from Up Next.
+    # Mark the original episode as played and replace it in Up Next with
+    # the ad-free file in a single atomic sync. Doing this in one POST
+    # eliminates the race where two sequential /up_next/sync requests can
+    # see inconsistent serverModified timestamps and the remove is lost.
     if podcast_uuid and original_episode_uuid:
         try:
-            pc.mark_episode_played(original_episode_uuid, podcast_uuid)
+            try:
+                pc.mark_episode_played(original_episode_uuid, podcast_uuid)
+            except Exception as e:
+                log.warning(f"  Could not mark original as played: {e}")
+            try:
+                _retry_up_next(
+                    pc.replace_in_up_next,
+                    file_uuid, upload_title, original_episode_uuid,
+                    published=ep_published,
+                )
+                if progress_callback:
+                    progress_callback("Removed original episode from Up Next")
+            except Exception as e:
+                log.warning(f"  Could not remove original from Up Next: {e}")
         except Exception as e:
-            log.warning(f"  Could not mark original as played: {e}")
-        try:
-            pc.remove_from_up_next(original_episode_uuid)
-            if progress_callback:
-                progress_callback("Removed original episode from Up Next")
-        except Exception as e:
-            log.warning(f"  Could not remove original from Up Next: {e}")
+            log.warning(f"  Up Next replace failed: {e}")
     else:
         # Fallback: title-match sweep. The episode-uuid lookup can miss when
         # MinusPod's RSS title and Pocket Casts' title differ in trivial
         # ways (smart quotes, trailing season tags, etc.) that break exact
         # equality. Re-scan Up Next using the same normalized-title trick
         # the dashboard reconciler uses, but only for the title we just
-        # uploaded so we don't sweep unrelated rows.
+        # uploaded so we don't sweep unrelated rows. Uses the stronger
+        # _normalize_title_strong so '(S2 E5)' matches '(Season 2 Episode 5)',
+        # 'Pt. 1' matches 'Part 1', and smart-quote/em-dash differences
+        # collapse to the same ASCII form.
         try:
-            target_norm = _normalize_title(ep_title)
+            target_norm = _normalize_title_strong(ep_title)
             for queue_ep in _list_up_next_episodes(pc):
                 qu_uuid = queue_ep.get("uuid") or ""
                 qu_title = (queue_ep.get("title") or "").strip()
@@ -2482,7 +2623,7 @@ def process_single_episode(
                     continue  # custom-file row, not the original
                 if "(Ad-Free)" in qu_title:
                     continue
-                if _normalize_title(qu_title) != target_norm:
+                if _normalize_title_strong(qu_title) != target_norm:
                     continue
                 try:
                     if qu_pod:
@@ -2491,7 +2632,7 @@ def process_single_episode(
                         except Exception as exc:
                             log.warning(f"  Title-match mark played failed for {qu_uuid[:12]}: {exc}")
                     try:
-                        pc.remove_from_up_next(qu_uuid)
+                        _retry_up_next(pc.remove_from_up_next, qu_uuid)
                         if progress_callback:
                             progress_callback("Removed original from Up Next (title match)")
                     except Exception as exc:
