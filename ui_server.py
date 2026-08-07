@@ -313,6 +313,35 @@ def create_app(email=None, password=None):
                     "is_archived": bool(status.get("isDeleted")),
                     "starred": bool(status.get("starred")),
                 })
+            # Fallback: if duration is 0 and the episode is an uploaded file,
+            # try to get duration from the files metadata endpoint.
+            for e in up_next_episodes_list:
+                if e["duration"] > 0:
+                    continue
+                if e["podcast_uuid"] != "da7aba5e-f11e-f11e-f11e-da7aba5ef11e":
+                    continue
+                try:
+                    f_meta = pc.get_file(e["uuid"])
+                    if f_meta:
+                        e["duration"] = int(f_meta.get("duration") or 0)
+                except Exception:
+                    pass
+            # Fallback 2: durations from local processed history (only used
+            # when Pocket Casts' API omits duration).
+            if processed:
+                proc_durations: dict[str, int] = {}
+                for meta in processed.values():
+                    t = _normalize_title_strong((meta.get("title") or "").strip())
+                    secs = meta.get("original_duration_secs")
+                    if t and secs:
+                        proc_durations[t] = int(secs)
+                if proc_durations:
+                    for e in up_next_episodes_list:
+                        if e["duration"] > 0:
+                            continue
+                        norm = _normalize_title_strong(e["title"])
+                        if norm in proc_durations:
+                            e["duration"] = proc_durations[norm]
         except Exception as e:
             log.debug(f"Could not fetch Up Next: {e}")
 
@@ -476,7 +505,12 @@ def create_app(email=None, password=None):
                 continue  # custom-files virtual podcast — not an original
             norm = _normalize_title_strong(title)
             if norm not in adfree_titles:
-                continue
+                # Substring fallback: if the ad-free title is a substring of
+                # the original (or vice versa), assume they match. Common for
+                # podcasts whose Pocket Casts title adds a host name prefix
+                # or version tag that MinusPod's RSS feed doesn't include.
+                if not any((norm in t or t in norm) for t in adfree_titles):
+                    continue
             try:
                 _retry_up_next(pc.remove_from_up_next, ep_uuid)
                 if podcast_uuid:
@@ -632,6 +666,8 @@ def create_app(email=None, password=None):
             "uploaded": 0,
             "total_episodes": sum(len(v) for v in selections.values()),
             "current_episode": "",
+            "current_episode_completed": False,
+            "paused": False,
             "log_cursor": 0,
             "skip_event": skip_event,
             "stop_event": stop_event,
@@ -692,12 +728,24 @@ def create_app(email=None, password=None):
                     "uploaded": job["uploaded"],
                     "total_episodes": job["total_episodes"],
                     "current_episode": job.get("current_episode", ""),
+                    "current_episode_completed": job.get("current_episode_completed", False),
+                    "paused": job.get("paused", False),
                 }
 
         return jsonify({
             "active_job": active,
             "queued_episodes": queued_episode_count,
         })
+
+    @app.route("/api/up_next/reconcile", methods=["POST"])
+    def api_up_next_reconcile():
+        """Sweep stale originals from Up Next — safe to call any time.
+        Returns the titles that were swept.
+        """
+        pc = get_pc()
+        processed = load_state().get("processed", {})
+        swept = _reconcile_up_next_originals(pc, processed)
+        return jsonify({"swept": sorted(swept)})
 
     @app.route("/api/files", methods=["GET"])
     def api_files_list():
@@ -1703,6 +1751,8 @@ def create_app(email=None, password=None):
                         continue
 
                     job["current_episode"] = ep_title
+                    job["current_episode_completed"] = False
+                    job["paused"] = False
                     _job_log(job_id, "info", f"  Processing: {ep_title}")
 
                     original_ep_uuid = pc_episode_map.get(_normalize_title(ep_title))
@@ -1732,6 +1782,7 @@ def create_app(email=None, password=None):
                             continue
                         if file_uuid:
                             job["uploaded"] += 1
+                            job["current_episode_completed"] = True
                             _job_log(job_id, "success", f"  Uploaded & queued: {ep_title}")
                         else:
                             # file_uuid is None usually means it was already processed according to state check
@@ -1744,12 +1795,14 @@ def create_app(email=None, password=None):
                                 )
                     except Exception as e:
                         job["processed"] += 1
+                        job["current_episode_completed"] = True
                         _job_log(job_id, "error", f"  Failed: {ep_title}: {e}")
 
                     # --- Pause check between episodes ---
                     # Resources are freed here, safely after the current
                     # episode finishes, never mid-transcription.
                     if pause_event.is_set() and not stop_event.is_set():
+                        job["paused"] = True
                         _job_log(job_id, "info", "Current episode done. Pausing and freeing resources...")
                         _cleanup_for_pause()  # unload Ollama + stop Whisper
                         while pause_event.is_set():

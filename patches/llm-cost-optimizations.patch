@@ -1,38 +1,5 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: local <local@local>
-Date: Thu, 1 Jan 2026 00:00:00 +0000
-Subject: [PATCH] llm-cost-optimizations (rebased on upstream d900bdd0)
-
-LLM cost optimization: stage tunables, skip verification for short episodes,
-prompt caching, large window cross-field validation.
----
-
-diff --git a/CHANGELOG.md b/CHANGELOG.md
-index 4cd2c6db..31070f30 100644
---- a/CHANGELOG.md
-+++ b/CHANGELOG.md
-@@ -852,6 +852,19 @@ found by review, removes dead code, and adds the repo's first Python lint gate.
- 
- - **Settings reset to defaults when you reopen the page (issue #323, reopened).** Navigating away from Settings and back within the React Query cache window made every field show its hardcoded placeholder again -- LLM provider back to Anthropic, no key, models blank -- even though the values were still saved in the database. The 2.6.0 fix seeded the hydration snapshot from the loaded settings, so on a remount with cached data the form never re-hydrated and fell through to the component's hardcoded `useState` initializers. The snapshot now starts empty so the form always re-hydrates from the loaded settings (the unsaved-edit guard is unchanged), and the page renders a loader until settings load so the placeholders are never shown. The earlier "fixed in 2.6.0" call was wrong because it was tested via a full page reload (always a cold load); the bug only appears on in-app navigation. Confirmed reproduced and fixed with the navigate-away-and-back flow.
- - **No more hardcoded provider/model defaults in the Settings form.** The form's field defaults (provider, base URL, models, whisper backend/language/compute, audio bitrate, min-cut confidence, etc.) now come from the backend `GET /settings` `defaults` block -- the single source of truth -- instead of literals duplicated in the frontend. The hydration and change-detection paths share that source so the "Save Changes" button no longer risks getting stuck. On the backend, the OpenAI-compatible base URL default is now the `DEFAULT_OPENAI_BASE_URL` config constant (used by `get_effective_base_url`, the `LLMClient` fallback, and the defaults block), and the provider default in the defaults block resolves through the `ENV_BACKED_SETTINGS` registry, so each default is defined once. No default values changed.
-+## [Unreleased]
-+
-+### Added
-+
-+- **LLM cost optimisations** — four independent levers that cut per-episode LLM cost on long-context cloud models like deepseek-v4-flash. Each is a new tunable in the existing per-stage system (resolved env > DB > default at call time, no restart needed). Settings UI lives in the parent `pocket-casts-mod` fork, not the React UI:
-+  - `largeWindowSeconds` (default 1200) — when the model ID matches a 1M-context pattern (`deepseek-v4`, `gemini-2.5-flash`, `gemini-3-flash`, `gemini-flash`, `qwen-long`, `llama-4-`, `llama-3.1-405b`) **and** the episode is longer than 2× the base window, the detector uses this larger window so a 60-min episode takes 3 windows instead of 6. Cross-field-validated `>= windowSizeSeconds` at the API layer, defensively clamped to `>= windowSizeSeconds` in the resolver in case the API check is bypassed via env var or direct DB write.
-+  - `skipVerificationUnderSeconds` (default 1200) — skip pass 2 when the episode is shorter than this. Pass 2 doubles LLM cost on every episode for near-zero yield on short ones (the pre/mid/post-roll coverage in pass 1 is sized to catch them). Set to 0 to disable the skip.
-+  - `enablePromptCaching` (default `true`) — annotate the system prompt with `cache_control: {"type": "ephemeral"}` on the OpenAI-compatible / OpenRouter transport so the provider can cache it across the 22-or-so windows of a long episode. Saves roughly `1.2K tokens × num_windows × num_passes` per episode at the OpenRouter cache-read rate (1/4.5× of the input rate on deepseek-v4). `cached_input_tokens` is reported in the OpenAI response log for visibility; the cost calculator stays cache-unaware.
-+  - `LARGE_CONTEXT_MODEL_PATTERNS` and `is_large_context_model()` — substring-match registry the window resolver consults. Listed explicitly so the parent UI can show which model families trigger the override.
-+
-+### Changed
-+
-+- `_coerce_tunable` now also handles bool tunables (keys in the new `STAGE_TUNABLE_BOOL_KEYS` set). The API gained a `'bool'` kind in `KIND_RULES` so the PUT path accepts JSON booleans and the truthy/falsy string set; the reader uses `coerce_bool_setting` so both sides agree on the boundary.
- 
- ## [2.7.1] - 2026-06-03
- 
 diff --git a/src/ad_detector/__init__.py b/src/ad_detector/__init__.py
-index ae73dfb1..f1ecd373 100644
+index ae73dfb1..9e869772 100644
 --- a/src/ad_detector/__init__.py
 +++ b/src/ad_detector/__init__.py
 @@ -79,6 +79,7 @@ from .boundaries import (
@@ -43,15 +10,11 @@ index ae73dfb1..f1ecd373 100644
      format_window_prompt,
      get_static_system_prompt,
      parse_ads_from_response,
-@@ -726,13 +727,26 @@ class AdDetector:
+@@ -726,6 +727,16 @@ class AdDetector:
  
              win_size = get_stage_tunable('window_size_seconds')
              win_overlap = get_stage_tunable('window_overlap_seconds')
 +            model = self.get_model()
-+            # Long-context models get a bigger window to halve the per-episode
-+            # call count. resolve_window_size_seconds handles the
-+            # short-episode / non-long-context fast paths and clamps against
-+            # win_size defensively.
 +            effective_window_size = resolve_window_size_seconds(model, total_duration)
 +            if effective_window_size != win_size:
 +                windows = create_windows(segments, window_size=effective_window_size, overlap=win_overlap)
@@ -64,14 +27,7 @@ index ae73dfb1..f1ecd373 100644
              logger.info(f"[{slug}:{episode_id}] Processing {len(windows)} windows "
                         f"({win_size/60:.0f}min size, {win_overlap/60:.0f}min overlap) "
                         f"for {total_duration/60:.1f}min episode")
- 
-             # Get prompts and model
-             system_prompt = self.get_system_prompt()
--            model = self.get_model()
- 
-             logger.info(f"[{slug}:{episode_id}] Using model: {model}")
-             logger.debug(f"[{slug}:{episode_id}] System prompt ({len(system_prompt)} chars)")
-@@ -1685,12 +1699,24 @@ class AdDetector:
+@@ -1685,11 +1696,17 @@ class AdDetector:
              windows = create_windows(segments)
              total_duration = segments[-1]['end'] if segments else 0
  
@@ -80,30 +36,23 @@ index ae73dfb1..f1ecd373 100644
 -
              system_prompt = self.get_verification_prompt()
              model = self.get_verification_model()
- 
-+            # Match the detection-pass window geometry so verification re-scans
-+            # the same chunks. resolve_window_size_seconds picks the
-+            # long-context override when the model supports it.
-+            effective_window_size = resolve_window_size_seconds(
-+                model, total_duration
-+            )
-+            if effective_window_size != get_stage_tunable('window_size_seconds'):
++            effective_ws = resolve_window_size_seconds(model, total_duration)
++            if effective_ws != get_stage_tunable('window_size_seconds'):
 +                windows = create_windows(
-+                    segments, window_size=effective_window_size,
++                    segments, window_size=effective_ws,
 +                    overlap=get_stage_tunable('window_overlap_seconds'),
 +                )
 +
 +            logger.info(f"[{slug}:{episode_id}] Verification: Processing {len(windows)} windows "
 +                       f"for {total_duration/60:.1f}min processed audio")
-+
+ 
              logger.info(f"[{slug}:{episode_id}] Verification using model: {model}")
  
-             # Prepare description section
 diff --git a/src/ad_detector/prompts.py b/src/ad_detector/prompts.py
-index 2e20a6aa..b727deb6 100644
+index 2e20a6aa..bd395163 100644
 --- a/src/ad_detector/prompts.py
 +++ b/src/ad_detector/prompts.py
-@@ -22,12 +22,46 @@ from utils.constants import (
+@@ -22,12 +22,26 @@ from utils.constants import (
  from config import (
      LOW_CONFIDENCE, CONFIDENCE_STRING_MAP,
      CONTENT_DURATION_THRESHOLD, LOW_EVIDENCE_WARN_THRESHOLD,
@@ -114,31 +63,11 @@ index 2e20a6aa..b727deb6 100644
  logger = logging.getLogger('podcast.claude')
  
  
-+# Threshold multiplier for the "long enough to benefit from a bigger window"
-+# check. We only widen windows for episodes that are at least
-+# LARGE_WINDOW_BENEFIT_MULTIPLIER * base_size long -- a 12-min episode still
-+# uses a 10-min base window because a single window covers the whole thing
-+# either way. The bigger window only helps when the base window would create
-+# enough chunks that cross-boundary ad context starts mattering.
++# Threshold multiplier for the long-window check
 +LARGE_WINDOW_BENEFIT_MULTIPLIER = 2.0
 +
 +
 +def resolve_window_size_seconds(model: str, episode_duration: float) -> float:
-+    """Pick the per-window size for a model/duration combination.
-+
-+    Long-context models (1M tokens) have plenty of headroom for the LLM to
-+    consider surrounding context, so we can give them a bigger window
-+    (``large_window_seconds``, default 20 min) and cut the per-episode call
-+    count roughly in half. The override only fires for episodes longer than
-+    ``LARGE_WINDOW_BENEFIT_MULTIPLIER * base_size`` -- short episodes don't
-+    benefit and the base window already covers them.
-+
-+    Defensive clamp: returns ``max(large, base)`` so a misconfigured
-+    ``large_window_seconds`` smaller than ``window_size_seconds`` doesn't
-+    shrink the window below what the user explicitly asked for in the
-+    Settings UI. The API cross-field check should prevent this, but the
-+    env-var / direct-DB-write path can bypass that.
-+    """
 +    base = float(get_stage_tunable('window_size_seconds'))
 +    if not is_large_context_model(model):
 +        return base
@@ -152,7 +81,7 @@ index 2e20a6aa..b727deb6 100644
  # Description is optional - may contain sponsor lists, chapter markers, or content context
  USER_PROMPT_TEMPLATE = """Podcast: {podcast_name}
 diff --git a/src/api/settings.py b/src/api/settings.py
-index 86eb544a..f75a0bfd 100644
+index 86eb544a..bd8f0f3b 100644
 --- a/src/api/settings.py
 +++ b/src/api/settings.py
 @@ -316,6 +316,9 @@ def get_settings():
@@ -165,14 +94,12 @@ index 86eb544a..f75a0bfd 100644
      }
  
      enable_ad_review_raw = _setting_value(settings, 'enable_ad_review', 'false')
-@@ -1143,7 +1146,14 @@ def _apply_stage_tunables(db, data):
+@@ -1143,7 +1146,12 @@ def _apply_stage_tunables(db, data):
      )
  
      # overlap >= size would make the derived step <= 0 and break create_windows.
 -    if 'windowSizeSeconds' in data or 'windowOverlapSeconds' in data:
-+    # Same for large_window_seconds < window_size_seconds -- the resolver
-+    # clamps defensively but a UI that lets a user store a nonsensical pair
-+    # is worse than rejecting the write.
++    # Also enforce large_window_seconds >= window_size_seconds.
 +    if (
 +        'windowSizeSeconds' in data
 +        or 'windowOverlapSeconds' in data
@@ -181,7 +108,7 @@ index 86eb544a..f75a0bfd 100644
          def _effective(payload_key, db_key):
              if payload_key in data:
                  raw = data[payload_key]
-@@ -1157,10 +1167,15 @@ def _apply_stage_tunables(db, data):
+@@ -1157,10 +1165,15 @@ def _apply_stage_tunables(db, data):
  
          size_eff = _effective('windowSizeSeconds', 'window_size_seconds')
          overlap_eff = _effective('windowOverlapSeconds', 'window_overlap_seconds')
@@ -197,80 +124,47 @@ index 86eb544a..f75a0bfd 100644
  
      # Coercion + provider-gating per kind. Each tuple is
      # (coerce_callable, error_message, provider_required, store_callable).
-@@ -1172,6 +1187,17 @@ def _apply_stage_tunables(db, data):
-         if n not in STAGE_TUNABLE_REASONING_LEVELS:
-             raise ValueError(f"must be one of: {', '.join(sorted(STAGE_TUNABLE_REASONING_LEVELS))}")
-         return n
-+    def _coerce_bool(raw):
-+        # Accept JSON booleans and the truthy/falsy string set. The DB stores
-+        # the lowercase form so the reader can use coerce_bool_setting too.
-+        if isinstance(raw, bool):
-+            return raw
-+        s = str(raw).strip().lower()
-+        if s in ('true', '1', 'yes'):
-+            return True
-+        if s in ('false', '0', 'no'):
-+            return False
-+        raise ValueError('must be a boolean')
- 
-     KIND_RULES = {
-         # kind:        (coerce,        type_msg,       provider_gate,    range_checked)
-@@ -1180,6 +1206,7 @@ def _apply_stage_tunables(db, data):
-         'budget':      (_coerce_int,   'an integer',   'anthropic',      True),
-         'level':       (_coerce_level, None,           'not_anthropic',  False),
-         'ollama_ctx':  (_coerce_int,   'an integer',   'ollama',         True),
-+        'bool':        (_coerce_bool,  'a boolean',    None,             False),
-     }
- 
-     provider = None  # Lazy-resolve only when a provider-gated field is present.
-@@ -1230,7 +1257,7 @@ def _apply_stage_tunables(db, data):
-                     {'error': f'{payload_key} must be between {lo} and {hi}'}, 400
-                 )
- 
--        db.set_setting(db_key, str(v), is_default=False)
-+        db.set_setting(db_key, str(v).lower() if kind == 'bool' else str(v), is_default=False)
-         logger.info(f"Updated {db_key} to: {v!r}")
-     return None
- 
 diff --git a/src/config.py b/src/config.py
-index 40c2e66e..fe07265f 100644
+index 40c2e66e..e70db83c 100644
 --- a/src/config.py
 +++ b/src/config.py
-@@ -480,7 +480,9 @@ SUBPROCESS_VERSION_PROBE = 5         # ffmpeg -version, fpcalc -version
- # LLM Timeouts (seconds)
+@@ -108,6 +108,35 @@ WINDOW_SIZE_SECONDS = 600       # Claude processing window (10 min)
+ WINDOW_OVERLAP_SECONDS = 180    # Overlap between windows (3 min)
+ MAX_FILE_SIZE_MB = 500          # Maximum audio file size
+ 
++# Default range for the large_window_seconds cost-optimisation tunable.
++# Overridable via LARGE_WINDOW_MIN_SECONDS / LARGE_WINDOW_MAX_SECONDS env
++# vars so users with larger-context models can tune without forking MinusPod.
++LARGE_WINDOW_MIN_SECONDS_DEFAULT = 300
++LARGE_WINDOW_MAX_SECONDS_DEFAULT = 36000
++
++
++def _large_window_range() -> tuple:
++    """Resolve the (min, max) bounds for large_window_seconds from env."""
++    try:
++        lo = int(os.environ.get('LARGE_WINDOW_MIN_SECONDS', LARGE_WINDOW_MIN_SECONDS_DEFAULT))
++    except (TypeError, ValueError):
++        _tunable_logger.warning("LARGE_WINDOW_MIN_SECONDS=%r is not an integer; using default %d",
++            os.environ.get('LARGE_WINDOW_MIN_SECONDS'), LARGE_WINDOW_MIN_SECONDS_DEFAULT)
++        lo = LARGE_WINDOW_MIN_SECONDS_DEFAULT
++    try:
++        hi = int(os.environ.get('LARGE_WINDOW_MAX_SECONDS', LARGE_WINDOW_MAX_SECONDS_DEFAULT))
++    except (TypeError, ValueError):
++        _tunable_logger.warning("LARGE_WINDOW_MAX_SECONDS=%r is not an integer; using default %d",
++            os.environ.get('LARGE_WINDOW_MAX_SECONDS'), LARGE_WINDOW_MAX_SECONDS_DEFAULT)
++        hi = LARGE_WINDOW_MAX_SECONDS_DEFAULT
++    if lo < 1:
++        _tunable_logger.warning("LARGE_WINDOW_MIN_SECONDS=%d must be >= 1; clamping", lo)
++        lo = LARGE_WINDOW_MIN_SECONDS_DEFAULT
++    if hi < lo:
++        _tunable_logger.warning("LARGE_WINDOW_MAX_SECONDS=%d < LARGE_WINDOW_MIN_SECONDS=%d; swapping", hi, lo)
++        lo, hi = hi, lo
++    return (lo, hi)
++
  # ============================================================
- LLM_TIMEOUT_DEFAULT = 120.0          # Anthropic / fast cloud APIs
--LLM_TIMEOUT_LOCAL = 600.0            # Ollama / local models (10 min)
-+LLM_TIMEOUT_LOCAL = float(os.environ.get('LLM_TIMEOUT_LOCAL', '1200'))
-+                                      # Ollama / local models (default 20 min;
-+                                      # large models on 10-min windows need headroom)
- LLM_RETRY_MAX_RETRIES = 3            # Default retries for cloud APIs
- LLM_RETRY_MAX_RETRIES_LOCAL = 2      # Fewer retries for local (each is slow)
- AD_DETECTION_MAX_TOKENS = int(os.environ.get('AD_DETECTION_MAX_TOKENS', '4096'))
-@@ -505,8 +507,11 @@ HTTP_TIMEOUT_PROBE = 5.0              # Short outbound: /version probes,
- HTTP_TIMEOUT_API = 10.0               # Standard JSON API (LLM verify, PodcastIndex search)
- HTTP_TIMEOUT_EXTERNAL = 15.0          # Third-party scraping (pricing sources)
- HTTP_TIMEOUT_FETCH = 30.0             # RSS fetch, artwork / audio download
--HTTP_TIMEOUT_WHISPER = 600            # Remote Whisper transcription upload
--                                      # (multi-minute audio over slow network)
-+HTTP_TIMEOUT_WHISPER = int(os.environ.get('HTTP_TIMEOUT_WHISPER', '600'))
-+                                      # Remote Whisper transcription upload
-+                                      # (multi-minute audio over slow network).
-+                                      # Override via env for local whisper.cpp on
-+                                      # long chunks (e.g. 1800 for 5-min chunks).
- 
+ # Caching (seconds)
  # ============================================================
- # Chunked Transcription (OOM prevention for long episodes)
-@@ -517,7 +522,7 @@ CHUNK_MAX_DURATION_SECONDS = 3600    # Maximum chunk size (60 minutes)
- CHUNK_DEFAULT_DURATION_SECONDS = 1800  # Default if memory detection fails (30 minutes)
- 
- # API backend chunk duration (10 min = ~19MB WAV, under 25MB OpenAI API limit)
--API_CHUNK_DURATION_SECONDS = 600
-+API_CHUNK_DURATION_SECONDS = int(os.environ.get('API_CHUNK_DURATION_SECONDS', '600'))
- 
- # Whisper backend identifiers
- WHISPER_BACKEND_LOCAL = 'local'
-@@ -557,6 +562,62 @@ OPENROUTER_ROUTER_ALIASES = (
+@@ -557,6 +586,49 @@ OPENROUTER_ROUTER_ALIASES = (
      ('openrouter/auto', 'OpenRouter: Auto (routes to best model for the prompt)'),
  )
  
@@ -287,20 +181,7 @@ index 40c2e66e..fe07265f 100644
 +
 +
 +def get_openrouter_provider_config() -> Optional[dict]:
-+    """Build OpenRouter ``provider`` routing object from environment.
-+
-+    See https://openrouter.ai/docs/guides/routing/provider-selection
-+
-+    Env vars:
-+        OPENROUTER_PROVIDER_ORDER: comma-separated provider slugs to try in order
-+            (e.g. ``GMICloud,Novita,Alibaba`` — copy exact slugs from the model's
-+            Providers tab on openrouter.ai).
-+        OPENROUTER_ALLOW_FALLBACKS: ``true``/``false``. Defaults to ``false`` when
-+            ``OPENROUTER_PROVIDER_ORDER`` is set, otherwise unset (OpenRouter default).
-+        OPENROUTER_PROVIDER_SORT: ``price``, ``throughput``, or ``latency``.
-+        OPENROUTER_PROVIDER_ONLY: comma-separated allow-list of provider slugs.
-+        OPENROUTER_PROVIDER_IGNORE: comma-separated deny-list of provider slugs.
-+    """
++    """Build OpenRouter provider routing object from environment."""
 +    order_raw = os.environ.get('OPENROUTER_PROVIDER_ORDER', '').strip()
 +    sort_raw = os.environ.get('OPENROUTER_PROVIDER_SORT', '').strip()
 +    only_raw = os.environ.get('OPENROUTER_PROVIDER_ONLY', '').strip()
@@ -333,46 +214,47 @@ index 40c2e66e..fe07265f 100644
  # ============================================================
  # LLM Pricing Configuration
  # ============================================================
-@@ -782,6 +843,12 @@ STAGE_TUNABLE_DEFAULTS = {
-     # detection window geometry (global, not per-stage)
+@@ -777,11 +849,15 @@ STAGE_TUNABLE_DEFAULTS = {
+     'chapter_title_max_tokens': 500,
+     'chapter_title_reasoning_budget': None,
+     'chapter_title_reasoning_level': None,
+-    # ollama context window (provider-scoped, not per-stage)
++    # ollama context window
+     'ollama_num_ctx': None,
+-    # detection window geometry (global, not per-stage)
++    # detection window geometry
      'window_size_seconds': WINDOW_SIZE_SECONDS,
      'window_overlap_seconds': WINDOW_OVERLAP_SECONDS,
-+    # LLM cost optimisations (global). These let the user dial the per-call
-+    # cost of the ad detector without recompiling. See the CHANGELOG entry
-+    # "LLM cost optimisations" for the design rationale.
-+    'large_window_seconds': 1200,           # used for 1M-context models on long episodes
-+    'skip_verification_under_seconds': 1200,  # skip pass 2 when episode is shorter than this
-+    'enable_prompt_caching': True,         # mark system prompt for OpenRouter cache_control
++    # LLM cost optimisations
++    'large_window_seconds': 10800,
++    'skip_verification_under_seconds': 86400,
++    'enable_prompt_caching': True,
  }
  
  STAGE_TUNABLE_ENV_VARS = {key: key.upper() for key in STAGE_TUNABLE_DEFAULTS}
-@@ -818,13 +885,54 @@ STAGE_TUNABLE_RANGES = {
-     # envelope the resolver checks against.
+@@ -813,15 +889,39 @@ STAGE_TUNABLE_RANGES = {
+     'chapter_title_reasoning_budget': (1024, 65536),
+     # ollama context window
+     'ollama_num_ctx': (512, 131072),
+-    # detection window geometry. Cross-field constraint (overlap < size) is
+-    # enforced at the API layer; the per-field bounds here are the static
+-    # envelope the resolver checks against.
++    # detection window geometry
      'window_size_seconds': (120, 1800),
      'window_overlap_seconds': (0, 1770),
-+    # LLM cost optimisations. large_window_seconds must be >= window_size_seconds
-+    # (cross-field, enforced at the API layer). skip_verification_under_seconds=0
-+    # disables the skip; otherwise any value in [60, 86400] is accepted.
-+    'large_window_seconds': (300, 3600),
++    # LLM cost optimisation ranges
++    'large_window_seconds': _large_window_range(),
 +    'skip_verification_under_seconds': (0, 86400),
  }
  
  STAGE_TUNABLE_REASONING_LEVELS = {"none", "low", "medium", "high"}
  
-+# Subset of STAGE_TUNABLE_DEFAULTS whose values are booleans. Listed
-+# explicitly (rather than detected from the default value) so the API layer
-+# can dispatch on it without re-deriving the type. Mirrors the 'bool' kind
-+# tag in STAGE_TUNABLE_PAYLOAD_KEYS -- the two lists must stay in sync; the
-+# test suite enforces that.
++# Subset of STAGE_TUNABLE_DEFAULTS whose values are booleans.
 +STAGE_TUNABLE_BOOL_KEYS = frozenset((
 +    'enable_prompt_caching',
 +))
 +
-+# Model ID substring patterns that indicate a long-context model (>= 1M
-+# tokens). Substring match is intentional: OpenRouter and similar gateways
-+# namespace model IDs (e.g. ``deepseek/deepseek-v4-flash``,
-+# ``google/gemini-2.5-flash``), so anchoring a regex to the full ID would
-+# miss every gateway-routed request. The check is case-insensitive.
++# Model ID substrings indicating long-context models (>=1M tokens).
 +LARGE_CONTEXT_MODEL_PATTERNS = (
 +    'deepseek-v4',
 +    'gemini-2.5-flash',
@@ -380,16 +262,11 @@ index 40c2e66e..fe07265f 100644
 +    'gemini-flash',
 +    'qwen-long',
 +    'llama-4-',
-+    'llama-3.1-405b',  # 128k, included for safety on borderline cases
++    'llama-3.1-405b',
 +)
 +
 +
 +def is_large_context_model(model_id: str) -> bool:
-+    """True if ``model_id`` looks like a long-context model.
-+
-+    Substring match against LARGE_CONTEXT_MODEL_PATTERNS, case-insensitive.
-+    Returns False for empty / None so callers don't need to guard.
-+    """
 +    if not model_id:
 +        return False
 +    mid = model_id.lower()
@@ -397,24 +274,15 @@ index 40c2e66e..fe07265f 100644
 +
  
  def _coerce_tunable(key: str, raw: Any, source_label: str) -> Optional[Any]:
--    """Coerce a stored or env value to int/float/enum. Returns None on bad value
-+    """Coerce a stored or env value to int/float/enum/bool. Returns None on bad value
-     (caller treats None as 'use default')."""
-     if raw is None:
-         return None
-@@ -841,6 +949,21 @@ def _coerce_tunable(key: str, raw: Any, source_label: str) -> Optional[Any]:
+     """Coerce a stored or env value to int/float/enum. Returns None on bad value
+@@ -841,6 +941,16 @@ def _coerce_tunable(key: str, raw: Any, source_label: str) -> Optional[Any]:
          )
          return None
  
-+    # Bool tunables are stored as "true"/"false" in the DB and accept the same
-+    # truthy/falsy set on the way in. The kind lives in STAGE_TUNABLE_BOOL_KEYS
-+    # so the API and resolver agree without duplicating the list. Garbage
-+    # values (e.g. "perhaps") return None so the default is used -- the same
-+    # fall-back-to-default contract as the other kinds.
 +    if key in STAGE_TUNABLE_BOOL_KEYS:
 +        if isinstance(raw, bool):
 +            return raw
-+        s = str(raw).strip().lower()
++        s = raw_str.lower()
 +        if s in _TRUTHY_STRINGS:
 +            return True
 +        if s in ('false', '0', 'no'):
@@ -424,837 +292,34 @@ index 40c2e66e..fe07265f 100644
      range_ = STAGE_TUNABLE_RANGES.get(key)
      if key.endswith('_temperature'):
          try:
-@@ -970,6 +1093,11 @@ STAGE_TUNABLE_PAYLOAD_KEYS = (
+@@ -970,6 +1080,9 @@ STAGE_TUNABLE_PAYLOAD_KEYS = (
      ('ollamaNumCtx',                   'ollama_num_ctx',                  'ollama_ctx'),
      ('windowSizeSeconds',              'window_size_seconds',             'int'),
      ('windowOverlapSeconds',           'window_overlap_seconds',          'int'),
-+    # LLM cost optimisations. large_window_seconds is cross-field constrained
-+    # to be >= window_size_seconds at the API layer.
 +    ('largeWindowSeconds',             'large_window_seconds',            'int'),
 +    ('skipVerificationUnderSeconds',   'skip_verification_under_seconds', 'int'),
 +    ('enablePromptCaching',            'enable_prompt_caching',           'bool'),
  )
  
  
-diff --git a/src/llm_client.py b/src/llm_client.py
-index facfb639..b7abaff1 100644
---- a/src/llm_client.py
-+++ b/src/llm_client.py
-@@ -51,6 +51,7 @@ from config import (
-     PROVIDER_OPENROUTER,
-     PROVIDER_OLLAMA,
-     PROVIDERS_NON_ANTHROPIC,
-+    get_openrouter_provider_config,
- )
- from llm_capabilities import (
-     get_pass_defaults,
-@@ -77,6 +78,43 @@ _JSON_FORMAT_SYSTEM_INSTRUCTION = (
- )
+diff --git a/src/transcriber.py b/src/transcriber.py
+index 176c113b..e9dceb3b 100644
+--- a/src/transcriber.py
++++ b/src/transcriber.py
+@@ -6,7 +6,7 @@ import re
+ import subprocess
+ import requests
+ from concurrent.futures import ThreadPoolExecutor, as_completed
+-from typing import List, Dict, Optional, Tuple
++from typing import List, Dict, Optional, Tuple, Callable
  
+ from utils.audio import get_audio_duration
+ from utils.time import format_vtt_timestamp
+@@ -1563,6 +1563,7 @@ class Transcriber:
+         audio_path: str,
+         podcast_name: str = None,
+         language_override: Optional[str] = None,
++        progress_callback: Optional[Callable[[str, float], None]] = None,
+     ) -> List[Dict]:
+         """Transcribe audio files with dynamic chunking to prevent OOM errors.
  
-+def _prompt_caching_enabled() -> bool:
-+    """True when the user has enabled OpenRouter prompt caching.
-+
-+    Resolved at call time so Settings UI changes take effect without a
-+    process restart. Imported lazily to avoid a circular import with config.
-+    """
-+    try:
-+        from config import get_stage_tunable
-+        return bool(get_stage_tunable('enable_prompt_caching'))
-+    except Exception:
-+        return False
-+
-+
-+def _with_cache_control(system_message: Dict[str, Any]) -> Dict[str, Any]:
-+    """Return a copy of ``system_message`` annotated for OpenRouter caching.
-+
-+    OpenRouter (and the upstream OpenAI Chat Completions API) honour the
-+    ``cache_control: {"type": "ephemeral"}`` field on content blocks. We
-+    only annotate the system prompt because (a) it's identical across
-+    every window of a single episode -- the maximum possible hit rate --
-+    and (b) the per-window transcript content varies so a cache key on
-+    it would rarely hit in practice. Annotated as a content list (the
-+    schema the OpenAI SDK accepts) so the same payload works for both
-+    providers.
-+    """
-+    return {
-+        'role': system_message['role'],
-+        'content': [
-+            {
-+                'type': 'text',
-+                'text': system_message['content'],
-+                'cache_control': {'type': 'ephemeral'},
-+            }
-+        ],
-+    }
-+
-+
- def _log_content(label: str, content: str, max_length: int = 2000):
-     """Log LLM content at DEBUG level with intelligent truncation.
- 
-@@ -631,13 +669,15 @@ class OpenAICompatibleClient(LLMClient):
-         base_url: Optional[str] = None,
-         api_key: Optional[str] = None,
-         default_model: Optional[str] = None,
--        extra_headers: Optional[Dict[str, str]] = None
-+        extra_headers: Optional[Dict[str, str]] = None,
-+        openrouter_provider: Optional[Dict[str, Any]] = None,
-     ):
-         super().__init__()
-         self.base_url = base_url or os.environ.get('OPENAI_BASE_URL', DEFAULT_OPENAI_BASE_URL)
-         self.api_key = api_key or get_effective_openai_api_key()
-         self.default_model = default_model or os.environ.get('OPENAI_MODEL', 'claude-sonnet-4-5-20250929')
-         self.extra_headers = extra_headers or {}
-+        self.openrouter_provider = openrouter_provider
-         self._client = None
-         # Cache which token parameter each model accepts: "max_completion_tokens" or "max_tokens"
-         # Per-instance to avoid cross-contamination between clients with different base_urls
-@@ -691,7 +731,10 @@ class OpenAICompatibleClient(LLMClient):
-         self._check_circuit_breaker()
-         self._ensure_client()
- 
--        all_messages = [{"role": "system", "content": system}] + messages
-+        system_message = {"role": "system", "content": system}
-+        if _prompt_caching_enabled():
-+            system_message = _with_cache_control(system_message)
-+        all_messages = [system_message] + messages
- 
-         eff_max, eff_temp, eff_reasoning = _apply_pass_fallback(
-             episode_id, pass_name, max_tokens, temperature, reasoning_effort
-@@ -724,8 +767,14 @@ class OpenAICompatibleClient(LLMClient):
-                 else:
-                     kw["response_format"] = response_format
-             reasoning_kwargs = translate_reasoning_effort(active_provider, reasoning)
--            # extra_body merges if a caller already supplied one; we don't, so direct update is fine.
--            kw.update(reasoning_kwargs)
-+            for key, val in reasoning_kwargs.items():
-+                if key != 'extra_body':
-+                    kw[key] = val
-+            extra_body = dict(reasoning_kwargs.get('extra_body') or {})
-+            if self.openrouter_provider:
-+                extra_body['provider'] = self.openrouter_provider
-+            if extra_body:
-+                kw['extra_body'] = extra_body
-             return kw
- 
-         def _send(tok, tmp, reasoning):
-@@ -756,12 +805,23 @@ class OpenAICompatibleClient(LLMClient):
-         finish_reason = getattr(response.choices[0], 'finish_reason', None) if response.choices else None
-         self._warn_if_truncated(finish_reason, eff_max, model)
- 
-+        # Extract prompt-cache read tokens when the provider surfaces them.
-+        # OpenRouter populates response.usage.prompt_tokens_details.cached_tokens
-+        # on every response; other gateways may not. The cost calculator is
-+        # intentionally cache-unaware (it would need a per-model cache-read
-+        # price table), so cached_input_tokens is reported for visibility only.
-+        cached_input_tokens = 0
-+        if response.usage is not None:
-+            details = getattr(response.usage, 'prompt_tokens_details', None)
-+            cached_input_tokens = int(getattr(details, 'cached_tokens', 0) or 0)
-+
-         llm_response = LLMResponse(
-             content=content,
-             model=model,
-             usage={
-                 'input_tokens': response.usage.prompt_tokens,
--                'output_tokens': response.usage.completion_tokens
-+                'output_tokens': response.usage.completion_tokens,
-+                'cached_input_tokens': cached_input_tokens,
-             } if response.usage else None,
-             raw_response=response
-         )
-@@ -769,11 +829,14 @@ class OpenAICompatibleClient(LLMClient):
-         # Log response
-         _log_content("OpenAI response", content)
-         if llm_response.usage:
-+            cache_note = (
-+                f" cached={cached_input_tokens}" if cached_input_tokens else ""
-+            )
-             io_logger.info(
-                 f"OpenAI response: model={llm_response.model}"
-                 f" in={llm_response.usage['input_tokens']}"
-                 f" out={llm_response.usage['output_tokens']}"
--                f" len={len(content)}"
-+                f" len={len(content)}{cache_note}"
-             )
- 
-         self._notify_usage(llm_response)
-@@ -1203,13 +1266,17 @@ def _build_client(provider: str) -> Optional[LLMClient]:
-         return AnthropicClient()
-     elif provider == PROVIDER_OPENROUTER:
-         api_key = get_effective_openrouter_api_key() or 'not-needed'
-+        or_provider = get_openrouter_provider_config()
-+        if or_provider:
-+            logger.info("OpenRouter provider routing active: %s", or_provider)
-         return OpenAICompatibleClient(
-             base_url=OPENROUTER_BASE_URL,
-             api_key=api_key,
-             extra_headers={
-                 'HTTP-Referer': OPENROUTER_HTTP_REFERER,
-                 'X-Title': OPENROUTER_APP_TITLE,
--            }
-+            },
-+            openrouter_provider=or_provider,
-         )
-     elif provider in PROVIDERS_NON_ANTHROPIC:
-         raw_base_url = get_effective_base_url()
-diff --git a/src/main_app/processing.py b/src/main_app/processing.py
-index 32a433ac..cce6c193 100644
---- a/src/main_app/processing.py
-+++ b/src/main_app/processing.py
-@@ -31,6 +31,7 @@ from config import (
-     AUDIO_CUE_SNAP_CONFIDENCE, AUDIO_CUE_PAIR_CONFIDENCE,
-     AUDIO_CUE_PAIR_MIN_BREAK_SECONDS, AUDIO_CUE_PAIR_MAX_BREAK_SECONDS,
-     AUDIO_CUE_PAIR_MAX_BREAK_FRACTION, AUDIO_CUE_PAIR_ORIENT_WINDOW_SECONDS,
-+    get_stage_tunable,
- )
- from llm_capabilities import (
-     PASS_AD_DETECTION_1, PASS_AD_DETECTION_2,
-@@ -285,8 +286,18 @@ def _download_and_transcribe(slug, episode_id, episode_url, podcast_name):
-         status_service.update_job_stage("pass1:transcribing", 20)
-         audio_logger.info(f"[{slug}:{episode_id}] Starting transcription")
-         language_override = get_feed_language_override(db, slug)
-+
-+        def _transcribe_chunk_progress(done: int, total: int) -> None:
-+            pct = 20.0 + (5.0 * done / max(total, 1))
-+            status_service.update_job_stage(
-+                f"pass1:transcribing {done}/{total}", pct,
-+            )
-+
-         segments = transcriber.transcribe_chunked(
--            audio_path, podcast_name=podcast_name, language_override=language_override,
-+            audio_path,
-+            podcast_name=podcast_name,
-+            language_override=language_override,
-+            progress_callback=_transcribe_chunk_progress,
-         )
-         if not segments:
-             raise Exception("Failed to transcribe audio")
-@@ -511,7 +522,7 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
-     """Append heuristic pre/post-roll and VAD-gap ads to ``all_ads`` in place."""
-     if not segments:
-         return
--    from roll_detector import detect_preroll, detect_postroll
-+    from roll_detector import detect_preroll, detect_postroll, detect_tail_gap
-     preroll_ad = detect_preroll(segments, all_ads, podcast_name=podcast_name,
-                                 skip_patterns=skip_patterns)
-     if preroll_ad:
-@@ -523,6 +534,14 @@ def _apply_heuristic_rolls(slug, episode_id, all_ads, segments, podcast_name,
-         all_ads.append(postroll_ad)
-         audio_logger.info(f"[{slug}:{episode_id}] Heuristic post-roll: {postroll_ad['start']:.1f}s-{postroll_ad['end']:.1f}s")
- 
-+    tail_gap_ad = detect_tail_gap(segments, all_ads, episode_duration=episode_duration)
-+    if tail_gap_ad:
-+        all_ads.append(tail_gap_ad)
-+        audio_logger.info(
-+            f"[{slug}:{episode_id}] Heuristic tail-gap: "
-+            f"{tail_gap_ad['start']:.1f}s-{tail_gap_ad['end']:.1f}s"
-+        )
-+
-     # VAD-gap detection (head/mid/tail)
-     if _vad_gap_enabled(db):
-         from vad_gap_detector import detect_vad_gaps
-@@ -582,7 +601,7 @@ def _gate_validation_by_confidence(slug, episode_id, validation_ads, min_cut_con
- 
- def _refine_and_validate(slug, episode_id, all_ads, segments, audio_path,
-                           episode_description, episode_duration, min_cut_confidence,
--                          podcast_name, skip_patterns=False, positional_prior=None):
-+podcast_name, skip_patterns=False, positional_prior=None, db=None):
-     """Pipeline stage: Refine ad boundaries, detect rolls, validate, gate by confidence.
- 
-     Returns (ads_to_remove, all_ads_with_validation).
-@@ -1461,7 +1480,7 @@ def _log_completion_summary(slug, episode_id, pass1_cut_count, *, verification_c
-         if time_saved > 0:
-             db.increment_total_time_saved(time_saved)
-         audio_logger.info(
--            f"[{slug}:{episode_id}] Complete: {original_duration/60:.1f}->{new_duration/60:.1f}min, "
-+            f"[{slug}:{episode_id}] Complete: {(original_duration or 0)/60:.1f}->{(new_duration or 0)/60:.1f}min, "
-             f"{total_cuts} ads removed, {processing_time:.1f}s"
-         )
-     else:
-@@ -1475,7 +1494,10 @@ def _log_completion_summary(slug, episode_id, pass1_cut_count, *, verification_c
-     mem_info = get_available_memory_gb()
-     if mem_info is not None:
-         mem_val, mem_desc = mem_info
--        audio_logger.info(f"[{slug}:{episode_id}] Post-cleanup memory: {mem_val:.1f} GB ({mem_desc})")
-+        if mem_val is not None:
-+            audio_logger.info(f"[{slug}:{episode_id}] Post-cleanup memory: {mem_val:.1f} GB ({mem_desc})")
-+        else:
-+            audio_logger.info(f"[{slug}:{episode_id}] Post-cleanup memory: unknown GB ({mem_desc})")
- 
-     return token_totals
- 
-@@ -1891,7 +1913,8 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
-         mem_info = get_available_memory_gb()
-         if mem_info is not None:
-             mem_val, mem_desc = mem_info
--            audio_logger.info(f"[{slug}:{episode_id}] Available memory: {mem_val:.1f} GB ({mem_desc})")
-+            if mem_val is not None:
-+                audio_logger.info(f"[{slug}:{episode_id}] Available memory: {mem_val:.1f} GB ({mem_desc})")
-         min_cut_confidence = get_min_cut_confidence()
-         audio_logger.info(f"[{slug}:{episode_id}] Confidence threshold: {min_cut_confidence:.0%}")
- 
-@@ -1972,7 +1995,7 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
-             ads_to_remove, all_ads_with_validation = _refine_and_validate(
-                 slug, episode_id, all_ads, segments, audio_path,
-                 episode_description, episode_duration, min_cut_confidence, podcast_name,
--                skip_patterns=skip_patterns, positional_prior=positional_prior
-+skip_patterns=skip_patterns, positional_prior=positional_prior, db=db
-             )
-             _check_cancel(cancel_event, slug, episode_id)
- 
-@@ -2011,7 +2034,7 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
-             if not result:
-                 raise Exception(
-                     f"FFMPEG processing failed for {len(ads_to_remove)} ad segments "
--                    f"({episode_duration / 60:.1f}min episode) - see audio processor logs above"
-+                    f"({(episode_duration or 0) / 60:.1f}min episode) - see audio processor logs above"
-                 )
-             processed_path, applied_cuts = result
- 
-@@ -2040,27 +2063,38 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
-             original_duration = episode_duration
-             _check_cancel(cancel_event, slug, episode_id)
- 
--            # Stage 6: Verification pass
-+# Stage 6: Verification pass.
-+            # Skip when the episode is shorter than the user-configured
-+            # threshold. Short episodes rarely have ads that survive pass 1
-+            # (the pre-roll / mid-roll / post-roll coverage in the detector
-+            # is sized to catch them), and verification doubles the LLM cost
-+            # on those episodes for near-zero yield. 0 disables the skip.
-             current_pass = "pass2"
--            verification_count, v_ads_for_ui, processed_path, verification_cue_count = _run_verification_pass(
--                ctx, processed_path, applied_cuts,
--                skip_patterns, min_cut_confidence,
--                local_audio_processor, detection_progress_callback,
--                original_segments=segments,
--                # LLM-only reprocess maps the saved transcript through the cuts
--                # for pass 2 instead of re-transcribing (issue #349).
--                reuse_transcript=(reprocess_mode == 'llm'),
--            )
--            # Detection-event accounting, not unique cues (issue #350): a cue
--            # in a region pass 1 left in the audio is re-detected here and
--            # intentionally counts twice.
-+            skip_under = get_stage_tunable('skip_verification_under_seconds')
-+            if skip_under > 0 and episode_duration < skip_under:
-+                audio_logger.info(
-+                    f"[{slug}:{episode_id}] Skipping verification pass: "
-+                    f"episode {episode_duration:.0f}s is below "
-+                    f"skip_verification_under_seconds={skip_under:.0f}s threshold"
-+                )
-+                verification_count, v_ads_for_ui, processed_path, verification_cue_count = 0, [], processed_path, 0
-+            else:
-+                verification_count, v_ads_for_ui, processed_path, verification_cue_count = _run_verification_pass(
-+                    ctx, processed_path, applied_cuts,
-+                    skip_patterns, min_cut_confidence,
-+                    local_audio_processor, detection_progress_callback,
-+                    original_segments=segments,
-+                    reuse_transcript=(reprocess_mode == 'llm'),
-+                )
-+                # Merge pass 2 ads into combined list for UI
-+                if v_ads_for_ui:
-+                    all_ads_with_validation = list(all_ads_with_validation) + v_ads_for_ui
-+                    all_ads_with_validation.sort(key=lambda x: x['start'])
-+                    storage.save_combined_ads(slug, episode_id, all_ads_with_validation)
-             audio_cue_count += verification_cue_count
-             _check_cancel(cancel_event, slug, episode_id)
- 
-             # Stage 6b: Optional loudness normalization (second ffmpeg pass).
--            # Applied only to the FINAL settled output so the cut path
--            # (filter_complex) and the ad-detection audio analyzers see
--            # uncompressed dynamics.
-             normalize_raw = db.get_setting('audio_normalize_enabled')
-             if (normalize_raw or 'false').lower() == 'true':
-                 intensity = db.get_setting('audio_normalize_intensity') or 'normal'
-@@ -2085,12 +2119,6 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
-                     )
-             _check_cancel(cancel_event, slug, episode_id)
- 
--            # Merge pass 2 ads into combined list for UI
--            if v_ads_for_ui:
--                all_ads_with_validation = list(all_ads_with_validation) + v_ads_for_ui
--                all_ads_with_validation.sort(key=lambda x: x['start'])
--                storage.save_combined_ads(slug, episode_id, all_ads_with_validation)
--
-             new_duration = local_audio_processor.get_audio_duration(processed_path)
- 
-             existing_episode = db.get_episode(slug, episode_id) or {}
-diff --git a/tests/unit/test_llm_cost_optimizations.py b/tests/unit/test_llm_cost_optimizations.py
-new file mode 100644
-index 00000000..8913bca9
---- /dev/null
-+++ b/tests/unit/test_llm_cost_optimizations.py
-@@ -0,0 +1,312 @@
-+"""Tests for LLM cost optimisations.
-+
-+Covers the four independent levers that reduce per-episode LLM cost on
-+long-context cloud models like deepseek-v4-flash:
-+
-+  1. Long-context window override (resolve_window_size_seconds + is_large_context_model)
-+  2. Skip verification pass for short episodes (skip_verification_under_seconds)
-+  3. OpenRouter prompt caching (enable_prompt_caching + _with_cache_control)
-+  4. Tunable registration: defaults, ranges, bool kind, cross-field validation
-+"""
-+import os
-+from unittest.mock import patch
-+
-+import pytest
-+
-+import config
-+
-+
-+# ---------------------------------------------------------------------------
-+# Fixtures
-+# ---------------------------------------------------------------------------
-+
-+@pytest.fixture(autouse=True)
-+def _flush_provider_cache():
-+    """Clear the DB-backed TTL cache between tests so DB patches don't bleed.
-+
-+    Mirrors the fixture in test_stage_tunables.py.
-+    """
-+    try:
-+        from llm_client import _clear_provider_cache
-+        _clear_provider_cache()
-+    except Exception:
-+        pass
-+    yield
-+    try:
-+        from llm_client import _clear_provider_cache
-+        _clear_provider_cache()
-+    except Exception:
-+        pass
-+
-+
-+def _clear_envs(monkeypatch, *keys):
-+    for key in keys:
-+        monkeypatch.delenv(key, raising=False)
-+
-+
-+def _patch_db_fail():
-+    """Patch Database so stage tunable resolver can't reach the DB.
-+
-+    Mirrors the pattern in test_stage_tunables.py: any DB read raises, the
-+    resolver falls back to defaults (or env, when set).
-+    """
-+    return patch("database.Database", side_effect=Exception("no db in test"))
-+
-+
-+# ---------------------------------------------------------------------------
-+# 1. Long-context model detection
-+# ---------------------------------------------------------------------------
-+
-+class TestLargeContextModelPatterns:
-+    def test_deepseek_v4_matches(self):
-+        # The user's actual model -- a substring match must hit.
-+        assert config.is_large_context_model("deepseek/deepseek-v4-flash") is True
-+
-+    def test_gemini_flash_matches(self):
-+        assert config.is_large_context_model("google/gemini-2.5-flash") is True
-+        assert config.is_large_context_model("google/gemini-3-flash-preview") is True
-+        assert config.is_large_context_model("gemini-flash-experimental") is True
-+
-+    def test_qwen_long_matches(self):
-+        assert config.is_large_context_model("qwen-long-1m") is True
-+
-+    def test_short_context_models_rejected(self):
-+        # These are not 1M-token models and must not match.
-+        assert config.is_large_context_model("gpt-4o-mini") is False
-+        assert config.is_large_context_model("claude-sonnet-4-5") is False
-+        assert config.is_large_context_model("ollama/qwen3:14b") is False
-+
-+    def test_empty_or_none_returns_false(self):
-+        # Defensive: callers should not have to guard against falsy inputs.
-+        assert config.is_large_context_model("") is False
-+        assert config.is_large_context_model(None) is False
-+
-+    def test_case_insensitive_match(self):
-+        # OpenRouter / Ollama sometimes send mixed-case IDs.
-+        assert config.is_large_context_model("DeepSeek/DeepSeek-V4-Flash") is True
-+
-+    def test_patterns_are_substrings(self):
-+        # Sanity: the registered patterns should be substring patterns that
-+        # cover the documented model families. A regression that replaces
-+        # the list with regex would still pass the above tests, but a
-+        # coverage check keeps the family list honest.
-+        patterns = config.LARGE_CONTEXT_MODEL_PATTERNS
-+        assert isinstance(patterns, tuple)
-+        assert "deepseek-v4" in patterns
-+        assert "gemini-2.5-flash" in patterns
-+        assert "gemini-3-flash" in patterns
-+        assert "gemini-flash" in patterns
-+        assert "qwen-long" in patterns
-+
-+
-+# ---------------------------------------------------------------------------
-+# 2. resolve_window_size_seconds
-+# ---------------------------------------------------------------------------
-+
-+class TestResolveWindowSize:
-+    """The window resolver decides per-call size based on model + episode length.
-+
-+    Three branches:
-+      - non-long-context model: always base window
-+      - long-context model, short episode: base window
-+      - long-context model, long episode: large window (>= base, clamped)
-+    """
-+
-+    def test_short_context_model_returns_base(self, monkeypatch):
-+        from ad_detector.prompts import resolve_window_size_seconds
-+        _clear_envs(monkeypatch, "WINDOW_SIZE_SECONDS", "LARGE_WINDOW_SECONDS")
-+        with _patch_db_fail():
-+            # gpt-4o is not 1M-context; even a 5-hour episode should not bump it.
-+            assert resolve_window_size_seconds("gpt-4o", 5 * 3600) == 600.0
-+
-+    def test_long_context_short_episode_returns_base(self, monkeypatch):
-+        from ad_detector.prompts import resolve_window_size_seconds
-+        # 12 min episode, 10 min base, 2x threshold = 20 min -- below
-+        _clear_envs(monkeypatch, "WINDOW_SIZE_SECONDS", "LARGE_WINDOW_SECONDS")
-+        with _patch_db_fail():
-+            assert resolve_window_size_seconds(
-+                "deepseek/deepseek-v4-flash", 12 * 60
-+            ) == 600.0
-+
-+    def test_long_context_long_episode_uses_large_window(self, monkeypatch):
-+        from ad_detector.prompts import resolve_window_size_seconds
-+        # 60 min episode, base 10 min -- well above 2x threshold
-+        _clear_envs(monkeypatch, "WINDOW_SIZE_SECONDS", "LARGE_WINDOW_SECONDS")
-+        with _patch_db_fail():
-+            assert resolve_window_size_seconds(
-+                "deepseek/deepseek-v4-flash", 60 * 60
-+            ) == 1200.0
-+
-+    def test_long_context_at_threshold_boundary(self, monkeypatch):
-+        from ad_detector.prompts import resolve_window_size_seconds
-+        # At exactly 2x base, the override kicks in. The strict > check
-+        # means the boundary episode gets the larger window.
-+        _clear_envs(monkeypatch, "WINDOW_SIZE_SECONDS", "LARGE_WINDOW_SECONDS")
-+        with _patch_db_fail():
-+            # 2 * 600 == 1200; 1200 > 1200 is False, so base is used
-+            # (the threshold is "longer than 2x", not "at least 2x")
-+            assert resolve_window_size_seconds(
-+                "deepseek/deepseek-v4-flash", 1200.0
-+            ) == 600.0
-+            # 1200.1 sec (one tick over) gets the large window
-+            assert resolve_window_size_seconds(
-+                "deepseek/deepseek-v4-flash", 1200.1
-+            ) == 1200.0
-+
-+    def test_large_window_below_base_is_clamped_up(self, monkeypatch):
-+        from ad_detector.prompts import resolve_window_size_seconds
-+        # Defensive: if the user misconfigures large < base, the resolver
-+        # must still return at least base so windows don't shrink.
-+        monkeypatch.setenv("LARGE_WINDOW_SECONDS", "300")  # below default base of 600
-+        with _patch_db_fail():
-+            # 60 min episode, deepseek-v4 -- would normally pick large,
-+            # but clamp to base.
-+            assert resolve_window_size_seconds(
-+                "deepseek/deepseek-v4-flash", 60 * 60
-+            ) == 600.0
-+
-+    def test_env_override_picks_up_in_resolver(self, monkeypatch):
-+        from ad_detector.prompts import resolve_window_size_seconds
-+        monkeypatch.setenv("LARGE_WINDOW_SECONDS", "1800")
-+        with _patch_db_fail():
-+            assert resolve_window_size_seconds(
-+                "deepseek/deepseek-v4-flash", 60 * 60
-+            ) == 1800.0
-+
-+
-+# ---------------------------------------------------------------------------
-+# 3. Skip verification pass threshold (defaults + coercion)
-+# ---------------------------------------------------------------------------
-+
-+class TestSkipVerificationUnder:
-+    def test_default(self, monkeypatch):
-+        _clear_envs(monkeypatch, "SKIP_VERIFICATION_UNDER_SECONDS")
-+        with _patch_db_fail():
-+            assert config.get_stage_tunable("skip_verification_under_seconds") == 1200
-+
-+    def test_zero_disables_skip(self, monkeypatch):
-+        # 0 means "always run pass 2" -- distinct from "use default".
-+        monkeypatch.setenv("SKIP_VERIFICATION_UNDER_SECONDS", "0")
-+        with _patch_db_fail():
-+            assert config.get_stage_tunable("skip_verification_under_seconds") == 0
-+
-+    def test_out_of_range_falls_back_to_default(self, monkeypatch, caplog):
-+        monkeypatch.setenv("SKIP_VERIFICATION_UNDER_SECONDS", "100000")
-+        with _patch_db_fail():
-+            assert config.get_stage_tunable("skip_verification_under_seconds") == 1200
-+        assert any("out of range" in r.message for r in caplog.records)
-+
-+
-+# ---------------------------------------------------------------------------
-+# 4. Prompt caching toggle (bool kind + helpers)
-+# ---------------------------------------------------------------------------
-+
-+class TestEnablePromptCaching:
-+    def test_default_is_true(self, monkeypatch):
-+        _clear_envs(monkeypatch, "ENABLE_PROMPT_CACHING")
-+        with _patch_db_fail():
-+            assert config.get_stage_tunable("enable_prompt_caching") is True
-+
-+    def test_env_can_disable(self, monkeypatch):
-+        monkeypatch.setenv("ENABLE_PROMPT_CACHING", "false")
-+        with _patch_db_fail():
-+            assert config.get_stage_tunable("enable_prompt_caching") is False
-+
-+    def test_env_truthy_values(self, monkeypatch):
-+        for truthy in ("true", "1", "yes", "TRUE", "Yes"):
-+            monkeypatch.setenv("ENABLE_PROMPT_CACHING", truthy)
-+            with _patch_db_fail():
-+                assert config.get_stage_tunable("enable_prompt_caching") is True, truthy
-+
-+    def test_env_falsy_values(self, monkeypatch):
-+        for falsy in ("false", "0", "no", "FALSE", "No"):
-+            monkeypatch.setenv("ENABLE_PROMPT_CACHING", falsy)
-+            with _patch_db_fail():
-+                assert config.get_stage_tunable("enable_prompt_caching") is False, falsy
-+
-+    def test_garbage_value_falls_back_to_default(self, monkeypatch, caplog):
-+        # "perhaps" is not in the truthy/falsy set; resolver should warn
-+        # and return the default (True).
-+        monkeypatch.setenv("ENABLE_PROMPT_CACHING", "perhaps")
-+        with _patch_db_fail():
-+            assert config.get_stage_tunable("enable_prompt_caching") is True
-+
-+
-+class TestPromptCachingHelpers:
-+    def test_disabled_helper_returns_false(self, monkeypatch):
-+        from llm_client import _prompt_caching_enabled
-+        monkeypatch.setenv("ENABLE_PROMPT_CACHING", "false")
-+        with _patch_db_fail():
-+            assert _prompt_caching_enabled() is False
-+
-+    def test_enabled_helper_returns_true(self, monkeypatch):
-+        from llm_client import _prompt_caching_enabled
-+        _clear_envs(monkeypatch, "ENABLE_PROMPT_CACHING")
-+        with _patch_db_fail():
-+            assert _prompt_caching_enabled() is True
-+
-+    def test_with_cache_control_preserves_content(self):
-+        from llm_client import _with_cache_control
-+        original = {"role": "system", "content": "You are an ad detector."}
-+        annotated = _with_cache_control(original)
-+        assert annotated["role"] == "system"
-+        # content becomes a structured list (the schema the OpenAI SDK
-+        # accepts for cache_control annotations).
-+        assert isinstance(annotated["content"], list)
-+        assert annotated["content"][0]["text"] == "You are an ad detector."
-+        assert annotated["content"][0]["cache_control"] == {"type": "ephemeral"}
-+
-+    def test_with_cache_control_does_not_mutate_input(self):
-+        from llm_client import _with_cache_control
-+        original = {"role": "system", "content": "static prompt"}
-+        before = dict(original)
-+        _with_cache_control(original)
-+        # The helper must not mutate the caller's dict.
-+        assert original == before
-+
-+
-+# ---------------------------------------------------------------------------
-+# 5. Registration: defaults, payload keys, ranges all agree
-+# ---------------------------------------------------------------------------
-+
-+class TestTunableRegistration:
-+    """Sanity: defaults, payload keys, ranges, and bool keys are consistent.
-+
-+    A drift between these four structures (e.g. a key added to defaults but
-+    not to payload_keys) would surface as a silent 422 at runtime. These
-+    tests catch that at CI time.
-+    """
-+
-+    def test_payload_keys_match_defaults(self):
-+        for payload_key, db_key, _kind in config.STAGE_TUNABLE_PAYLOAD_KEYS:
-+            assert db_key in config.STAGE_TUNABLE_DEFAULTS, (
-+                f"STAGE_TUNABLE_PAYLOAD_KEYS has {db_key!r} but it's missing "
-+                f"from STAGE_TUNABLE_DEFAULTS"
-+            )
-+
-+    def test_new_tunables_in_defaults(self):
-+        assert "large_window_seconds" in config.STAGE_TUNABLE_DEFAULTS
-+        assert "skip_verification_under_seconds" in config.STAGE_TUNABLE_DEFAULTS
-+        assert "enable_prompt_caching" in config.STAGE_TUNABLE_DEFAULTS
-+
-+    def test_new_tunables_in_payload_keys(self):
-+        db_keys = {db for _pk, db, _k in config.STAGE_TUNABLE_PAYLOAD_KEYS}
-+        assert "large_window_seconds" in db_keys
-+        assert "skip_verification_under_seconds" in db_keys
-+        assert "enable_prompt_caching" in db_keys
-+
-+    def test_new_tunables_in_ranges(self):
-+        # enable_prompt_caching is a bool -- no numeric range.
-+        assert "large_window_seconds" in config.STAGE_TUNABLE_RANGES
-+        assert "skip_verification_under_seconds" in config.STAGE_TUNABLE_RANGES
-+        assert config.STAGE_TUNABLE_RANGES["large_window_seconds"] == (300, 3600)
-+        assert config.STAGE_TUNABLE_RANGES["skip_verification_under_seconds"] == (0, 86400)
-+
-+    def test_bool_keys_match_payload_kind(self):
-+        # STAGE_TUNABLE_BOOL_KEYS and the 'bool' kind in payload keys
-+        # must agree; otherwise a key would be coerced inconsistently.
-+        bool_payload = {
-+            db for _pk, db, kind in config.STAGE_TUNABLE_PAYLOAD_KEYS
-+            if kind == "bool"
-+        }
-+        assert set(config.STAGE_TUNABLE_BOOL_KEYS) == bool_payload
-diff --git a/tests/unit/test_stage_tunables_api.py b/tests/unit/test_stage_tunables_api.py
-index be81eacc..7fb39c1d 100644
---- a/tests/unit/test_stage_tunables_api.py
-+++ b/tests/unit/test_stage_tunables_api.py
-@@ -171,3 +171,154 @@ class TestResetClearsStageTunables:
-         assert db.get_setting('reviewer_reasoning_level') == ''
-         alls = db.get_all_settings()
-         assert alls['reviewer_max_tokens']['is_default'] is True
-+
-+
-+class TestLargeWindowCrossField:
-+    """largeWindowSeconds must be >= windowSizeSeconds. The cross-field check
-+    runs whenever any of the three window/overlap/large fields is in the
-+    payload, and reads the *effective* value (incoming or stored) so an
-+    inline-only change to large can still be validated against the existing
-+    windowSizeSeconds."""
-+
-+    def test_large_below_base_rejected(self, client):
-+        from database import Database
-+        Database().set_setting('window_size_seconds', '600', is_default=False)
-+        r = _put(client, {'largeWindowSeconds': 300})
-+        assert r.status_code == 400
-+        assert 'largeWindowSeconds' in json.loads(r.data)['error']
-+
-+    def test_large_equal_to_base_accepted(self, client):
-+        from database import Database
-+        Database().set_setting('window_size_seconds', '600', is_default=False)
-+        r = _put(client, {'largeWindowSeconds': 600})
-+        assert r.status_code == 200, r.data
-+
-+    def test_large_above_base_accepted(self, client):
-+        from database import Database
-+        Database().set_setting('window_size_seconds', '600', is_default=False)
-+        r = _put(client, {'largeWindowSeconds': 1500})
-+        assert r.status_code == 200
-+
-+    def test_inline_both_rejected(self, client):
-+        from database import Database
-+        Database().set_setting('window_size_seconds', '600', is_default=False)
-+        r = _put(client, {
-+            'windowSizeSeconds': 1200,
-+            'largeWindowSeconds': 600,
-+        })
-+        assert r.status_code == 400
-+
-+    def test_out_of_range_rejected(self, client):
-+        # range is (300, 3600)
-+        r = _put(client, {'largeWindowSeconds': 100})
-+        assert r.status_code == 400
-+        r = _put(client, {'largeWindowSeconds': 9999})
-+        assert r.status_code == 400
-+
-+    def test_null_clears(self, client):
-+        from database import Database
-+        db = Database()
-+        db.set_setting('large_window_seconds', '1500', is_default=False)
-+        r = _put(client, {'largeWindowSeconds': None})
-+        assert r.status_code == 200
-+        assert db.get_setting('large_window_seconds') == ''
-+
-+
-+class TestSkipVerificationUnderApi:
-+    def test_valid_accepted(self, client):
-+        r = _put(client, {'skipVerificationUnderSeconds': 600})
-+        assert r.status_code == 200
-+
-+    def test_zero_disables(self, client):
-+        # 0 is in range (lower bound inclusive) and means "never skip".
-+        r = _put(client, {'skipVerificationUnderSeconds': 0})
-+        assert r.status_code == 200
-+
-+    def test_above_max_rejected(self, client):
-+        # range is (0, 86400)
-+        r = _put(client, {'skipVerificationUnderSeconds': 99999})
-+        assert r.status_code == 400
-+
-+    def test_non_integer_rejected(self, client):
-+        r = _put(client, {'skipVerificationUnderSeconds': 'soon'})
-+        assert r.status_code == 400
-+
-+    def test_null_clears(self, client):
-+        from database import Database
-+        db = Database()
-+        db.set_setting('skip_verification_under_seconds', '600', is_default=False)
-+        r = _put(client, {'skipVerificationUnderSeconds': None})
-+        assert r.status_code == 200
-+        assert db.get_setting('skip_verification_under_seconds') == ''
-+
-+
-+class TestEnablePromptCachingApi:
-+    """The bool kind in the API layer must accept JSON booleans and the
-+    truthy/falsy string set, and store them lowercase so the reader's
-+    coerce_bool_setting works."""
-+
-+    def test_true_accepted(self, client):
-+        r = _put(client, {'enablePromptCaching': True})
-+        assert r.status_code == 200, r.data
-+        from database import Database
-+        assert Database().get_setting('enable_prompt_caching') == 'true'
-+
-+    def test_false_accepted(self, client):
-+        r = _put(client, {'enablePromptCaching': False})
-+        assert r.status_code == 200
-+        from database import Database
-+        assert Database().get_setting('enable_prompt_caching') == 'false'
-+
-+    def test_truthy_strings_accepted(self, client):
-+        for truthy in ('true', '1', 'yes', 'TRUE', 'Yes'):
-+            r = _put(client, {'enablePromptCaching': truthy})
-+            assert r.status_code == 200, truthy
-+
-+    def test_falsy_strings_accepted(self, client):
-+        for falsy in ('false', '0', 'no', 'FALSE', 'No'):
-+            r = _put(client, {'enablePromptCaching': falsy})
-+            assert r.status_code == 200, falsy
-+
-+    def test_garbage_rejected(self, client):
-+        r = _put(client, {'enablePromptCaching': 'perhaps'})
-+        assert r.status_code == 400
-+        assert 'boolean' in json.loads(r.data)['error']
-+
-+    def test_null_clears(self, client):
-+        from database import Database
-+        db = Database()
-+        db.set_setting('enable_prompt_caching', 'true', is_default=False)
-+        r = _put(client, {'enablePromptCaching': None})
-+        assert r.status_code == 200
-+        assert db.get_setting('enable_prompt_caching') == ''
-+
-+
-+class TestGetSettingsExposesNewTunables:
-+    """The GET /settings response should include the three new tunables so
-+    the parent UI can hydrate its panel without a second round-trip."""
-+
-+    def test_get_includes_new_tunables(self, client):
-+        r = client.get('/api/v1/settings')
-+        assert r.status_code == 200
-+        body = json.loads(r.data)
-+        tunables = body.get('stageTunables', {})
-+        assert 'largeWindowSeconds' in tunables
-+        assert 'skipVerificationUnderSeconds' in tunables
-+        assert 'enablePromptCaching' in tunables
-+
-+    def test_get_tunables_have_value_and_isDefault(self, client):
-+        r = client.get('/api/v1/settings')
-+        body = json.loads(r.data)
-+        for key in ('largeWindowSeconds', 'skipVerificationUnderSeconds', 'enablePromptCaching'):
-+            entry = body['stageTunables'][key]
-+            assert 'value' in entry
-+            assert 'isDefault' in entry
-+            assert 'envOverride' in entry
-+
-+    def test_get_tunable_defaults_includes_new_keys(self, client):
-+        r = client.get('/api/v1/settings')
-+        body = json.loads(r.data)
-+        defaults = body.get('stageTunableDefaults', {})
-+        assert defaults.get('largeWindowSeconds') == 1200
-+        assert defaults.get('skipVerificationUnderSeconds') == 1200
-+        assert defaults.get('enablePromptCaching') is True
-

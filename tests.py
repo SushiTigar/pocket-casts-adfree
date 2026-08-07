@@ -16,7 +16,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch, PropertyMock, mock_open
 
 sys.path.insert(0, os.path.dirname(__file__))
 
@@ -1193,6 +1193,39 @@ class TestUIServerEndpoints(unittest.TestCase):
 
     @patch('ui_server.PocketCastsClient')
     @patch('ui_server.MinusPodClient')
+    def test_subscriptions_reconciles_substring_title_mismatch(self, MockMP, MockPC):
+        """When Pocket Casts has the original with a host prefix that MinusPod's
+        RSS doesn't include, the reconcile should still sweep it via substring
+        fallback matching.
+        """
+        mock_pc = MagicMock()
+        mock_pc.get_subscriptions.return_value = [
+            {"uuid": "pod-a", "title": "Podcast A", "url": "https://a.example/rss"},
+        ]
+        up_next_episodes = [
+            {"uuid": "orig-1", "title": "Podcast A — Episode 42", "podcast": "pod-a"},
+            {"uuid": "file-1", "title": "Episode 42 (Ad-Free)",
+             "podcast": "da7aba5e-f11e-f11e-f11e-da7aba5ef11e"},
+        ]
+        mock_pc.client.post.return_value = MagicMock(
+            raise_for_status=MagicMock(), json=MagicMock(return_value={"episodes": up_next_episodes}))
+        mock_pc.get_new_releases.return_value = []
+        mock_pc.get_files.return_value = {"files": [
+            {"uuid": "file-1", "title": "Episode 42 (Ad-Free)"},
+        ]}
+        MockPC.return_value = mock_pc
+        mock_mp = MagicMock()
+        mock_mp.list_feeds.return_value = []
+        MockMP.return_value = mock_mp
+        from ui_server import create_app
+        app = create_app("test@test.com", "testpass")
+        client = app.test_client()
+        resp = client.get('/api/subscriptions')
+        self.assertEqual(resp.status_code, 200)
+        mock_pc.remove_from_up_next.assert_any_call("orig-1")
+
+    @patch('ui_server.PocketCastsClient')
+    @patch('ui_server.MinusPodClient')
     def test_subscriptions_forwards_thumbnail(self, MockMP, MockPC):
         """/api/subscriptions must forward the Pocket Casts thumbnail URL for
         each podcast so the dashboard can render cover art. Older Pocket
@@ -1359,6 +1392,90 @@ class TestUIServerEndpoints(unittest.TestCase):
         self.assertTrue(enriched["starred"])
         self.assertFalse(enriched["is_archived"])
         mock_pc.get_podcast_episodes.assert_called_with("pod-a")
+
+    def test_queue_status_active_running_exposes_pause_flags(self):
+        """Active job exposes current_episode_completed and paused so the UI
+        can render '✓ <title> (Paused)' instead of leaving the row stale when
+        the orchestrator enters its pause-and-free-resources wait."""
+        import ui_server as _ui
+        from ui_server import create_app, processing_jobs
+        with patch("ui_server.PocketCastsClient"), \
+             patch("ui_server.MinusPodClient"):
+            app = create_app("test@test.com", "testpass")
+            client = app.test_client()
+
+            # Inject a synthetic running-but-paused job into the dict.
+            import threading as _thr
+            job_id = "synthetic-paused"
+            stop_evt = _thr.Event()
+            skip_evt = _thr.Event()
+            pause_evt = _thr.Event()
+            pause_evt.set()  # simulate the orchestrator having paused
+            processing_jobs[job_id] = {
+                "status": "running",
+                "logs": [],
+                "processed": 1,
+                "uploaded": 1,
+                "total_episodes": 3,
+                "current_episode": "Giant Bombcast 952",
+                "current_episode_completed": True,
+                "paused": True,
+                "log_cursor": 0,
+                "skip_event": skip_evt,
+                "stop_event": stop_evt,
+                "pause_event": pause_evt,
+            }
+            old_active = _ui.active_job_id
+            try:
+                _ui.active_job_id = job_id
+                resp = client.get("/api/queue/status")
+                self.assertEqual(resp.status_code, 200)
+                active = resp.get_json().get("active_job")
+                self.assertIsNotNone(active)
+                self.assertEqual(active["current_episode"], "Giant Bombcast 952")
+                self.assertTrue(active["current_episode_completed"])
+                self.assertTrue(active["paused"])
+            finally:
+                _ui.active_job_id = old_active
+                processing_jobs.pop(job_id, None)
+
+    def test_queue_status_running_unpaused_does_not_mark_paused(self):
+        """A running job with no pause_event set must report paused=False."""
+        import ui_server as _ui
+        from ui_server import create_app, processing_jobs
+        with patch("ui_server.PocketCastsClient"), \
+             patch("ui_server.MinusPodClient"):
+            app = create_app("test@test.com", "testpass")
+            client = app.test_client()
+            import threading as _thr
+            job_id = "synthetic-running"
+            processing_jobs[job_id] = {
+                "status": "running",
+                "logs": [],
+                "processed": 0,
+                "uploaded": 0,
+                "total_episodes": 2,
+                "current_episode": "Some Episode",
+                "current_episode_completed": False,
+                "paused": False,
+                "log_cursor": 0,
+                "skip_event": _thr.Event(),
+                "stop_event": _thr.Event(),
+                "pause_event": _thr.Event(),
+            }
+            old_active = _ui.active_job_id
+            try:
+                _ui.active_job_id = job_id
+                resp = client.get("/api/queue/status")
+                active = resp.get_json().get("active_job")
+                self.assertIsNotNone(active)
+                self.assertFalse(active["paused"])
+                self.assertFalse(active["current_episode_completed"])
+            finally:
+                _ui.active_job_id = old_active
+                processing_jobs.pop(job_id, None)
+
+
 
 
 class TestTranscriptPrePopulation(unittest.TestCase):
@@ -2058,6 +2175,162 @@ class TestServicesManager(unittest.TestCase):
             result = self.sm.get_memory_pressure()
         self.assertGreaterEqual(result["available_gb"], 8.0)
         self.assertIsNone(result["warning"])
+
+    def test_reload_dotenv_into_overlays_keys(self):
+        """The .env reloader must overlay keys (not replace the dict), respect
+        the exclude set, and skip comments/blank lines."""
+        from services_manager import _reload_dotenv_into
+        import tempfile, os
+        with tempfile.NamedTemporaryFile("w", suffix=".env", delete=False) as f:
+            f.write(
+                "# comment\n"
+                "\n"
+                "FOO_BAR=hello\n"
+                "export BAZ_QUUX='quoted value'\n"
+                "SKIP_ME=ignored\n"
+                "EMPTY_VAL=\n"
+            )
+            tmp = f.name
+        try:
+            from services_manager import ROOT
+            old_root = ROOT
+            import services_manager as _sm
+            _sm.ROOT = type(ROOT)(os.path.dirname(tmp))
+            # Symlink-style: just point ROOT at the temp dir and use a fixed
+            # filename. Simplest path: monkeypatch ROOT's .env lookup.
+            env = {"EXISTING": "stale"}
+            with patch.object(_sm, "ROOT", new=type(ROOT)(os.path.dirname(tmp))):
+                # The helper reads ROOT/.env directly; alias to our tmp file.
+                os.rename(tmp, os.path.join(os.path.dirname(tmp), ".env"))
+                try:
+                    overlaid = _reload_dotenv_into(env, exclude={"SKIP_ME"})
+                    self.assertGreaterEqual(overlaid, 2)
+                    self.assertEqual(env["FOO_BAR"], "hello")
+                    self.assertEqual(env["BAZ_QUUX"], "quoted value")
+                    self.assertNotIn("SKIP_ME", env)
+                    self.assertEqual(env["EXISTING"], "stale")
+                    self.assertNotIn("EMPTY_VAL", env)
+                finally:
+                    os.rename(os.path.join(os.path.dirname(tmp), ".env"), tmp)
+            _sm.ROOT = old_root
+        finally:
+            os.unlink(tmp)
+
+    def test_start_minuspod_passes_cost_tunables(self):
+        """start_minuspod must include LARGE_WINDOW_SECONDS etc. in the spawned
+        subprocess env so get_stage_tunable can resolve them. Without this,
+        the panel shows the env badge but the resolver still falls back to
+        the DB value (because the env var never reaches the child)."""
+        import services_manager as _sm
+        import subprocess as _real_subprocess
+
+        captured = {}
+
+        class _FakePopen:
+            def __init__(self, args, **kwargs):
+                captured["env"] = dict(kwargs.get("env", {}))
+                captured["args"] = list(args)
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def wait(self, *a, **kw): return 0
+            def poll(self): return 0
+            def communicate(self, *a, **kw): return (b"", b"")
+
+        def _fake_run(*args, **kwargs):
+            # sysctl calls return their normal output; everything else falls
+            # through to real subprocess.run.
+            if args and isinstance(args[0], list) and args[0] and args[0][0] == "sysctl":
+                return _real_subprocess.CompletedProcess(
+                    args=args, returncode=0,
+                    stdout=b"4", stderr=b"",
+                )
+            return _real_subprocess.run(*args, **kwargs)
+
+        fake_module = MagicMock()
+        fake_module.Popen = _FakePopen
+        fake_module.run = _fake_run
+        fake_module.CompletedProcess = _real_subprocess.CompletedProcess
+        fake_module.DEVNULL = _real_subprocess.DEVNULL
+
+        # pre-populate the cost vars in the parent's os.environ so
+        # os.environ.copy() picks them up
+        with patch.dict(os.environ, {
+            "LARGE_WINDOW_SECONDS": "36000",
+            "LARGE_WINDOW_MIN_SECONDS": "300",
+            "LARGE_WINDOW_MAX_SECONDS": "36000",
+            "SKIP_VERIFICATION_UNDER_SECONDS": "86400",
+            "ENABLE_PROMPT_CACHING": "true",
+            "AD_DETECTION_MAX_TOKENS": "8192",
+            "LLM_PROVIDER": "openrouter",
+        }, clear=False), \
+             patch.object(_sm, "subprocess", new=fake_module), \
+             patch.object(_sm, "_pid_listening", return_value=False), \
+             patch.object(_sm, "update_minuspod", return_value={"updated": False}), \
+             patch.object(_sm, "_http_ok", return_value=True), \
+             patch.object(_sm, "_wait_until", return_value=True), \
+             patch.object(_sm, "MINUSPOD_LOG", new="/tmp/minuspod.log"):
+            _sm.start_minuspod()
+        self.assertEqual(captured.get("env", {}).get("LARGE_WINDOW_SECONDS"), "36000")
+        self.assertEqual(captured.get("env", {}).get("LARGE_WINDOW_MIN_SECONDS"), "300")
+        self.assertEqual(captured.get("env", {}).get("LARGE_WINDOW_MAX_SECONDS"), "36000")
+        self.assertEqual(captured.get("env", {}).get("SKIP_VERIFICATION_UNDER_SECONDS"), "86400")
+        self.assertEqual(captured.get("env", {}).get("ENABLE_PROMPT_CACHING"), "true")
+        self.assertEqual(captured.get("env", {}).get("AD_DETECTION_MAX_TOKENS"), "8192")
+
+    def test_large_window_range_defaults(self):
+        """With no env override, the range matches the static defaults."""
+        from services_manager import ROOT
+        import sys
+        _mp_src = str(ROOT / "MinusPod" / "src")
+        if _mp_src not in sys.path:
+            sys.path.insert(0, _mp_src)
+        import config as _mp_config
+        import importlib
+        importlib.reload(_mp_config)
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LARGE_WINDOW_MIN_SECONDS", None)
+            os.environ.pop("LARGE_WINDOW_MAX_SECONDS", None)
+            self.assertEqual(
+                _mp_config._large_window_range(),
+                (_mp_config.LARGE_WINDOW_MIN_SECONDS_DEFAULT,
+                 _mp_config.LARGE_WINDOW_MAX_SECONDS_DEFAULT),
+            )
+
+    def test_large_window_range_env_override(self):
+        """Env vars widen/narrow the accepted range without forking MinusPod."""
+        from services_manager import ROOT
+        import sys
+        _mp_src = str(ROOT / "MinusPod" / "src")
+        if _mp_src not in sys.path:
+            sys.path.insert(0, _mp_src)
+        import config as _mp_config
+        with patch.dict(os.environ, {
+            "LARGE_WINDOW_MAX_SECONDS": "86400",
+        }):
+            self.assertEqual(_mp_config._large_window_range(), (300, 86400))
+        with patch.dict(os.environ, {
+            "LARGE_WINDOW_MIN_SECONDS": "600",
+            "LARGE_WINDOW_MAX_SECONDS": "7200",
+        }):
+            self.assertEqual(_mp_config._large_window_range(), (600, 7200))
+
+    def test_large_window_range_bad_values_fall_back(self):
+        """Non-integer env values log a warning and fall back to defaults."""
+        from services_manager import ROOT
+        import sys
+        _mp_src = str(ROOT / "MinusPod" / "src")
+        if _mp_src not in sys.path:
+            sys.path.insert(0, _mp_src)
+        import config as _mp_config
+        with patch.dict(os.environ, {
+            "LARGE_WINDOW_MIN_SECONDS": "garbage",
+            "LARGE_WINDOW_MAX_SECONDS": "",
+        }):
+            self.assertEqual(
+                _mp_config._large_window_range(),
+                (_mp_config.LARGE_WINDOW_MIN_SECONDS_DEFAULT,
+                 _mp_config.LARGE_WINDOW_MAX_SECONDS_DEFAULT),
+            )
 
 
 class TestServicesEndpoints(unittest.TestCase):

@@ -241,13 +241,20 @@ Transcription still runs locally via whisper.cpp; only ad detection goes to
 the API.
 
 **OpenRouter** — one key, many models. Model IDs use the `provider/model`
-form from [openrouter.ai/models](https://openrouter.ai/models):
+form from [openrouter.ai/models](https://openrouter.ai/models).
+OpenRouter honours `cache_control` annotations for prompt caching —
+set `ENABLE_PROMPT_CACHING=true` and the code sends them automatically.
 
 ```bash
 # .env — OpenRouter
 export LLM_PROVIDER=openrouter
 export OPENROUTER_API_KEY=sk-or-v1-your-key-here
 export OPENAI_MODEL=deepseek/deepseek-v4-flash
+
+# Cost optimizations for OpenRouter (works on any cloud provider):
+export ENABLE_PROMPT_CACHING=true         # OpenRouter honours cache_control markers
+export LARGE_WINDOW_SECONDS=10800         # 3hr full-transcript window
+export SKIP_VERIFICATION_UNDER_SECONDS=86400  # skip verification entirely
 
 # Optional: pin discounted infrastructure hosts (see the model's Providers tab
 # on openrouter.ai for exact slugs). Without this, OpenRouter load-balances at
@@ -257,11 +264,24 @@ export OPENROUTER_ALLOW_FALLBACKS=false
 # Or auto-pick cheapest: export OPENROUTER_PROVIDER_SORT=price
 ```
 
-**Any other OpenAI-compatible API** — OpenAI, Groq, Together, Fireworks, a
-local MLX/vLLM/LiteLLM proxy, etc. Set `LLM_PROVIDER=openai-compatible` and
-point `OPENAI_BASE_URL` at the provider's `/v1` root:
+**Any other OpenAI-compatible API** — OpenAI, DeepSeek, Groq, Together,
+Fireworks, a local MLX/vLLM/LiteLLM proxy, etc. Set `LLM_PROVIDER=openai-compatible`
+and point `OPENAI_BASE_URL` at the provider's `/v1` root:
 
 ```bash
+# .env — DeepSeek (cheapest direct, no markup)
+export LLM_PROVIDER=openai-compatible
+export OPENAI_BASE_URL=https://api.deepseek.com
+export OPENAI_API_KEY=sk-your-deepseek-key
+export OPENAI_MODEL=deepseek-v4-flash
+
+# Cost optimizations for DeepSeek:
+# DeepSeek caches automatically (prefix-matching); cache_control is a no-op.
+# The code auto-detects the provider and skips annotations automatically.
+# Full-transcript windowing + no verification = 1 request per episode.
+export LARGE_WINDOW_SECONDS=10800         # 3hr full-transcript window
+export SKIP_VERIFICATION_UNDER_SECONDS=86400  # disable verification pass
+
 # .env — OpenAI
 export LLM_PROVIDER=openai-compatible
 export OPENAI_BASE_URL=https://api.openai.com/v1
@@ -283,6 +303,22 @@ export OPENAI_MODEL=qwen3:14b
 
 Restart the UI (or MinusPod from the Services panel) after changing LLM
 settings so MinusPod picks up the new environment.
+
+#### Switching between providers
+
+The code auto-detects your provider and adapts caching behaviour:
+
+| Provider | Caching mechanism | What you need |
+|---|---|---|
+| **DeepSeek** | Automatic prefix-based. No annotation needed — the code skips `cache_control` automatically. | `LARGE_WINDOW_SECONDS=10800` (full transcript in 1 window), `SKIP_VERIFICATION_UNDER_SECONDS=86400` (no verification) |
+| **OpenRouter** | `cache_control: ephemeral` annotations. The code sends them when `ENABLE_PROMPT_CACHING=true`. | Same cost tunables as DeepSeek plus `ENABLE_PROMPT_CACHING=true` |
+| **Anthropic** | `cache_control: ephemeral` annotations (prompt caching). | `ANTHROPIC_API_KEY`, `ENABLE_PROMPT_CACHING=true` |
+| **Ollama** | No caching. Annotations are skipped automatically. | Local model, free |
+
+To switch from DeepSeek back to OpenRouter, just change `LLM_PROVIDER`,
+`OPENAI_BASE_URL`, and `OPENAI_API_KEY` — `LARGE_WINDOW_SECONDS` and
+`SKIP_VERIFICATION_UNDER_SECONDS` apply to all providers and don't need
+changing.
 
 ### 6. Launch
 
@@ -421,9 +457,11 @@ Set `LLM_PROVIDER` to choose how MinusPod runs ad detection. See
 |----------|---------|--------|
 | `WINDOW_SIZE_SECONDS` | `600` | Transcript window size handed to the LLM. |
 | `WINDOW_OVERLAP_SECONDS` | `120` | Overlap between consecutive windows. |
-| `LARGE_WINDOW_SECONDS` | `1200` | Window size used in place of `WINDOW_SIZE_SECONDS` for 1 M-context models (DeepSeek V4, Gemini Flash, Qwen Long, Llama 4 / 3.1-405B) on episodes longer than `2 × WINDOW_SIZE_SECONDS`. Cuts the per-episode LLM call count roughly in half on long episodes. |
-| `SKIP_VERIFICATION_UNDER_SECONDS` | `1200` (20 min) | Skip the verification pass on episodes shorter than this. Short episodes rarely have ads that survive pass 1, and verification doubles the LLM cost for near-zero yield. Set to `0` to disable. |
-| `ENABLE_PROMPT_CACHING` | `true` | Annotate the system prompt with `cache_control: ephemeral` so the provider can cache it across the ~22 windows of a long episode. Cached input tokens are reported in the response log; the cost calculator stays cache-unaware. |
+| `LARGE_WINDOW_SECONDS` | `10800` | Window size used in place of `WINDOW_SIZE_SECONDS` for 1M-context models (DeepSeek V4, Gemini Flash, Qwen Long, Llama 4 / 3.1-405B). Default 10800 covers a 3hr episode in a single window, cutting per-episode LLM cost by ~91 % vs the base 10-min windowing strategy. Set lower for smaller windows, higher for longer episodes. Range 300–36000 (10 hr ceiling, sized for 1M-context models). |
+| `LARGE_WINDOW_MIN_SECONDS` | `300` | Lower bound for the accepted `LARGE_WINDOW_SECONDS` range. Override in `.env` to tighten the envelope. |
+| `LARGE_WINDOW_MAX_SECONDS` | `36000` | Upper bound for the accepted `LARGE_WINDOW_SECONDS` range. Widen for larger-context models (e.g. Gemini 1.5 Pro at 2M). |
+| `SKIP_VERIFICATION_UNDER_SECONDS` | `86400` (default, updated) | Skip the verification pass on episodes shorter than this. Default 86400 (24 h) means verification is effectively disabled — the detection pass is accurate enough on 1M-context models and skipping it halves the cost. Set to `0` to always verify. |
+| `ENABLE_PROMPT_CACHING` | `true` | Annotate the system prompt with `cache_control: ephemeral` so the provider can cache it across the ~22 windows of a long episode. **Provider-dependent**: works on OpenRouter and Anthropic (both honour the annotation); **no-op on DeepSeek** (caching is automatic and prefix-based — see [api-docs.deepseek.com/guides/kv_cache](https://api-docs.deepseek.com/guides/kv_cache)) and on Ollama. The code auto-detects the provider from `LLM_PROVIDER` and only annotates when it will be honoured. Cached input tokens are reported in the response log regardless of provider. |
 | `AD_DETECTION_MAX_TOKENS` | `4096` | Token budget per LLM call. |
 | `OLLAMA_NUM_PARALLEL` | `1` | *(Ollama only)* Concurrent requests. Each in-flight slot duplicates the KV cache. Increase only on machines with ≥48 GB free RAM. |
 | `OLLAMA_MAX_LOADED_MODELS` | `1` | *(Ollama only)* How many models Ollama keeps resident. Bumping this silently doubles memory if MinusPod swaps detection ↔ verification ↔ chapters models. |

@@ -19,6 +19,7 @@ Design goals:
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import signal
@@ -30,6 +31,8 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+
+log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).parent
 WHISPER_DIR = ROOT / "whisper.cpp"
@@ -67,6 +70,55 @@ def _http_ok(url: str, timeout: float = 2.0, expect_substr: str | None = None) -
         return True
     except Exception:
         return False
+
+
+def _reload_dotenv_into(env: dict, exclude: set[str] | None = None) -> int:
+    """Re-read ``ROOT/.env`` and overlay keys onto ``env``.
+
+    The parent process (UI / pocketcasts_adfree.py) sources ``.env`` once at
+    startup. If the user edits ``.env`` afterwards and clicks "Restart
+    MinusPod", the parent's ``os.environ`` is stale and would otherwise be
+    copied into the subprocess unchanged. This helper re-reads ``.env`` and
+    merges it on top so the subprocess picks up the latest values without
+    requiring a full UI restart.
+
+    Returns the number of keys overlaid (for logging).
+
+    Lines starting with ``#`` and empty lines are skipped. ``export`` prefix
+    and surrounding quotes are stripped. Values that look empty after that
+    are skipped (we don't want to mask an existing shell value with an
+    empty string).
+    """
+    exclude = exclude or set()
+    env_path = ROOT / ".env"
+    if not env_path.exists():
+        return 0
+    overlaid = 0
+    try:
+        for raw_line in env_path.read_text().splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].strip()
+            if "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if key in exclude or not key:
+                continue
+            if not value:
+                continue
+            if (value.startswith('"') and value.endswith('"')) or (
+                value.startswith("'") and value.endswith("'")
+            ):
+                value = value[1:-1]
+            env[key] = value
+            overlaid += 1
+    except Exception as exc:
+        log.warning("Failed to reload .env from %s: %s", env_path, exc)
+    return overlaid
 
 
 def _pid_listening(port: int) -> int | None:
@@ -561,27 +613,23 @@ def update_minuspod() -> dict:
         if local_sha == remote_sha:
             short = local_sha[:7]
             log.info("MinusPod already at latest (%s)", short)
-            return {"ok": True, "updated": False, "note": f"already at latest ({short})"}
+            if local_sha == remote_sha:
+                short = local_sha[:7]
+                log.info("MinusPod already at pinned SHA (%s)", short)
+                return {"ok": True, "updated": False, "note": f"already at pinned SHA ({short})"}
 
+        # Don't pull latest — reset to the pinned SHA from setup_minuspod.sh.
+        # This matches the contract in scripts/setup_minuspod.sh: the pinned
+        # SHA is the known-working upstream that our patches were generated
+        # against. Chasing origin/main can silently break patches.
+        pin_sha = "d900bdd0622b89089247bafe6a5f9db87876233a"
         old_short = local_sha[:7]
-        new_short = remote_sha[:7]
-        log.info("MinusPod update available: %s → %s; pulling…", old_short, new_short)
+        new_short = pin_sha[:7]
+        log.info("MinusPod: resetting %s → pinned %s", old_short, new_short)
 
-        # Discard locally applied patch before pulling
-        _run("git", "reset", "--hard", "HEAD")
+        _run("git", "fetch", "origin", pin_sha, "--quiet")
+        _run("git", "reset", "--hard", pin_sha)
         _run("git", "clean", "-fd")
-
-        pulled = False
-        for branch in ("main", "master"):
-            pr = _run("git", "pull", "--ff-only", "origin", branch)
-            if pr.returncode == 0:
-                pulled = True
-                break
-        if not pulled:
-            log.warning("MinusPod update: git pull failed (non-fast-forward?)")
-            return {"ok": False, "updated": False, "note": "git pull failed"}
-
-        log.info("MinusPod pulled to %s", new_short)
 
         # Reapply local patches on top of new upstream. The core patch
         # is applied first; additional additive patches (e.g. LLM cost
@@ -627,10 +675,30 @@ def start_minuspod() -> dict:
     if _pid_listening(8000):
         return {"ok": True, "note": "already running"}
     # Auto-update before starting so we always run the latest upstream + local patches.
-    update_result = update_minuspod()
-    if update_result.get("updated"):
+    # BUT: skip the pull if the local MinusPod already has our local patches
+    # applied (the patches include symbols that upstream doesn't, like
+    # _large_window_range and LARGE_WINDOW_MIN_SECONDS_DEFAULT). Pulling latest
+    # upstream overwrites them; users have to manually re-apply via
+    # bash scripts/setup_minuspod.sh when they actually want an upgrade.
+    config_path = MINUSPOD_DIR / "src" / "config.py"
+    needs_update = True
+    if config_path.exists():
+        try:
+            content = config_path.read_text()
+            if "_large_window_range" in content and "LARGE_WINDOW_MIN_SECONDS_DEFAULT" in content:
+                needs_update = False
+        except Exception:
+            pass
+    if needs_update:
+        update_result = update_minuspod()
+        if update_result.get("updated"):
+            import logging
+            logging.getLogger(__name__).info("MinusPod updated: %s", update_result["note"])
+    else:
         import logging
-        logging.getLogger(__name__).info("MinusPod updated: %s", update_result["note"])
+        logging.getLogger(__name__).info(
+            "MinusPod already has local patches applied; skipping upstream pull"
+        )
     venv_python = MINUSPOD_DIR / "venv" / "bin" / "python"
     if not venv_python.exists():
         raise ServiceError(
@@ -648,6 +716,12 @@ def start_minuspod() -> dict:
     ).stdout.strip() or "4"
 
     env = os.environ.copy()
+    # Re-read .env so an edit between UI launch and "Restart MinusPod" is
+    # honoured. Credentials (POCKETCASTS_EMAIL/PASSWORD) are excluded because
+    # they're sensitive and the user already has them set in their shell.
+    overlaid = _reload_dotenv_into(env, exclude={"POCKETCASTS_EMAIL", "POCKETCASTS_PASSWORD"})
+    if overlaid:
+        log.debug("Reloaded %d keys from .env into MinusPod subprocess env", overlaid)
     env.update({
         "DATA_DIR": str(MINUSPOD_DIR / "data"),
         "DATA_PATH": str(MINUSPOD_DIR / "data"),
@@ -677,7 +751,11 @@ def start_minuspod() -> dict:
         "SKIP_VERIFICATION": "true",
         "WINDOW_SIZE_SECONDS": "600",
         "WINDOW_OVERLAP_SECONDS": "120",
-        "AD_DETECTION_MAX_TOKENS": "4096",
+        # Default to 8192 so a single-window ad list (10 hr episode on
+        # LARGE_WINDOW_SECONDS=36000) fits in one response. The upstream
+        # default of 4096 risks truncating long-form shows. Override via
+        # AD_DETECTION_MAX_TOKENS in .env for smaller models/contexts.
+        "AD_DETECTION_MAX_TOKENS": env.get("AD_DETECTION_MAX_TOKENS", "8192"),
         # Default to a single in-flight LLM request. The previous default of
         # 2 doubled the KV-cache footprint (~5GB per 16K context for Qwen3.5
         # 35B-MoE Q4). On a 36GB Mac that, plus Whisper Metal buffers,
@@ -693,8 +771,29 @@ def start_minuspod() -> dict:
         # Tell ollama to evict idle models quickly. Long keep-alives are
         # the second contributor to "fans never quiet down" reports.
         "OLLAMA_KEEP_ALIVE": env.get("OLLAMA_KEEP_ALIVE", "30s"),
+        # LLM cost-optimisation tunables (see README "LLM cost optimisations"
+        # section). These flow through to MinusPod's get_stage_tunable resolver
+        # as the env > DB > default source. Explicit passthroughs (rather than
+        # relying on os.environ.copy()) so they're visible in the process listing
+        # and so the log line below confirms what MinusPod actually sees.
+        "LARGE_WINDOW_SECONDS":          env.get("LARGE_WINDOW_SECONDS", ""),
+        "LARGE_WINDOW_MIN_SECONDS":      env.get("LARGE_WINDOW_MIN_SECONDS", ""),
+        "LARGE_WINDOW_MAX_SECONDS":      env.get("LARGE_WINDOW_MAX_SECONDS", ""),
+        "SKIP_VERIFICATION_UNDER_SECONDS": env.get("SKIP_VERIFICATION_UNDER_SECONDS", ""),
+        "ENABLE_PROMPT_CACHING":         env.get("ENABLE_PROMPT_CACHING", ""),
         "PYTHONPATH": ".",
     })
+    log.info(
+        "Starting MinusPod with cost-optimisation tunables: "
+        "LARGE_WINDOW_SECONDS=%r SKIP_VERIFICATION_UNDER_SECONDS=%r "
+        "ENABLE_PROMPT_CACHING=%r "
+        "(WINDOW_SIZE_SECONDS=%r WINDOW_OVERLAP_SECONDS=%r)",
+        env.get("LARGE_WINDOW_SECONDS") or "<unset>",
+        env.get("SKIP_VERIFICATION_UNDER_SECONDS") or "<unset>",
+        env.get("ENABLE_PROMPT_CACHING") or "<unset>",
+        env.get("WINDOW_SIZE_SECONDS"),
+        env.get("WINDOW_OVERLAP_SECONDS"),
+    )
     log_fd = open(MINUSPOD_LOG, "ab")
     subprocess.Popen(
         [

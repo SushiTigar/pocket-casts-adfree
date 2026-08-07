@@ -634,7 +634,7 @@ let podcasts = [];
       const status = ep.playing_status === 3 ? 'played'
                    : ep.playing_status === 2 ? 'in-progress'
                    : 'unplayed';
-      const dur = formatDur(ep.duration || 0);
+      const dur = (ep.duration && ep.duration > 0) ? formatDur(ep.duration) : '';
       const pub = ep.published ? formatDate(ep.published) : '';
       const progPct = ep.duration > 0 ? Math.round(((ep.played_up_to || 0) / ep.duration) * 100) : 0;
       const progress = ep.playing_status === 2 ? ` · ${progPct}%` : '';
@@ -1181,15 +1181,15 @@ let podcasts = [];
       body.innerHTML = `
         <div class="tunable-section">
           <div class="tunable-title">Large context window</div>
-          <div class="tunable-desc">When the model ID matches a 1M-context pattern <em>and</em> the episode is more than 2× the base window, the detector uses this larger window. A 60-min episode takes 3 windows instead of 6 with a 20-min window.</div>
+          <div class="tunable-desc">When the model ID matches a 1M-context pattern <em>and</em> the episode is more than 2× the base window, the detector uses this larger window. Default range 300–36000 (5 min – 10 hr); widen via <code>LARGE_WINDOW_MAX_SECONDS</code> in <code>.env</code> for larger-context models.</div>
           ${longContextHint}
           <label class="tunable-row">
             <span>Large window (seconds)</span>
-            <input type="number" id="t-large" min="300" max="3600" step="60"
-              value="${esc(large.value ?? '')}" placeholder="${esc(def.largeWindowSeconds ?? 1200)}">
+            <input type="number" id="t-large" min="300" max="36000" step="60"
+              value="${esc(large.value ?? '')}" placeholder="${esc(def.largeWindowSeconds ?? 10800)}">
             ${badge(large)}
           </label>
-          <div class="tunable-hint muted">Default: ${esc(fmtSec(def.largeWindowSeconds))} (1200s = 20 min). Must be ≥ the base <code>windowSizeSeconds</code>.</div>
+          <div class="tunable-hint muted">Default: ${esc(fmtSec(def.largeWindowSeconds))} (10800s = 3 hr). Must be ≥ the base <code>windowSizeSeconds</code>. API rejects values outside the configured range.</div>
         </div>
 
         <div class="tunable-section">
@@ -1482,6 +1482,27 @@ let podcasts = [];
         const d = await api('/episodes/' + uuid);
         podcastEpisodes[uuid] = d.episodes || [];
         loadEpisodesErrors.delete(uuid);
+        // Up Next rows may have been selected using Pocket Casts UUIDs (ep.uuid)
+        // before episodes loaded. After loading, the rows use MinusPod episode IDs
+        // (match.id). Remap selected IDs by title so selection state survives.
+        const existingSel = selectedEpisodes[uuid];
+        if (existingSel && existingSel.size > 0) {
+          const remapped = new Set();
+          for (const oldId of existingSel) {
+            const ep = podcastEpisodes[uuid].find(e => e.id === oldId);
+            if (ep) {
+              remapped.add(ep.id);
+              continue;
+            }
+            // Old ID was a PC UUID; find the matching MinusPod episode by title.
+            const titlesToMatch = (upNextEpisodes || [])
+              .filter(u => u.podcast_uuid === uuid)
+              .map(u => u.title);
+            const match = podcastEpisodes[uuid].find(e => titlesToMatch.includes(e.title) || titlesToMatch.some(t => t + ' (Ad-Free)' === e.title));
+            if (match) remapped.add(match.id);
+          }
+          selectedEpisodes[uuid] = remapped;
+        }
         renderPodcasts();
       } catch(e) {
         podcastEpisodes[uuid] = null;
@@ -1524,6 +1545,7 @@ let podcasts = [];
       const s = selectedEpisodes[uuid];
       s.has(epId) ? s.delete(epId) : s.add(epId);
       renderPodcasts();
+      updateProcessBtn();
     }
 
     function toggleSelectAll() {
@@ -1665,12 +1687,19 @@ let podcasts = [];
 
         if (active) {
           gp.classList.add('active');
-          el('progress-stage').textContent = active.current_episode || 'Processing...';
+          const epName = active.current_episode || 'Processing...';
+          const epDone = active.current_episode_completed ? '✓ ' : '';
+          const epPaused = active.paused ? ' (Paused)' : '';
+          el('progress-stage').textContent = epDone + epName + epPaused;
           const totalAll = active.total_episodes + queuedEps;
+          // When paused after completing an episode, the progress bar reflects
+          // "done with what we set out to do so far" — fill to the processed
+          // count, same as a running job, since the user hasn't aborted.
           const pct = totalAll > 0
             ? Math.round((active.processed / totalAll) * 100) : 0;
           el('progress-bar').style.width = pct + '%';
           let label = `${active.processed}/${totalAll} episodes`;
+          if (active.paused) label += ' — Paused';
           el('progress-label').textContent = label;
 
           // Switch to new active job — reset log cursor
