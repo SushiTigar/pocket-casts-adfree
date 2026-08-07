@@ -462,7 +462,8 @@ Set `LLM_PROVIDER` to choose how MinusPod runs ad detection. See
 | `LARGE_WINDOW_MAX_SECONDS` | `36000` | Upper bound for the accepted `LARGE_WINDOW_SECONDS` range. Widen for larger-context models (e.g. Gemini 1.5 Pro at 2M). |
 | `SKIP_VERIFICATION_UNDER_SECONDS` | `86400` (default, updated) | Skip the verification pass on episodes shorter than this. Default 86400 (24 h) means verification is effectively disabled — the detection pass is accurate enough on 1M-context models and skipping it halves the cost. Set to `0` to always verify. |
 | `ENABLE_PROMPT_CACHING` | `true` | Annotate the system prompt with `cache_control: ephemeral` so the provider can cache it across the ~22 windows of a long episode. **Provider-dependent**: works on OpenRouter and Anthropic (both honour the annotation); **no-op on DeepSeek** (caching is automatic and prefix-based — see [api-docs.deepseek.com/guides/kv_cache](https://api-docs.deepseek.com/guides/kv_cache)) and on Ollama. The code auto-detects the provider from `LLM_PROVIDER` and only annotates when it will be honoured. Cached input tokens are reported in the response log regardless of provider. |
-| `AD_DETECTION_MAX_TOKENS` | `4096` | Token budget per LLM call. |
+| `AD_DETECTION_MAX_TOKENS` | `8192` | Token budget per LLM call. Raised from 4096 so a single-window ad list (10 hr episode on LARGE_WINDOW_SECONDS=36000) fits without truncation. Override via `.env` for smaller models/contexts. |
+| `CHAPTERS_ENABLED` | `true` | **Not in .env** — stored in MinusPod DB. Toggle via Settings → Chapters in UI, or `PUT /api/v1/settings/ad-detection` with `{"chaptersEnabled": false}`. Disabling saves ~2 LLM calls/episode (boundary + title). |
 | `OLLAMA_NUM_PARALLEL` | `1` | *(Ollama only)* Concurrent requests. Each in-flight slot duplicates the KV cache. Increase only on machines with ≥48 GB free RAM. |
 | `OLLAMA_MAX_LOADED_MODELS` | `1` | *(Ollama only)* How many models Ollama keeps resident. Bumping this silently doubles memory if MinusPod swaps detection ↔ verification ↔ chapters models. |
 | `OLLAMA_KEEP_ALIVE` | `30s` | *(Ollama only)* How long Ollama keeps the model loaded after the last request. Short values quiet the fans between episodes; longer values save the ~30 s reload cost. |
@@ -607,6 +608,15 @@ This patch is automatically reapplied on every startup after a MinusPod
 upstream pull, so your local changes survive auto-updates. If a new upstream
 release conflicts with the patch, you'll see a warning in the startup log —
 resolve manually and regenerate.
+
+## Known issues & future work
+
+| Area | Status | Notes |
+|------|--------|-------|
+| **Chapter generation** | Partially working | Produces 1–2 chapters per episode instead of granular boundaries. Root cause: chapter boundary model uses same long-context `deepseek-v4-flash` but prompt/template may need tuning. Workaround: disable with `CHAPTERS_ENABLED=false` (Settings → Chapters or `PUT /settings/ad-detection`). Fix planned: investigate chapter boundary prompt and consider dedicated chapter model setting. |
+| **Auto-update guard** | Functional but manual | `update_minuspod()` pins to `d900bdd0` and skips pull if local patches detected. For true upstream updates, run `bash scripts/setup_minuspod.sh` (re-clones at pin, re-applies patches). A proper version-pinning + diff-based patch rebasing tool would be better. |
+| **DeepSeek prompt caching** | No-op | DeepSeek auto-caches prefix; our `cache_control: ephemeral` annotation is ignored. Not harmful, just unused tokens. |
+| **Verification pass on short episodes** | Defaults to off | `SKIP_VERIFICATION_UNDER_SECONDS=86400` (24h) effectively disables verification. Detection on 1M-context models is accurate enough, but if you need verification for compliance, set to `0` or a lower threshold. |
 
 ## License & credits
 
