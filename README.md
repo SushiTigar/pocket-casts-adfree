@@ -23,6 +23,7 @@
 - [Why this exists](#why-this-exists)
 - [How it works](#how-it-works)
 - [Quick start](#quick-start)
+- [Quick setup: OpenRouter + DeepSeek V4 Flash](#quick-setup-openrouter--deepseek-v4-flash)
 - [First-time setup](#first-time-setup)
 - [Web UI](#web-ui)
 - [CLI](#cli)
@@ -100,15 +101,28 @@ guarantee it finds nothing to cut.
 
 ## Quick start
 
-> Already installed whisper.cpp and MinusPod (and Ollama, if you use local LLM)?
-> One command.
+For a **full new install**, start with [First-time setup](#first-time-setup). For
+**OpenRouter + DeepSeek V4 Flash** (no local Ollama), use the
+[dedicated quick setup](#quick-setup-openrouter--deepseek-v4-flash) instead.
+
+Already installed MinusPod, whisper.cpp, and credentials? Launch the UI:
+
+**macOS / Linux**
 
 ```bash
-cp .env.example .env       # LLM tunables only — not secrets (see Credentials below)
-# One-time: store credentials in Keychain + create secrets.sh (macOS)
-source .venv/bin/activate && source secrets.sh && source .env && python3 pocketcasts_adfree.py ui
-# Open http://localhost:5050 (browser prompts for dashboard login if UI_AUTH_PASSWORD is set)
+# Step 1 — tunables in .env (not secrets)
+cp .env.example .env
+
+# Step 2 — secrets (one-time; see Credentials in First-time setup)
+# macOS: Keychain + secrets.sh | Windows: secrets.ps1 | Linux: plain secrets.sh
+
+# Step 3 — launch
+source venv/bin/activate    # or: source .venv/bin/activate
+source secrets.sh && source .env && python3 pocketcasts_adfree.py ui
+# Open http://localhost:5050 (browser prompts for login if UI_AUTH_PASSWORD is set)
 ```
+
+**Windows (PowerShell)** — see [Windows launch](#step-2b3-launch-the-ui-windows).
 
 The UI auto-starts Whisper and MinusPod in the background on every launch.
 **Ollama is started only when `LLM_PROVIDER=ollama`** (the default); if you
@@ -125,10 +139,10 @@ transcript windows (up to 10 hr episodes in one LLM call), no verification
 pass, and cheapest-host routing. No Ollama or GPU required beyond Whisper.
 
 **You need:** Pocket Casts Plus, an [OpenRouter API key](https://openrouter.ai/keys),
-Python 3.10+, `ffmpeg`, and vendored MinusPod + whisper.cpp (see
-[First-time setup](#first-time-setup) steps 3–4).
+Python 3.10+, `ffmpeg`, and vendored MinusPod + whisper.cpp (complete
+[First-time setup](#first-time-setup) steps 1, 3, and 4 if you haven't already).
 
-### 1. Tunables — copy into `.env`
+### Step 1 — Tunables in `.env`
 
 ```bash
 cp .env.example .env
@@ -156,15 +170,15 @@ slug). `OPENROUTER_PROVIDER_SORT=price` auto-picks the cheapest host; to pin hos
 instead, set `OPENROUTER_PROVIDER_ORDER=DeepInfra,StreamLake,GMICloud` and
 `OPENROUTER_ALLOW_FALLBACKS=false`.
 
-### 2. Secrets — pick your OS
+### Step 2 — Secrets (pick your OS)
 
-| OS | Where secrets live | Details |
-|----|-------------------|---------|
-| **macOS** | Keychain + `secrets.sh` | [macOS Keychain](#store-secrets-in-keychain-one-time-macos) |
-| **Windows** | `secrets.ps1` (gitignored) | [Windows PowerShell](#store-secrets-on-windows-powershell) |
-| **Linux** | `secrets.sh` with plain `export` lines | [Linux / manual](#store-secrets-on-linux-manual-exports) |
+| OS | Where secrets live | Instructions |
+|----|-------------------|--------------|
+| **macOS** | Keychain + `secrets.sh` | [Step 2a](#step-2a-macos-keychain--secretssh) below |
+| **Windows** | `secrets.ps1` | [Step 2b](#step-2b-windows-secretsps1) in First-time setup |
+| **Linux** | `secrets.sh` (plain exports) | [Step 2c](#step-2c-linux-secretssh) in First-time setup |
 
-### 3. Launch
+### Step 3 — Launch
 
 **macOS / Linux:**
 
@@ -182,7 +196,7 @@ Load-DotEnv .env
 python pocketcasts_adfree.py ui
 ```
 
-(`Load-DotEnv` is defined in [Store secrets on Windows](#store-secrets-on-windows-powershell).)
+(`Load-DotEnv` is defined in [Step 2b.2](#step-2b2-add-the-load-dotenv-helper).)
 
 Open `http://localhost:5050`. Log in with `admin` and your `UI_AUTH_PASSWORD`.
 
@@ -190,6 +204,11 @@ Open `http://localhost:5050`. Log in with `admin` and your `UI_AUTH_PASSWORD`.
 and tunables, depending on length (one main LLM call per episode).
 
 ## First-time setup
+
+Follow these steps **in order** on a fresh machine. If you only want OpenRouter +
+DeepSeek V4 Flash, you can skip step 5 and use
+[Quick setup: OpenRouter](#quick-setup-openrouter--deepseek-v4-flash) for the LLM
+`.env` block instead.
 
 ### Prerequisites
 
@@ -204,7 +223,7 @@ Required everywhere:
   - **[Ollama](https://ollama.com)** running locally (default), or
   - A **cloud / remote API** (OpenRouter, OpenAI, Groq, Together, a self-hosted
     vLLM/LiteLLM endpoint, etc.) — see
-    [Choosing an LLM backend](#5-choosing-an-llm-backend)
+    [Choosing an LLM backend](#step-5--choosing-an-llm-backend)
 - 16 GB of RAM minimum for local Whisper transcription; **32 GB+ recommended**
   only if you also run a large local LLM (e.g. the default 35B Ollama model).
   With a cloud LLM, RAM pressure is much lower — you mainly need headroom for
@@ -212,7 +231,7 @@ Required everywhere:
 - About 10 GB of disk for vendored models + transcripts (Whisper weights; Ollama
   models are additional if you run locally).
 
-Platform-specific notes:
+#### Platform-specific notes
 
 | Platform | Transcription backend | Notes |
 |----------|-----------------------|-------|
@@ -228,14 +247,18 @@ brew install ffmpeg cmake
 brew install ollama
 ```
 
-### 1. Clone
+### Step 1 — Clone the repo
+
+No fork required — clone this repository directly:
 
 ```bash
-git clone https://github.com/<your-fork>/pocket-casts-mod.git
-cd pocket-casts-mod
+git clone https://github.com/SushiTigar/pocket-casts-adfree.git
+cd pocket-casts-adfree
 ```
 
-### 2. Credentials
+Want to send pull requests? Fork on GitHub first, then clone your fork instead.
+
+### Step 2 — Credentials
 
 **Secrets** (Pocket Casts login, API keys, dashboard password) must **not** be
 committed. **Tunables** (LLM provider, window sizes, cost optimizations) live in
@@ -244,12 +267,14 @@ committed. **Tunables** (LLM provider, window sizes, cost optimizations) live in
 | Platform | Secret storage | Launch helper |
 |----------|----------------|---------------|
 | macOS | Keychain + `secrets.sh` | `source secrets.sh && source .env` |
-| Windows | `secrets.ps1` + `Load-DotEnv .env` | See [Windows](#store-secrets-on-windows-powershell) |
+| Windows | `secrets.ps1` + `Load-DotEnv .env` | See [Step 2b.3](#step-2b3-launch-the-ui-windows) |
 | Linux | `secrets.sh` (plain exports) | `source secrets.sh && source .env` |
 
-`secrets.sh`, `secrets.ps1`, and `.env` are gitignored.
+`secrets.sh`, `secrets.ps1`, and `.env` are gitignored — never commit them.
 
-#### Store secrets in Keychain (one-time, macOS)
+#### Step 2a — macOS: Keychain + `secrets.sh`
+
+**Step 2a.1 — Store secrets in Keychain (one-time)**
 
 ```bash
 ACCOUNT="$(id -un)"
@@ -272,7 +297,7 @@ security find-generic-password -s ui-auth-password -w
 security add-generic-password -a "$(id -un)" -s "ui-auth-password" -w "NEW_PASSWORD" -U
 ```
 
-#### Create `secrets.sh` (macOS — loads Keychain)
+**Step 2a.2 — Create `secrets.sh` (loads Keychain into the shell)**
 
 `secrets.sh` is not committed. Create it in the repo root (same pattern as
 `.env`):
@@ -294,10 +319,9 @@ The UI also reads Keychain automatically on startup if env vars are unset, but
 `source secrets.sh` is still recommended so shell scripts and `start_services.sh`
 see the same values.
 
-#### Store secrets on Windows (PowerShell)
+#### Step 2b — Windows: `secrets.ps1`
 
-Windows has no Keychain integration in this project. Create `secrets.ps1` in the
-repo root (gitignored — never commit it):
+**Step 2b.1 — Create `secrets.ps1`**
 
 ```powershell
 # secrets.ps1 — NOT committed
@@ -309,8 +333,9 @@ $env:UI_AUTH_PASSWORD = "paste-generated-password-here"
 # Optional: $env:UI_AUTH_USER = "admin"
 ```
 
-Add this helper once (paste into the session before launching, or add to your
-PowerShell profile):
+**Step 2b.2 — Add the `Load-DotEnv` helper**
+
+Paste into your PowerShell session before launching (or add to your profile):
 
 ```powershell
 function Load-DotEnv($path) {
@@ -328,10 +353,10 @@ function Load-DotEnv($path) {
 }
 ```
 
-Launch the UI:
+**Step 2b.3 — Launch the UI (Windows)**
 
 ```powershell
-cd pocket-casts-mod
+cd pocket-casts-adfree
 .\venv\Scripts\Activate.ps1
 . .\secrets.ps1
 Load-DotEnv .env
@@ -342,9 +367,9 @@ On Windows, Whisper usually runs via **Docker** (see
 [Platform-specific notes](#platform-specific-notes)); use the Services panel to
 start the Docker whisper backend if a native build is unavailable.
 
-#### Store secrets on Linux (manual exports)
+#### Step 2c — Linux: `secrets.sh`
 
-Skip Keychain and put plain exports in `secrets.sh`:
+Put plain exports in `secrets.sh` (no Keychain):
 
 ```bash
 cat > secrets.sh <<'EOF'
@@ -357,7 +382,7 @@ EOF
 chmod +x secrets.sh
 ```
 
-#### LLM tunables in `.env`
+#### Step 2d — LLM tunables in `.env` (all platforms)
 
 ```bash
 cp .env.example .env
@@ -367,14 +392,14 @@ $EDITOR .env   # LLM_PROVIDER, OPENAI_MODEL, LARGE_WINDOW_SECONDS, etc.
 Do **not** put `POCKETCASTS_EMAIL`, `POCKETCASTS_PASSWORD`, `OPENROUTER_API_KEY`,
 or `UI_AUTH_PASSWORD` in `.env`.
 
-### 3. Python env + dependencies
+### Step 3 — Python env + dependencies
 
 ```bash
-python3 -m venv venv && source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate   # Windows: .\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-### 4. Vendored dependencies (MinusPod + whisper.cpp)
+### Step 4 — Vendored dependencies (MinusPod + whisper.cpp)
 
 The `MinusPod/` and `whisper.cpp/` checkouts are deliberately **not**
 committed; the helper scripts re-create them at known-good commits and apply
@@ -385,7 +410,9 @@ the local patches in `patches/`.
 ./scripts/setup_whisper.sh     # clone, build with WHISPER_METAL=ON, fetch model
 ```
 
-### 5. Choosing an LLM backend
+On Windows, use Docker for Whisper (see [Platform-specific notes](#platform-specific-notes)).
+
+### Step 5 — Choosing an LLM backend
 
 Ad detection classifies transcript windows with an LLM — one call per ~8 min
 of audio, so a 4-hour episode is ~30 calls. Set `LLM_PROVIDER` in `.env` to
@@ -438,18 +465,23 @@ Use this when you don't want a multi-GB model resident on your machine.
 Transcription still runs locally via whisper.cpp; only ad detection goes to
 the API.
 
-**OpenRouter** — one key, many models. Model IDs use the `provider/model`
-form from [openrouter.ai/models](https://openrouter.ai/models).
-OpenRouter honours `cache_control` annotations for prompt caching —
-set `ENABLE_PROMPT_CACHING=true` and the code sends them automatically.
+**OpenRouter** — one key, many models. For the author's tuned setup (`deepseek/
+deepseek-v4-flash-0731`, full-transcript windowing), use
+[Quick setup: OpenRouter](#quick-setup-openrouter--deepseek-v4-flash) instead of
+the shorter example below.
+
+Model IDs use the `provider/model` form from [openrouter.ai/models](https://openrouter.ai/models).
+Store `OPENROUTER_API_KEY` in Keychain / `secrets.ps1` / `secrets.sh` — not in
+`.env`. OpenRouter honours `cache_control` for prompt caching when
+`ENABLE_PROMPT_CACHING=true`.
 
 ```bash
-# Keychain — store API key (see Credentials section)
+# macOS — store API key in Keychain (see Step 2a.1)
 security add-generic-password -a "$(id -un)" -s "openrouter-api-key" -w "sk-or-v1-your-key-here"
 
-# .env — OpenRouter tunables
+# .env — OpenRouter tunables only
 export LLM_PROVIDER=openrouter
-export OPENAI_MODEL=deepseek/deepseek-v4-flash
+export OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
 
 # Cost optimizations for OpenRouter (works on any cloud provider):
 export ENABLE_PROMPT_CACHING=true         # OpenRouter honours cache_control markers
@@ -464,11 +496,15 @@ export OPENROUTER_ALLOW_FALLBACKS=false
 # Or auto-pick cheapest: export OPENROUTER_PROVIDER_SORT=price
 ```
 
-**Any other OpenAI-compatible API** — OpenAI, DeepSeek, Groq, Together,
-Fireworks, a local MLX/vLLM/LiteLLM proxy, etc. Set `LLM_PROVIDER=openai-compatible`
-and point `OPENAI_BASE_URL` at the provider's `/v1` root:
+**Any other OpenAI-compatible API** — OpenAI, DeepSeek direct, Groq, Together,
+etc. Set `LLM_PROVIDER=openai-compatible` and put API keys in Keychain /
+`secrets.ps1` (or add a custom entry to `secrets.sh`), not in committed files.
+Point `OPENAI_BASE_URL` at the provider's `/v1` root:
 
 ```bash
+# API keys below are shown for illustration — store them in Keychain /
+# secrets.ps1 / secrets.sh in production, not in .env.
+
 # .env — DeepSeek (cheapest direct, no markup)
 export LLM_PROVIDER=openai-compatible
 export OPENAI_BASE_URL=https://api.deepseek.com
@@ -520,11 +556,16 @@ To switch from DeepSeek back to OpenRouter, just change `LLM_PROVIDER`,
 `SKIP_VERIFICATION_UNDER_SECONDS` apply to all providers and don't need
 changing.
 
-### 6. Launch
+### Step 6 — Launch the UI
+
+**macOS / Linux:**
 
 ```bash
+source venv/bin/activate
 source secrets.sh && source .env && python3 pocketcasts_adfree.py ui
 ```
+
+**Windows:** [Step 2b.3](#step-2b3-launch-the-ui-windows).
 
 Open <http://localhost:5050>. If `UI_AUTH_PASSWORD` is set, the browser prompts
 for HTTP Basic Auth (default username `admin`, or `UI_AUTH_USER`). The UI starts
@@ -607,7 +648,7 @@ Ollama is hidden and the active LLM provider is shown instead.
 
 | Service | Port | Managed via | Configured by |
 |---------|------|-------------|---------------|
-| [Ollama](#llm-backend-ollama-or-api) | 11434 | `brew services` (preferred); **skipped when using a cloud LLM** | `LLM_PROVIDER`, `OPENAI_MODEL` |
+| [Ollama](#llm-backend--ollama-or-api) | 11434 | `brew services` (preferred); **skipped when using a cloud LLM** | `LLM_PROVIDER`, `OPENAI_MODEL` |
 | [Whisper](#whispercpp--transcription) | 8765 | Native binary or Docker | `scripts/setup_whisper.sh`, models in `whisper.cpp/models/` |
 | [MinusPod](#minuspod-patches) | 8000 | Flask under `MinusPod/venv/` — **auto-updated on every start** | `LLM_PROVIDER` and related vars in `.env` |
 | [Pipeline UI](#web-ui) | 5050 | This repo | `python3 pocketcasts_adfree.py ui` |
@@ -616,6 +657,8 @@ The panel won't let you stop the UI itself (it'd kill the panel that's
 hosting it).
 
 ## CLI
+
+**macOS / Linux:**
 
 ```bash
 source secrets.sh && source .env && source venv/bin/activate
@@ -632,6 +675,8 @@ python3 pocketcasts_adfree.py auto
 # Filter by podcast name (case-insensitive substring)
 python3 pocketcasts_adfree.py auto --filter 'daily'
 ```
+
+**Windows:** use [Step 2b.3](#step-2b3-launch-the-ui-windows) to load env vars, then run the same `python pocketcasts_adfree.py …` commands.
 
 ## Configuration reference
 
@@ -661,7 +706,7 @@ starting MinusPod (set the env var on Windows/Linux before launch).
 ### Tunables (`.env`)
 
 Set `LLM_PROVIDER` in `.env` to choose how MinusPod runs ad detection. See
-[Choosing an LLM backend](#5-choosing-an-llm-backend) for full examples.
+[Choosing an LLM backend](#step-5--choosing-an-llm-backend) for full examples.
 
 | Variable | Default | Effect |
 |----------|---------|--------|
@@ -782,8 +827,8 @@ request reaches MinusPod, and MinusPod's own cross-field validation
 
 | Symptom | Likely cause / fix |
 |---------|-------------------|
-| Browser asks for login at `localhost:5050` | Expected when `UI_AUTH_PASSWORD` is set. Username defaults to `admin`; password is in Keychain (`security find-generic-password -s ui-auth-password -w`). |
-| `pocketcasts_auth_failed` banner | Wrong Pocket Casts credentials in Keychain. Update with `security add-generic-password -a "$(id -un)" -s "pocketcasts-password" -w "NEW" -U` and restart the UI. |
+| Browser asks for login at `localhost:5050` | Expected when `UI_AUTH_PASSWORD` is set. Username defaults to `admin`. Password: Keychain on macOS (`security find-generic-password -s ui-auth-password -w`), `secrets.ps1` on Windows, or `secrets.sh` on Linux. |
+| `pocketcasts_auth_failed` banner | Wrong Pocket Casts credentials. macOS: `security add-generic-password -a "$(id -un)" -s "pocketcasts-password" -w "NEW" -U`. Windows/Linux: update `secrets.ps1` or `secrets.sh`, then restart the UI. |
 | Phone can't reach the dashboard | Mac must be awake, on the same Wi‑Fi, and reachable at `http://<lan-ip>:5050`. Reserve a static LAN IP on your router or use Tailscale for away-from-home access. |
 | `No module named httpx` | `source venv/bin/activate && pip install -r requirements.txt` |
 | Upload fails with 403 / "subscription required" | Your Pocket Casts account is on the free tier. Custom-file upload is a [Plus](https://pocketcasts.com/plus/) feature. |
@@ -819,6 +864,7 @@ The Services panel can tail any of these inline (`Log` button per row).
 
 ```bash
 source venv/bin/activate
+source secrets.sh   # or secrets.ps1 on Windows — see Step 2
 python -m unittest tests -v
 ```
 
@@ -829,6 +875,10 @@ RSS resolution, processed-podcast detection, the failed-episode abort path,
 the `services_manager` helpers, and every `/api/*` endpoint.
 
 ## Contributing
+
+Fork the repo on GitHub only if you plan to submit pull requests. Otherwise
+clone [SushiTigar/pocket-casts-adfree](https://github.com/SushiTigar/pocket-casts-adfree)
+directly.
 
 PRs that make it more portable, improve ad-detection quality, or broaden
 platform support are welcome.
