@@ -117,6 +117,78 @@ use a cloud LLM API instead, Ollama is skipped entirely. No separate
 upstream on each start, and the
 [LLM cost-optimisation patch](#minuspod-patches) is re-applied on top.
 
+## Quick setup: OpenRouter + DeepSeek V4 Flash
+
+This matches the author's cloud setup: **local Whisper** for transcription,
+**OpenRouter** for ad detection with `deepseek/deepseek-v4-flash-0731`, full-
+transcript windows (up to 10 hr episodes in one LLM call), no verification
+pass, and cheapest-host routing. No Ollama or GPU required beyond Whisper.
+
+**You need:** Pocket Casts Plus, an [OpenRouter API key](https://openrouter.ai/keys),
+Python 3.10+, `ffmpeg`, and vendored MinusPod + whisper.cpp (see
+[First-time setup](#first-time-setup) steps 3–4).
+
+### 1. Tunables — copy into `.env`
+
+```bash
+cp .env.example .env
+```
+
+Paste this block into `.env` (secrets go in Keychain / `secrets.ps1` — not here):
+
+```bash
+export DISABLE_TRANSCRIPT_SYNC=true
+export LLM_PROVIDER=openrouter
+export OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
+export OPENROUTER_PROVIDER_SORT=price
+
+# Full transcript in one window (up to ~10 hr); 1M context on this model
+export LARGE_WINDOW_SECONDS=36000
+export AD_DETECTION_MAX_TOKENS=8192
+export LARGE_WINDOW_MIN_SECONDS=300
+export LARGE_WINDOW_MAX_SECONDS=36000
+export SKIP_VERIFICATION_UNDER_SECONDS=86400
+export ENABLE_PROMPT_CACHING=true
+```
+
+Use `deepseek/deepseek-v4-flash-0731` (not the older `deepseek/deepseek-v4-flash`
+slug). `OPENROUTER_PROVIDER_SORT=price` auto-picks the cheapest host; to pin hosts
+instead, set `OPENROUTER_PROVIDER_ORDER=DeepInfra,StreamLake,GMICloud` and
+`OPENROUTER_ALLOW_FALLBACKS=false`.
+
+### 2. Secrets — pick your OS
+
+| OS | Where secrets live | Details |
+|----|-------------------|---------|
+| **macOS** | Keychain + `secrets.sh` | [macOS Keychain](#store-secrets-in-keychain-one-time-macos) |
+| **Windows** | `secrets.ps1` (gitignored) | [Windows PowerShell](#store-secrets-on-windows-powershell) |
+| **Linux** | `secrets.sh` with plain `export` lines | [Linux / manual](#store-secrets-on-linux-manual-exports) |
+
+### 3. Launch
+
+**macOS / Linux:**
+
+```bash
+source venv/bin/activate   # or: source .venv/bin/activate
+source secrets.sh && source .env && python3 pocketcasts_adfree.py ui
+```
+
+**Windows (PowerShell):**
+
+```powershell
+.\venv\Scripts\Activate.ps1
+. .\secrets.ps1
+Load-DotEnv .env
+python pocketcasts_adfree.py ui
+```
+
+(`Load-DotEnv` is defined in [Store secrets on Windows](#store-secrets-on-windows-powershell).)
+
+Open `http://localhost:5050`. Log in with `admin` and your `UI_AUTH_PASSWORD`.
+
+**Rough cost:** about **$0.001–0.01 per episode** on OpenRouter with this model
+and tunables, depending on length (one main LLM call per episode).
+
 ## First-time setup
 
 ### Prerequisites
@@ -165,13 +237,17 @@ cd pocket-casts-mod
 
 ### 2. Credentials
 
-**Secrets** (Pocket Casts login, API keys, dashboard password) live in **macOS
-Keychain**, not in `.env`. **Tunables** (LLM provider, window sizes, cost
-optimizations) stay in `.env`. Both `.env` and `secrets.sh` are gitignored.
+**Secrets** (Pocket Casts login, API keys, dashboard password) must **not** be
+committed. **Tunables** (LLM provider, window sizes, cost optimizations) live in
+`.env`. Platform-specific secret storage:
 
-> **macOS only** for the Keychain flow below. On Linux, put exports directly in
-> `secrets.sh` (or `.env.local`) and keep the file out of git — the app reads
-> the same env var names.
+| Platform | Secret storage | Launch helper |
+|----------|----------------|---------------|
+| macOS | Keychain + `secrets.sh` | `source secrets.sh && source .env` |
+| Windows | `secrets.ps1` + `Load-DotEnv .env` | See [Windows](#store-secrets-on-windows-powershell) |
+| Linux | `secrets.sh` (plain exports) | `source secrets.sh && source .env` |
+
+`secrets.sh`, `secrets.ps1`, and `.env` are gitignored.
 
 #### Store secrets in Keychain (one-time, macOS)
 
@@ -196,7 +272,7 @@ security find-generic-password -s ui-auth-password -w
 security add-generic-password -a "$(id -un)" -s "ui-auth-password" -w "NEW_PASSWORD" -U
 ```
 
-#### Create `secrets.sh` (one-time)
+#### Create `secrets.sh` (macOS — loads Keychain)
 
 `secrets.sh` is not committed. Create it in the repo root (same pattern as
 `.env`):
@@ -217,6 +293,69 @@ chmod +x secrets.sh
 The UI also reads Keychain automatically on startup if env vars are unset, but
 `source secrets.sh` is still recommended so shell scripts and `start_services.sh`
 see the same values.
+
+#### Store secrets on Windows (PowerShell)
+
+Windows has no Keychain integration in this project. Create `secrets.ps1` in the
+repo root (gitignored — never commit it):
+
+```powershell
+# secrets.ps1 — NOT committed
+$env:POCKETCASTS_EMAIL = "you@example.com"
+$env:POCKETCASTS_PASSWORD = "your-pocket-casts-password"
+$env:OPENROUTER_API_KEY = "sk-or-v1-your-key-here"   # if using OpenRouter
+# Dashboard login (recommended). Generate: python -c "import secrets; print(secrets.token_urlsafe(24))"
+$env:UI_AUTH_PASSWORD = "paste-generated-password-here"
+# Optional: $env:UI_AUTH_USER = "admin"
+```
+
+Add this helper once (paste into the session before launching, or add to your
+PowerShell profile):
+
+```powershell
+function Load-DotEnv($path) {
+  Get-Content $path | ForEach-Object {
+    if ($_ -match '^\s*#' -or $_ -match '^\s*$') { return }
+    if ($_ -match '^\s*export\s+([^=]+)=(.*)$') {
+      $name = $matches[1].Trim()
+      $val = $matches[2].Trim()
+      if ($val.Length -ge 2 -and $val[0] -eq $val[-1] -and ($val[0] -eq "'" -or $val[0] -eq '"')) {
+        $val = $val.Substring(1, $val.Length - 2)
+      }
+      Set-Item -Path "env:$name" -Value $val
+    }
+  }
+}
+```
+
+Launch the UI:
+
+```powershell
+cd pocket-casts-mod
+.\venv\Scripts\Activate.ps1
+. .\secrets.ps1
+Load-DotEnv .env
+python pocketcasts_adfree.py ui
+```
+
+On Windows, Whisper usually runs via **Docker** (see
+[Platform-specific notes](#platform-specific-notes)); use the Services panel to
+start the Docker whisper backend if a native build is unavailable.
+
+#### Store secrets on Linux (manual exports)
+
+Skip Keychain and put plain exports in `secrets.sh`:
+
+```bash
+cat > secrets.sh <<'EOF'
+#!/usr/bin/env bash
+export POCKETCASTS_EMAIL="you@example.com"
+export POCKETCASTS_PASSWORD="your-pocket-casts-password"
+export OPENROUTER_API_KEY="sk-or-v1-your-key-here"   # if using OpenRouter
+export UI_AUTH_PASSWORD="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+EOF
+chmod +x secrets.sh
+```
 
 #### LLM tunables in `.env`
 
@@ -408,8 +547,9 @@ The dashboard at `http://localhost:5050` has two views.
 
 When `UI_AUTH_PASSWORD` is set (recommended), every page and API call requires
 HTTP Basic Auth. Default username is `admin` (`UI_AUTH_USER` overrides it).
-Password is the value stored in Keychain (`ui-auth-password` service). The
-browser caches credentials after the first successful login, so the existing
+Password is stored in Keychain on macOS (`ui-auth-password`), or in
+`secrets.ps1` on Windows / `secrets.sh` on Linux. The browser caches
+credentials after the first successful login, so the existing
 `fetch()` calls in the UI work without changes.
 
 From another device on your home Wi‑Fi, use `http://<your-mac-lan-ip>:5050`
@@ -495,24 +635,28 @@ python3 pocketcasts_adfree.py auto --filter 'daily'
 
 ## Configuration reference
 
-Configuration is split between **Keychain secrets** (via `secrets.sh`) and
-**`.env` tunables**. Copy `.env.example` to `.env` for tunables only.
+Configuration is split between **secrets** (`secrets.sh` / Keychain on macOS,
+`secrets.ps1` on Windows) and **`.env` tunables**. Copy `.env.example` to
+`.env` for tunables only.
 
-### Secrets (Keychain → `secrets.sh`)
+### Secrets (`secrets.sh` / `secrets.ps1`)
 
-| Keychain service | Env var | Purpose |
-|------------------|---------|---------|
+| Storage (macOS Keychain service) | Env var | Purpose |
+|----------------------------------|---------|---------|
 | `pocketcasts-email` | `POCKETCASTS_EMAIL` | Pocket Casts account email. **Required.** |
 | `pocketcasts-password` | `POCKETCASTS_PASSWORD` | Pocket Casts account password. **Required.** |
 | `openrouter-api-key` | `OPENROUTER_API_KEY` | Required when `LLM_PROVIDER=openrouter`. |
 | `ui-auth-password` | `UI_AUTH_PASSWORD` | Dashboard HTTP Basic Auth password. **Recommended** (UI is reachable on your LAN). |
 
+On **Windows**, set the same env vars in `secrets.ps1` instead of Keychain.
+On **Linux**, use plain `export` lines in `secrets.sh`.
+
 Optional: `UI_AUTH_USER` (default `admin`) can be set in `.env` — it is not
 secret and does not need Keychain.
 
 MinusPod subprocess env intentionally **does not** receive Pocket Casts
-credentials; only `OPENROUTER_API_KEY` is overlaid from Keychain when starting
-MinusPod.
+credentials; on macOS, `OPENROUTER_API_KEY` is overlaid from Keychain when
+starting MinusPod (set the env var on Windows/Linux before launch).
 
 ### Tunables (`.env`)
 

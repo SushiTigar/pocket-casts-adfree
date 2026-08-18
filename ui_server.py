@@ -763,7 +763,7 @@ def create_app(email=None, password=None):
 
         if active_job_id:
             job = processing_jobs.get(active_job_id)
-            if job and job["status"] == "running":
+            if job and job["status"] in ("running", "paused"):
                 active = {
                     "job_id": active_job_id,
                     "processed": job["processed"],
@@ -1358,6 +1358,7 @@ def create_app(email=None, password=None):
             "status": job["status"],
             "processed": job["processed"],
             "uploaded": job["uploaded"],
+            "log_count": len(job["logs"]),
             "new_logs": new_logs,
         })
 

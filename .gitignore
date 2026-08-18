@@ -1,6 +1,7 @@
 # Secrets ----------------------------------------------------------------
 .env
 secrets.sh
+secrets.ps1
 *.env.local
 .continue
 

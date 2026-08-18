@@ -1678,29 +1678,95 @@ let podcasts = [];
       pollTimer = setInterval(pollJobs, 3000);
     }
 
+    function applyActiveJobProgress(active, queuedEps) {
+      const gp = el('global-progress');
+      if (!active) {
+        gp.classList.remove('active');
+        return;
+      }
+      gp.classList.add('active');
+      const epName = active.current_episode || 'Processing...';
+      const epDone = active.current_episode_completed ? '✓ ' : '';
+      const epPaused = active.paused ? ' (Paused)' : '';
+      el('progress-stage').textContent = epDone + epName + epPaused;
+      const totalAll = active.total_episodes + (queuedEps || 0);
+      const pct = totalAll > 0
+        ? Math.round((active.processed / totalAll) * 100) : 0;
+      el('progress-bar').style.width = pct + '%';
+      let label = `${active.processed}/${totalAll} episodes`;
+      if (active.paused) label += ' — Paused';
+      el('progress-label').textContent = label;
+    }
+
+    /** Re-attach to a server-side job after reload or iOS tab sleep. */
+    async function recoverActiveJob(replayLogs) {
+      try {
+        const d = await api('/queue/status');
+        const active = d.active_job;
+        if (!active) return false;
+
+        const queuedEps = d.queued_episodes || 0;
+        const isNewJob = activeJobId !== active.job_id;
+        activeJobId = active.job_id;
+        _jobIsPaused = !!active.paused;
+        showJobControls(true);
+        const pauseBtn = el('btn-pause');
+        if (pauseBtn) {
+          pauseBtn.textContent = _jobIsPaused ? 'Resume' : 'Pause';
+          pauseBtn.classList.toggle('active', _jobIsPaused);
+        }
+        applyActiveJobProgress(active, queuedEps);
+
+        const qb = el('queue-badge');
+        if (queuedEps > 0) {
+          qb.classList.remove('hidden');
+          qb.textContent = `+${queuedEps} queued`;
+        } else {
+          qb.classList.add('hidden');
+        }
+
+        if (replayLogs || isNewJob) {
+          if (replayLogs) clearLog();
+          lastLogCursor = 0;
+          const jd = await api('/job/' + activeJobId + '?cursor=0');
+          if (jd.new_logs && jd.new_logs.length > 0) {
+            jd.new_logs.forEach(l => addLog(l.level, l.msg));
+            lastLogCursor = jd.log_count != null ? jd.log_count : jd.new_logs.length;
+          }
+        } else {
+          // Tab woke — sync cursor in case logs arrived while timers were frozen
+          const jd = await api('/job/' + activeJobId + '?cursor=' + lastLogCursor);
+          if (jd.log_count != null && jd.log_count < lastLogCursor) {
+            lastLogCursor = jd.log_count;
+          }
+          if (jd.new_logs && jd.new_logs.length > 0) {
+            jd.new_logs.forEach(l => addLog(l.level, l.msg));
+            lastLogCursor = jd.log_count != null ? jd.log_count : lastLogCursor + jd.new_logs.length;
+          }
+        }
+
+        startPolling();
+        updateProcessBtn();
+        return true;
+      } catch (e) {
+        console.warn('recoverActiveJob failed:', e);
+        return false;
+      }
+    }
+
     async function pollJobs() {
       try {
         const d = await api('/queue/status');
         const active = d.active_job;
         const queuedEps = d.queued_episodes || 0;
-        const gp = el('global-progress');
 
         if (active) {
-          gp.classList.add('active');
-          const epName = active.current_episode || 'Processing...';
-          const epDone = active.current_episode_completed ? '✓ ' : '';
-          const epPaused = active.paused ? ' (Paused)' : '';
-          el('progress-stage').textContent = epDone + epName + epPaused;
-          const totalAll = active.total_episodes + queuedEps;
-          // When paused after completing an episode, the progress bar reflects
-          // "done with what we set out to do so far" — fill to the processed
-          // count, same as a running job, since the user hasn't aborted.
-          const pct = totalAll > 0
-            ? Math.round((active.processed / totalAll) * 100) : 0;
-          el('progress-bar').style.width = pct + '%';
-          let label = `${active.processed}/${totalAll} episodes`;
-          if (active.paused) label += ' — Paused';
-          el('progress-label').textContent = label;
+          // Pick up an in-flight job if we lost client state (reload / iOS sleep)
+          if (!activeJobId) {
+            activeJobId = active.job_id;
+            showJobControls(true);
+          }
+          applyActiveJobProgress(active, queuedEps);
 
           // Switch to new active job — reset log cursor
           if (activeJobId !== active.job_id) {
@@ -1717,7 +1783,7 @@ let podcasts = [];
           const jd = await api('/job/' + activeJobId + '?cursor=' + lastLogCursor);
           if (jd.new_logs && jd.new_logs.length > 0) {
             jd.new_logs.forEach(l => addLog(l.level, l.msg));
-            lastLogCursor += jd.new_logs.length;
+            lastLogCursor = jd.log_count != null ? jd.log_count : lastLogCursor + jd.new_logs.length;
           }
           if (jd.status === 'completed' || jd.status === 'failed' || jd.status === 'stopped') {
             _jobIsPaused = false;
@@ -1732,7 +1798,7 @@ let podcasts = [];
               addLog('info', `Starting next queued job (${activeJobId.slice(0,8)})`);
             } else if (!d.active_job) {
               clearInterval(pollTimer); pollTimer = null;
-              gp.classList.remove('active');
+              el('global-progress').classList.remove('active');
               loadSubscriptions();
               showJobControls(false);
               activeJobId = null;
@@ -1933,7 +1999,24 @@ let podcasts = [];
 
     checkStatus();
     loadSubscriptions();
+    recoverActiveJob(true);
     setInterval(checkStatus, 15000);
+
+    // iOS Safari suspends timers when the tab is backgrounded — resume polling
+    // when the user returns without a full reload.
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        if (activeJobId) {
+          pollJobs();
+          startPolling();
+        } else {
+          recoverActiveJob(false);
+        }
+      }
+    });
+    window.addEventListener('pageshow', (e) => {
+      if (e.persisted) recoverActiveJob(false);
+    });
 
     // Auto-refresh the dashboard so processed uploads, newly queued episodes,
     // and reconciled-out originals show up without the user clicking anything.
