@@ -114,7 +114,7 @@ Already installed MinusPod, whisper.cpp, and credentials? Launch the UI:
 cp .env.example .env
 
 # Step 2 — secrets (one-time; see Credentials in First-time setup)
-# macOS: Keychain + secrets.sh | Windows: secrets.ps1 | Linux: plain secrets.sh
+# macOS: Passwords app + secrets.sh | Windows: secrets.ps1 | Linux: plain secrets.sh
 
 # Step 3 — launch
 source venv/bin/activate    # or: source .venv/bin/activate
@@ -148,7 +148,7 @@ Python 3.10+, `ffmpeg`, and vendored MinusPod + whisper.cpp (complete
 cp .env.example .env
 ```
 
-Paste this block into `.env` (secrets go in Keychain / `secrets.ps1` — not here):
+Paste this block into `.env` (secrets go in Passwords app / `secrets.ps1` — not here):
 
 ```bash
 export DISABLE_TRANSCRIPT_SYNC=true
@@ -174,7 +174,7 @@ instead, set `OPENROUTER_PROVIDER_ORDER=DeepInfra,StreamLake,GMICloud` and
 
 | OS | Where secrets live | Instructions |
 |----|-------------------|--------------|
-| **macOS** | Keychain + `secrets.sh` | [Step 2a](#step-2a-macos-keychain--secretssh) below |
+| **macOS** | Passwords app + `secrets.sh` | [Step 2a](#step-2a-macos-passwords-app--secretssh) below |
 | **Windows** | `secrets.ps1` | [Step 2b](#step-2b-windows-secretsps1) in First-time setup |
 | **Linux** | `secrets.sh` (plain exports) | [Step 2c](#step-2c-linux-secretssh) in First-time setup |
 
@@ -266,58 +266,111 @@ committed. **Tunables** (LLM provider, window sizes, cost optimizations) live in
 
 | Platform | Secret storage | Launch helper |
 |----------|----------------|---------------|
-| macOS | Keychain + `secrets.sh` | `source secrets.sh && source .env` |
+| macOS | Passwords app + `secrets.sh` | `source secrets.sh && source .env` |
 | Windows | `secrets.ps1` + `Load-DotEnv .env` | See [Step 2b.3](#step-2b3-launch-the-ui-windows) |
 | Linux | `secrets.sh` (plain exports) | `source secrets.sh && source .env` |
 
 `secrets.sh`, `secrets.ps1`, and `.env` are gitignored — never commit them.
 
-#### Step 2a — macOS: Keychain + `secrets.sh`
+#### Step 2a — macOS: Passwords app + `secrets.sh`
 
-**Step 2a.1 — Store secrets in Keychain (one-time)**
+Credentials live in the **Passwords** app (iCloud Keychain sync). The project
+reads **Internet password** items — the same entries you see in Passwords.
+Legacy generic Keychain entries from older setups still work as a fallback.
+
+**Step 2a.1 — Add logins (pick one method)**
+
+**Option A — Passwords app (recommended)**
+
+Open **Passwords** (Spotlight → “Passwords”) and add three logins:
+
+| Website | Username | Password |
+|---------|----------|----------|
+| `http://localhost:5050` | `admin` (or your `UI_AUTH_USER`) | Dashboard login — generate with `python3 -c 'import secrets; print(secrets.token_urlsafe(24))'` |
+| `https://pocketcasts.com` | Your Pocket Casts email | Your Pocket Casts password |
+| `https://openrouter.ai` | `api-key` | Your OpenRouter key (`sk-or-v1-…`) — only if using OpenRouter |
+
+Use title **Pocket Casts Ad-Free UI** for the localhost entry so it is easy to find.
+
+**Option B — Terminal (`security add-internet-password`)**
 
 ```bash
-ACCOUNT="$(id -un)"
+UI_PASS="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
 
-security add-generic-password -a "$ACCOUNT" -s "pocketcasts-email" -w "you@example.com"
-security add-generic-password -a "$ACCOUNT" -s "pocketcasts-password" -w "your-pocket-casts-password"
+security add-internet-password -a admin -s localhost -P 5050 -r http \
+  -l "Pocket Casts Ad-Free UI" -w "$UI_PASS" -U
+
+security add-internet-password -a "you@example.com" -s pocketcasts.com -r htps \
+  -l "Pocket Casts" -w "your-pocket-casts-password" -U
 
 # Only if using OpenRouter (LLM_PROVIDER=openrouter):
-security add-generic-password -a "$ACCOUNT" -s "openrouter-api-key" -w "sk-or-v1-your-key-here"
-
-# Dashboard login (recommended — UI binds to all interfaces on your LAN):
-security add-generic-password -a "$ACCOUNT" -s "ui-auth-password" \
-  -w "$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+security add-internet-password -a api-key -s openrouter.ai -r htps \
+  -l "OpenRouter (Pocket Casts pipeline)" -w "sk-or-v1-your-key-here" -U
 ```
 
-Retrieve or update a stored value later (the `-U` flag updates an existing entry):
+Retrieve or update later:
 
 ```bash
-security find-generic-password -s ui-auth-password -w
-security add-generic-password -a "$(id -un)" -s "ui-auth-password" -w "NEW_PASSWORD" -U
+# Dashboard password — or search "Pocket Casts Ad-Free UI" in Passwords
+security find-internet-password -s localhost -a admin -P 5050 -w
+
+security add-internet-password -a admin -s localhost -P 5050 -r http \
+  -l "Pocket Casts Ad-Free UI" -w "NEW_PASSWORD" -U
 ```
 
-**Step 2a.2 — Create `secrets.sh` (loads Keychain into the shell)**
+**Migrating from generic Keychain entries**
 
-`secrets.sh` is not committed. Create it in the repo root (same pattern as
-`.env`):
+If you previously used `add-generic-password` (those items do **not** appear in
+Passwords), copy them into Internet-password entries once:
+
+```bash
+if security find-generic-password -s ui-auth-password -w >/dev/null 2>&1; then
+  security add-internet-password -a admin -s localhost -P 5050 -r http \
+    -l "Pocket Casts Ad-Free UI" \
+    -w "$(security find-generic-password -s ui-auth-password -w)" -U
+fi
+if security find-generic-password -s pocketcasts-email -w >/dev/null 2>&1; then
+  EMAIL="$(security find-generic-password -s pocketcasts-email -w)"
+  PASS="$(security find-generic-password -s pocketcasts-password -w)"
+  security add-internet-password -a "$EMAIL" -s pocketcasts.com -r htps \
+    -l "Pocket Casts" -w "$PASS" -U
+fi
+if security find-generic-password -s openrouter-api-key -w >/dev/null 2>&1; then
+  security add-internet-password -a api-key -s openrouter.ai -r htps \
+    -l "OpenRouter (Pocket Casts pipeline)" \
+    -w "$(security find-generic-password -s openrouter-api-key -w)" -U
+fi
+```
+
+**Step 2a.2 — Create `secrets.sh` (loads Passwords app / Keychain into the shell)**
+
+`secrets.sh` is not committed. Create it in the repo root:
 
 ```bash
 cat > secrets.sh <<'EOF'
 #!/usr/bin/env bash
 _ACCOUNT="$(id -un)"
-_kc() { security find-generic-password -a "$_ACCOUNT" -s "$1" -w 2>/dev/null || true; }
-export POCKETCASTS_EMAIL="$(_kc pocketcasts-email)"
-export POCKETCASTS_PASSWORD="$(_kc pocketcasts-password)"
-export OPENROUTER_API_KEY="$(_kc openrouter-api-key)"
-export UI_AUTH_PASSWORD="$(_kc ui-auth-password)"
+_UI_USER="${UI_AUTH_USER:-admin}"
+_kc_internet_pass() { security find-internet-password -s "$1" -a "$2" -w 2>/dev/null || true; }
+_kc_internet_pass_server() { security find-internet-password -s "$1" -w 2>/dev/null || true; }
+_kc_internet_pass_port() { security find-internet-password -s "$1" -a "$2" -P "$3" -w 2>/dev/null || true; }
+_kc_internet_acct() { security find-internet-password -s "$1" 2>/dev/null | awk -F'"' '/"acct"/ { print $4; exit }'; }
+_kc_generic() { security find-generic-password -a "$_ACCOUNT" -s "$1" -w 2>/dev/null || true; }
+export POCKETCASTS_EMAIL="$(_kc_internet_acct pocketcasts.com)"
+[ -z "$POCKETCASTS_EMAIL" ] && export POCKETCASTS_EMAIL="$(_kc_generic pocketcasts-email)"
+export POCKETCASTS_PASSWORD="$(_kc_internet_pass_server pocketcasts.com)"
+[ -z "$POCKETCASTS_PASSWORD" ] && export POCKETCASTS_PASSWORD="$(_kc_generic pocketcasts-password)"
+export OPENROUTER_API_KEY="$(_kc_internet_pass openrouter.ai api-key)"
+[ -z "$OPENROUTER_API_KEY" ] && export OPENROUTER_API_KEY="$(_kc_generic openrouter-api-key)"
+export UI_AUTH_PASSWORD="$(_kc_internet_pass_port localhost "$_UI_USER" 5050)"
+[ -z "$UI_AUTH_PASSWORD" ] && export UI_AUTH_PASSWORD="$(_kc_generic ui-auth-password)"
 EOF
 chmod +x secrets.sh
 ```
 
-The UI also reads Keychain automatically on startup if env vars are unset, but
-`source secrets.sh` is still recommended so shell scripts and `start_services.sh`
-see the same values.
+The UI also reads Passwords app / Keychain automatically on startup if env vars
+are unset, but `source secrets.sh` is still recommended so shell scripts and
+`start_services.sh` see the same values.
 
 #### Step 2b — Windows: `secrets.ps1`
 
@@ -471,13 +524,14 @@ deepseek-v4-flash-0731`, full-transcript windowing), use
 the shorter example below.
 
 Model IDs use the `provider/model` form from [openrouter.ai/models](https://openrouter.ai/models).
-Store `OPENROUTER_API_KEY` in Keychain / `secrets.ps1` / `secrets.sh` — not in
+Store `OPENROUTER_API_KEY` in Passwords app / `secrets.ps1` / `secrets.sh` — not in
 `.env`. OpenRouter honours `cache_control` for prompt caching when
 `ENABLE_PROMPT_CACHING=true`.
 
 ```bash
-# macOS — store API key in Keychain (see Step 2a.1)
-security add-generic-password -a "$(id -un)" -s "openrouter-api-key" -w "sk-or-v1-your-key-here"
+# macOS — store API key in Passwords app (see Step 2a.1)
+security add-internet-password -a api-key -s openrouter.ai -r htps \
+  -l "OpenRouter (Pocket Casts pipeline)" -w "sk-or-v1-your-key-here" -U
 
 # .env — OpenRouter tunables only
 export LLM_PROVIDER=openrouter
@@ -497,12 +551,12 @@ export OPENROUTER_ALLOW_FALLBACKS=false
 ```
 
 **Any other OpenAI-compatible API** — OpenAI, DeepSeek direct, Groq, Together,
-etc. Set `LLM_PROVIDER=openai-compatible` and put API keys in Keychain /
+etc. Set `LLM_PROVIDER=openai-compatible` and put API keys in Passwords app /
 `secrets.ps1` (or add a custom entry to `secrets.sh`), not in committed files.
 Point `OPENAI_BASE_URL` at the provider's `/v1` root:
 
 ```bash
-# API keys below are shown for illustration — store them in Keychain /
+# API keys below are shown for illustration — store them in Passwords app /
 # secrets.ps1 / secrets.sh in production, not in .env.
 
 # .env — DeepSeek (cheapest direct, no markup)
@@ -588,7 +642,7 @@ The dashboard at `http://localhost:5050` has two views.
 
 When `UI_AUTH_PASSWORD` is set (recommended), every page and API call requires
 HTTP Basic Auth. Default username is `admin` (`UI_AUTH_USER` overrides it).
-Password is stored in Keychain on macOS (`ui-auth-password`), or in
+Password is stored in the Passwords app on macOS (`localhost:5050`), or in
 `secrets.ps1` on Windows / `secrets.sh` on Linux. The browser caches
 credentials after the first successful login, so the existing
 `fetch()` calls in the UI work without changes.
@@ -680,18 +734,21 @@ python3 pocketcasts_adfree.py auto --filter 'daily'
 
 ## Configuration reference
 
-Configuration is split between **secrets** (`secrets.sh` / Keychain on macOS,
+Configuration is split between **secrets** (`secrets.sh` / Passwords app on macOS,
 `secrets.ps1` on Windows) and **`.env` tunables**. Copy `.env.example` to
 `.env` for tunables only.
 
 ### Secrets (`secrets.sh` / `secrets.ps1`)
 
-| Storage (macOS Keychain service) | Env var | Purpose |
-|----------------------------------|---------|---------|
-| `pocketcasts-email` | `POCKETCASTS_EMAIL` | Pocket Casts account email. **Required.** |
-| `pocketcasts-password` | `POCKETCASTS_PASSWORD` | Pocket Casts account password. **Required.** |
-| `openrouter-api-key` | `OPENROUTER_API_KEY` | Required when `LLM_PROVIDER=openrouter`. |
-| `ui-auth-password` | `UI_AUTH_PASSWORD` | Dashboard HTTP Basic Auth password. **Recommended** (UI is reachable on your LAN). |
+| Storage (macOS Passwords app) | Env var | Purpose |
+|-------------------------------|---------|---------|
+| `pocketcasts.com` — username = email | `POCKETCASTS_EMAIL` | Pocket Casts account email. **Required.** |
+| `pocketcasts.com` — password | `POCKETCASTS_PASSWORD` | Pocket Casts account password. **Required.** |
+| `openrouter.ai` — username `api-key` | `OPENROUTER_API_KEY` | Required when `LLM_PROVIDER=openrouter`. |
+| `localhost:5050` — username `admin` | `UI_AUTH_PASSWORD` | Dashboard HTTP Basic Auth password. **Recommended** (UI is reachable on your LAN). |
+
+Legacy generic Keychain services (`pocketcasts-email`, `ui-auth-password`, etc.)
+are still read if the Passwords-app entries are missing.
 
 On **Windows**, set the same env vars in `secrets.ps1` instead of Keychain.
 On **Linux**, use plain `export` lines in `secrets.sh`.
@@ -700,8 +757,8 @@ Optional: `UI_AUTH_USER` (default `admin`) can be set in `.env` — it is not
 secret and does not need Keychain.
 
 MinusPod subprocess env intentionally **does not** receive Pocket Casts
-credentials; on macOS, `OPENROUTER_API_KEY` is overlaid from Keychain when
-starting MinusPod (set the env var on Windows/Linux before launch).
+credentials; on macOS, `OPENROUTER_API_KEY` is overlaid from Passwords app /
+Keychain when starting MinusPod (set the env var on Windows/Linux before launch).
 
 ### Tunables (`.env`)
 
@@ -714,7 +771,7 @@ Set `LLM_PROVIDER` in `.env` to choose how MinusPod runs ad detection. See
 | `OPENAI_MODEL` | `qwen3.5-addetect` | Model name / ID passed to MinusPod. For OpenRouter use `provider/model` slugs; for Ollama use `ollama list` names. |
 | `OPENAI_BASE_URL` | `http://localhost:11434/v1` | Base URL for Ollama or `openai-compatible` providers (must end in `/v1`). Ignored for `openrouter` and `anthropic`. |
 | `OPENAI_API_KEY` | `not-needed` | API key for `openai-compatible` endpoints. Set to your provider's key (OpenAI, Groq, Together, etc.). |
-| `OPENROUTER_API_KEY` | — | Required when `LLM_PROVIDER=openrouter`. Store in Keychain, not `.env`. |
+| `OPENROUTER_API_KEY` | — | Required when `LLM_PROVIDER=openrouter`. Store in Passwords app, not `.env`. |
 | `OPENROUTER_PROVIDER_ORDER` | — | Comma-separated OpenRouter host slugs to try in order (e.g. `GMICloud,Novita,Alibaba`). Pins discounted providers instead of blended pricing. |
 | `OPENROUTER_ALLOW_FALLBACKS` | `false` when order is set | Whether OpenRouter may use hosts outside `OPENROUTER_PROVIDER_ORDER`. |
 | `OPENROUTER_PROVIDER_SORT` | — | Auto-rank hosts: `price`, `throughput`, or `latency`. Alternative to an explicit order list. |
@@ -827,8 +884,8 @@ request reaches MinusPod, and MinusPod's own cross-field validation
 
 | Symptom | Likely cause / fix |
 |---------|-------------------|
-| Browser asks for login at `localhost:5050` | Expected when `UI_AUTH_PASSWORD` is set. Username defaults to `admin`. Password: Keychain on macOS (`security find-generic-password -s ui-auth-password -w`), `secrets.ps1` on Windows, or `secrets.sh` on Linux. |
-| `pocketcasts_auth_failed` banner | Wrong Pocket Casts credentials. macOS: `security add-generic-password -a "$(id -un)" -s "pocketcasts-password" -w "NEW" -U`. Windows/Linux: update `secrets.ps1` or `secrets.sh`, then restart the UI. |
+| Browser asks for login at `localhost:5050` | Expected when `UI_AUTH_PASSWORD` is set. Username defaults to `admin`. Password: Passwords app on macOS (search **Pocket Casts Ad-Free UI** or run `security find-internet-password -s localhost -a admin -P 5050 -w`), `secrets.ps1` on Windows, or `secrets.sh` on Linux. |
+| `pocketcasts_auth_failed` banner | Wrong Pocket Casts credentials. macOS: update the `pocketcasts.com` login in Passwords, or `security add-internet-password -a "EMAIL" -s pocketcasts.com -r htps -w "NEW" -U`. Windows/Linux: update `secrets.ps1` or `secrets.sh`, then restart the UI. |
 | Phone can't reach the dashboard | Mac must be awake, on the same Wi‑Fi, and reachable at `http://<lan-ip>:5050`. Reserve a static LAN IP on your router or use Tailscale for away-from-home access. |
 | `No module named httpx` | `source venv/bin/activate && pip install -r requirements.txt` |
 | Upload fails with 403 / "subscription required" | Your Pocket Casts account is on the free tier. Custom-file upload is a [Plus](https://pocketcasts.com/plus/) feature. |

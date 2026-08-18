@@ -62,25 +62,107 @@ _KEYCHAIN_ENV_MAP = {
     "ui-auth-password": "UI_AUTH_PASSWORD",
 }
 
+# Internet-password entries show in the Passwords app and sync via iCloud Keychain.
+# Generic-password entries (legacy) are still read as a fallback.
+_POCKETCASTS_INTERNET_SERVER = "pocketcasts.com"
+_OPENROUTER_INTERNET_SERVER = "openrouter.ai"
+_OPENROUTER_INTERNET_ACCOUNT = "api-key"
+_UI_INTERNET_SERVER = "localhost"
+_UI_INTERNET_PORT = 5050
 
-def _get_keychain_secret(service: str) -> str:
-    """Read a generic password from macOS Keychain. Returns '' on failure."""
-    account = getpass.getuser()
+
+def _run_security(args: list[str]) -> subprocess.CompletedProcess[str]:
     try:
-        result = subprocess.run(
-            [
-                "security", "find-generic-password",
-                "-a", account, "-s", service, "-w",
-            ],
+        return subprocess.run(
+            ["security", *args],
             capture_output=True,
             text=True,
             timeout=5,
         )
     except (OSError, subprocess.TimeoutExpired):
-        return ""
+        return subprocess.CompletedProcess(args, 1, "", "")
+
+
+def _get_internet_password(
+    server: str,
+    account: str | None = None,
+    port: int | None = None,
+) -> str:
+    """Read password from an Internet password item (Passwords app / iCloud)."""
+    args = ["find-internet-password", "-s", server]
+    if account:
+        args.extend(["-a", account])
+    if port is not None:
+        args.extend(["-P", str(port)])
+    args.append("-w")
+    result = _run_security(args)
     if result.returncode != 0:
         return ""
     return result.stdout.strip()
+
+
+def _get_internet_account(server: str, port: int | None = None) -> str:
+    """Read the account field from an Internet password (e.g. Pocket Casts email)."""
+    args = ["find-internet-password", "-s", server]
+    if port is not None:
+        args.extend(["-P", str(port)])
+    result = _run_security(args)
+    if result.returncode != 0:
+        return ""
+    for line in result.stdout.splitlines():
+        if '"acct"' in line or "acct" in line:
+            # acct"<blob>="email@example.com"
+            if '"' in line:
+                parts = line.split('"')
+                for i, part in enumerate(parts):
+                    if part == "acct" and i + 2 < len(parts):
+                        return parts[i + 2]
+    return ""
+
+
+def _get_generic_password(service: str) -> str:
+    """Read a legacy generic password from Keychain. Returns '' on failure."""
+    account = getpass.getuser()
+    result = _run_security(
+        ["find-generic-password", "-a", account, "-s", service, "-w"]
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def _get_keychain_secret(service: str) -> str:
+    """Read a secret from Passwords-app (internet) or legacy generic Keychain."""
+    if service == "ui-auth-password":
+        ui_user = os.environ.get("UI_AUTH_USER", "admin")
+        value = _get_internet_password(
+            _UI_INTERNET_SERVER, account=ui_user, port=_UI_INTERNET_PORT,
+        )
+        if value:
+            return value
+        return _get_generic_password(service)
+
+    if service == "openrouter-api-key":
+        value = _get_internet_password(
+            _OPENROUTER_INTERNET_SERVER, account=_OPENROUTER_INTERNET_ACCOUNT,
+        )
+        if value:
+            return value
+        return _get_generic_password(service)
+
+    if service == "pocketcasts-password":
+        value = _get_internet_password(_POCKETCASTS_INTERNET_SERVER)
+        if value:
+            return value
+        return _get_generic_password(service)
+
+    if service == "pocketcasts-email":
+        value = _get_internet_account(_POCKETCASTS_INTERNET_SERVER)
+        if value:
+            return value
+        return _get_generic_password(service)
+
+    return _get_generic_password(service)
 
 
 def load_keychain_secrets_into_environ() -> int:
