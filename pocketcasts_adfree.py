@@ -9,10 +9,12 @@ custom files for cross-device sync.
 
 import argparse
 import io
+import ipaddress
 import json
 import logging
 import os
 import re
+import socket
 import sqlite3
 import sys
 import subprocess
@@ -20,6 +22,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from mutagen.mp3 import MP3
@@ -2174,6 +2177,83 @@ def get_podcast_artwork_url(podcast_uuid: str, podcast_title: str) -> str:
     return ""
 
 
+_PRIVATE_NETWORKS = [
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("fc00::/7"),
+]
+
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+
+def _ip_is_non_public(ip: ipaddress._BaseAddress) -> bool:
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        return _ip_is_non_public(ip.ipv4_mapped)
+    if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        return True
+    return any(ip in net for net in _PRIVATE_NETWORKS)
+
+
+def _assert_public_url(url: str) -> None:
+    """Raise ValueError if url targets a private or link-local address."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError(f"Blocked non-http(s) URL: {url}")
+    host = parsed.hostname
+    if not host:
+        raise ValueError(f"Blocked URL with no host: {url}")
+    try:
+        ip = ipaddress.ip_address(host)
+        if _ip_is_non_public(ip):
+            raise ValueError(f"Blocked private/internal URL: {url}")
+        return
+    except ValueError as exc:
+        if str(exc).startswith("Blocked"):
+            raise
+    try:
+        for info in socket.getaddrinfo(host, None, type=socket.SOCK_STREAM):
+            ip = ipaddress.ip_address(info[4][0])
+            if _ip_is_non_public(ip):
+                raise ValueError(f"Blocked private/internal URL: {url}")
+    except ValueError:
+        raise
+    except OSError as exc:
+        log.warning("DNS resolution failed for %s: %s; allowing URL", host, exc)
+
+
+def _httpx_request_public(
+    method: str,
+    url: str,
+    max_redirects: int = 10,
+    **kwargs,
+) -> tuple[httpx.Response, str]:
+    """HTTP request with redirect-aware private-IP blocking.
+
+    Returns (response, final_url) after following redirects safely.
+    """
+    current = url
+    timeout = kwargs.pop("timeout", 15)
+    with httpx.Client(follow_redirects=False, timeout=timeout) as client:
+        for _ in range(max_redirects + 1):
+            _assert_public_url(current)
+            resp = client.request(method, current, **kwargs)
+            if resp.status_code in _REDIRECT_STATUSES:
+                location = resp.headers.get("Location")
+                if not location:
+                    return resp, current
+                current = urljoin(current, location)
+                continue
+            return resp, current
+    raise ValueError(f"Too many redirects for URL: {url}")
+
+
 def find_rss_url_for_podcast(podcast_uuid: str, subscription_data: dict = None, pc=None) -> str | None:
     """Find the RSS feed URL for a Pocket Casts podcast.
 
@@ -2201,8 +2281,7 @@ def find_rss_url_for_podcast(podcast_uuid: str, subscription_data: dict = None, 
 
         if "spreaker.com/" in raw_url:
             try:
-                resp = httpx.head(raw_url, follow_redirects=True, timeout=10)
-                final = str(resp.url)
+                _, final = _httpx_request_public("HEAD", raw_url, timeout=10)
                 import re
                 m = re.search(r'--(\d+)', final)
                 if m:
@@ -2217,7 +2296,8 @@ def find_rss_url_for_podcast(podcast_uuid: str, subscription_data: dict = None, 
             return itunes_url
 
     try:
-        resp = httpx.get(
+        resp, _ = _httpx_request_public(
+            "GET",
             f"https://podcast-api.pocketcasts.com/podcast/full/{podcast_uuid}",
             timeout=15,
         )
@@ -2241,8 +2321,7 @@ def _get_audio_summary(url: str) -> dict:
     # Resolve redirects to get the actual audio URL
     resolved_url = url
     try:
-        resp = httpx.head(url, follow_redirects=True, timeout=15)
-        resolved_url = str(resp.url)
+        _, resolved_url = _httpx_request_public("HEAD", url, timeout=15)
     except Exception as e:
         log.debug(f"  Could not resolve URL redirects: {e}")
     

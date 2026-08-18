@@ -19,8 +19,13 @@ done
 
 echo "=== Pocket Casts Ad-Free Pipeline: Starting Services ==="
 
-# Load environment variables if .env exists
+# Load environment variables if secrets.sh or .env exist
+if [ -f "$SCRIPT_DIR/secrets.sh" ]; then
+    # shellcheck source=/dev/null
+    source "$SCRIPT_DIR/secrets.sh"
+fi
 if [ -f "$SCRIPT_DIR/.env" ]; then
+    # shellcheck source=/dev/null
     source "$SCRIPT_DIR/.env"
 fi
 

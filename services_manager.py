@@ -19,6 +19,7 @@ Design goals:
 
 from __future__ import annotations
 
+import getpass
 import logging
 import os
 import shutil
@@ -53,6 +54,52 @@ MINUSPOD_PATCH = ROOT / "patches" / "minuspod-local.patch"
 MINUSPOD_ADDITIONAL_PATCHES = [
     ROOT / "patches" / "llm-cost-optimizations.patch",
 ]
+
+_KEYCHAIN_ENV_MAP = {
+    "pocketcasts-email": "POCKETCASTS_EMAIL",
+    "pocketcasts-password": "POCKETCASTS_PASSWORD",
+    "openrouter-api-key": "OPENROUTER_API_KEY",
+    "ui-auth-password": "UI_AUTH_PASSWORD",
+}
+
+
+def _get_keychain_secret(service: str) -> str:
+    """Read a generic password from macOS Keychain. Returns '' on failure."""
+    account = getpass.getuser()
+    try:
+        result = subprocess.run(
+            [
+                "security", "find-generic-password",
+                "-a", account, "-s", service, "-w",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
+def load_keychain_secrets_into_environ() -> int:
+    """Overlay missing env vars from Keychain. Returns count of keys set."""
+    loaded = 0
+    for service, env_key in _KEYCHAIN_ENV_MAP.items():
+        if os.environ.get(env_key):
+            continue
+        value = _get_keychain_secret(service)
+        if value:
+            os.environ[env_key] = value
+            loaded += 1
+    return loaded
+
+
+def _overlay_openrouter_from_keychain(env: dict) -> None:
+    key = _get_keychain_secret("openrouter-api-key")
+    if key:
+        env["OPENROUTER_API_KEY"] = key
 
 
 # ---------------------------------------------------------------------------
@@ -722,6 +769,7 @@ def start_minuspod() -> dict:
     overlaid = _reload_dotenv_into(env, exclude={"POCKETCASTS_EMAIL", "POCKETCASTS_PASSWORD"})
     if overlaid:
         log.debug("Reloaded %d keys from .env into MinusPod subprocess env", overlaid)
+    _overlay_openrouter_from_keychain(env)
     env.update({
         "DATA_DIR": str(MINUSPOD_DIR / "data"),
         "DATA_PATH": str(MINUSPOD_DIR / "data"),

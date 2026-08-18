@@ -6,6 +6,7 @@ Flask app that provides a dashboard for managing podcast subscriptions,
 processing episodes, and monitoring the ad removal pipeline.
 """
 
+import hmac
 import json
 import logging
 import os
@@ -17,7 +18,8 @@ import uuid as uuid_mod
 from collections import deque
 from pathlib import Path
 
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, Response
+from werkzeug.exceptions import HTTPException
 
 from pocketcasts_adfree import (
     MinusPodClient,
@@ -88,12 +90,50 @@ def _atexit_cleanup():
 _atexit.register(_atexit_cleanup)
 
 
+_IS_TESTING = "unittest" in sys.modules or os.environ.get("TESTING")
+
+
 def create_app(email=None, password=None):
+    services_manager.load_keychain_secrets_into_environ()
     email = email or os.environ.get("POCKETCASTS_EMAIL")
     password = password or os.environ.get("POCKETCASTS_PASSWORD")
 
     app = Flask(__name__)
     app.config["SECRET_KEY"] = os.urandom(24).hex()
+
+    _ui_user = os.environ.get("UI_AUTH_USER", "admin")
+    _ui_pass = os.environ.get("UI_AUTH_PASSWORD", "")
+
+    @app.before_request
+    def _require_auth():
+        if _IS_TESTING or not _ui_pass:
+            return None
+        auth = request.authorization
+        ok = (
+            auth
+            and hmac.compare_digest(auth.username or "", _ui_user)
+            and hmac.compare_digest(auth.password or "", _ui_pass)
+        )
+        if not ok:
+            return Response(
+                "",
+                401,
+                {"WWW-Authenticate": 'Basic realm="pocketcasts"'},
+            )
+
+    @app.after_request
+    def _add_security_headers(response):
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        return response
+
+    @app.errorhandler(Exception)
+    def _handle_exception(e):
+        if isinstance(e, HTTPException):
+            return e
+        log.exception("Unhandled error")
+        return jsonify({"error": "internal_error"}), 500
 
 
     pc_client = None
@@ -563,8 +603,9 @@ def create_app(email=None, password=None):
                 result = mp.add_feed(rss_url, max_episodes=10)
                 feed_slug = result.get("slug")
                 time.sleep(3)
-            except Exception as e:
-                return jsonify({"episodes": [], "error": str(e)}), 503
+            except Exception:
+                log.exception("Failed to add MinusPod feed for %s", title)
+                return jsonify({"episodes": [], "error": "service_unavailable"}), 503
 
         if not feed_slug:
             return jsonify({
@@ -574,8 +615,9 @@ def create_app(email=None, password=None):
 
         try:
             episodes = mp.get_episodes(feed_slug)
-        except Exception as e:
-            return jsonify({"episodes": [], "error": str(e)}), 503
+        except Exception:
+            log.exception("Failed to list MinusPod episodes for %s", feed_slug)
+            return jsonify({"episodes": [], "error": "service_unavailable"}), 503
 
         # Fetch Pocket Casts' own episode metadata so we can surface play
         # status + expose the PC episode UUID needed for Queue/Un-queue
@@ -757,8 +799,9 @@ def create_app(email=None, password=None):
         pc = get_pc()
         try:
             data = pc.get_files()
-        except Exception as e:
-            return jsonify({"error": str(e), "files": []}), 500
+        except Exception:
+            log.exception("Failed to list Pocket Casts custom files")
+            return jsonify({"error": "operation_failed", "files": []}), 500
         files = data.get("files", [])
         out = []
         for f in files:
@@ -817,8 +860,9 @@ def create_app(email=None, password=None):
         try:
             pc.remove_from_up_next(file_uuid)
             return jsonify({"ok": True})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
+        except Exception:
+            log.exception("Failed to remove file from Up Next")
+            return jsonify({"ok": False, "error": "operation_failed"}), 500
 
     @app.route("/api/pc_episode/<episode_uuid>/up_next", methods=["DELETE"])
     def api_pc_episode_remove_up_next(episode_uuid):
@@ -827,8 +871,9 @@ def create_app(email=None, password=None):
         try:
             pc.remove_from_up_next(episode_uuid)
             return jsonify({"ok": True})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
+        except Exception:
+            log.exception("Failed to remove podcast episode from Up Next")
+            return jsonify({"ok": False, "error": "operation_failed"}), 500
 
     @app.route("/api/pc_episode/<episode_uuid>/up_next", methods=["POST"])
     def api_pc_episode_add_up_next(episode_uuid):
@@ -866,8 +911,9 @@ def create_app(email=None, password=None):
             )
             resp.raise_for_status()
             return jsonify({"ok": True})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
+        except Exception:
+            log.exception("Failed to add podcast episode to Up Next")
+            return jsonify({"ok": False, "error": "operation_failed"}), 500
 
     @app.route("/api/pc_episode/<episode_uuid>/played", methods=["POST"])
     def api_pc_episode_set_played(episode_uuid):
@@ -893,8 +939,9 @@ def create_app(email=None, password=None):
             )
             resp.raise_for_status()
             return jsonify({"ok": True})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
+        except Exception:
+            log.exception("Failed to set podcast episode played status")
+            return jsonify({"ok": False, "error": "operation_failed"}), 500
 
     @app.route("/api/files/cleanup_played", methods=["POST"])
     def api_files_cleanup_played():
@@ -910,8 +957,9 @@ def create_app(email=None, password=None):
         include_in_progress = bool(data.get("include_in_progress", False))
         try:
             files = pc.get_files().get("files", [])
-        except Exception as e:
-            return jsonify({"error": str(e), "deleted": [], "kept": []}), 500
+        except Exception:
+            log.exception("Failed to list files for cleanup_played")
+            return jsonify({"error": "operation_failed", "deleted": [], "kept": []}), 500
         deleted, kept = [], []
         for f in files:
             title = f.get("title", "")
@@ -1192,8 +1240,9 @@ def create_app(email=None, password=None):
         try:
             res = services_manager.pull_ollama_model(model)
             return jsonify(res)
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
+        except Exception:
+            log.exception("Ollama model pull failed")
+            return jsonify({"ok": False, "error": "operation_failed"}), 500
 
     @app.route("/api/services/ollama/pull-status", methods=["GET"])
     def api_services_ollama_pull_status():
@@ -1205,8 +1254,9 @@ def create_app(email=None, password=None):
             if prog:
                 return jsonify(prog)
             return jsonify({"status": "not_started"})
-        except Exception as e:
-            return jsonify({"ok": False, "error": str(e)}), 500
+        except Exception:
+            log.exception("Ollama pull status check failed")
+            return jsonify({"ok": False, "error": "operation_failed"}), 500
 
     @app.route("/api/services/<service_id>/<action>", methods=["POST"])
     def api_services_action(service_id, action):
@@ -1217,17 +1267,23 @@ def create_app(email=None, password=None):
         """
         if action not in ("start", "stop", "restart"):
             return jsonify({"error": f"unknown action: {action}"}), 400
+        known_services = {s.id for s in services_manager.all_statuses()}
+        if service_id not in known_services:
+            return jsonify({"error": "unknown service"}), 400
         body = request.get_json(silent=True) or {}
+        backend = body.get("backend", "native")
+        if backend not in ("native", "docker"):
+            return jsonify({"ok": False, "error": "invalid backend"}), 400
         try:
             result = services_manager.perform_action(
-                service_id, action, **body,
+                service_id, action, backend=backend,
             )
             return jsonify(result)
         except services_manager.ServiceError as e:
             return jsonify({"ok": False, "error": str(e)}), 400
-        except Exception as e:
+        except Exception:
             log.exception("Service action failed")
-            return jsonify({"ok": False, "error": str(e)}), 500
+            return jsonify({"ok": False, "error": "operation_failed"}), 500
 
     @app.route("/api/services/<service_id>/log", methods=["GET"])
     def api_services_log(service_id):
@@ -1858,4 +1914,4 @@ def create_app(email=None, password=None):
 
 if __name__ == "__main__":
     app = create_app()
-    app.run(host="0.0.0.0", port=5050, debug=True)
+    app.run(host="0.0.0.0", port=5050, debug=False)

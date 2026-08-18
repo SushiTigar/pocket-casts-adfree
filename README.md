@@ -104,9 +104,10 @@ guarantee it finds nothing to cut.
 > One command.
 
 ```bash
-cp .env.example .env       # add Pocket Casts credentials + LLM settings
-source .venv/bin/activate && source .env && python3 pocketcasts_adfree.py ui
-# Open http://localhost:5050
+cp .env.example .env       # LLM tunables only — not secrets (see Credentials below)
+# One-time: store credentials in Keychain + create secrets.sh (macOS)
+source .venv/bin/activate && source secrets.sh && source .env && python3 pocketcasts_adfree.py ui
+# Open http://localhost:5050 (browser prompts for dashboard login if UI_AUTH_PASSWORD is set)
 ```
 
 The UI auto-starts Whisper and MinusPod in the background on every launch.
@@ -164,10 +165,68 @@ cd pocket-casts-mod
 
 ### 2. Credentials
 
+**Secrets** (Pocket Casts login, API keys, dashboard password) live in **macOS
+Keychain**, not in `.env`. **Tunables** (LLM provider, window sizes, cost
+optimizations) stay in `.env`. Both `.env` and `secrets.sh` are gitignored.
+
+> **macOS only** for the Keychain flow below. On Linux, put exports directly in
+> `secrets.sh` (or `.env.local`) and keep the file out of git — the app reads
+> the same env var names.
+
+#### Store secrets in Keychain (one-time, macOS)
+
+```bash
+ACCOUNT="$(id -un)"
+
+security add-generic-password -a "$ACCOUNT" -s "pocketcasts-email" -w "you@example.com"
+security add-generic-password -a "$ACCOUNT" -s "pocketcasts-password" -w "your-pocket-casts-password"
+
+# Only if using OpenRouter (LLM_PROVIDER=openrouter):
+security add-generic-password -a "$ACCOUNT" -s "openrouter-api-key" -w "sk-or-v1-your-key-here"
+
+# Dashboard login (recommended — UI binds to all interfaces on your LAN):
+security add-generic-password -a "$ACCOUNT" -s "ui-auth-password" \
+  -w "$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+```
+
+Retrieve or update a stored value later (the `-U` flag updates an existing entry):
+
+```bash
+security find-generic-password -s ui-auth-password -w
+security add-generic-password -a "$(id -un)" -s "ui-auth-password" -w "NEW_PASSWORD" -U
+```
+
+#### Create `secrets.sh` (one-time)
+
+`secrets.sh` is not committed. Create it in the repo root (same pattern as
+`.env`):
+
+```bash
+cat > secrets.sh <<'EOF'
+#!/usr/bin/env bash
+_ACCOUNT="$(id -un)"
+_kc() { security find-generic-password -a "$_ACCOUNT" -s "$1" -w 2>/dev/null || true; }
+export POCKETCASTS_EMAIL="$(_kc pocketcasts-email)"
+export POCKETCASTS_PASSWORD="$(_kc pocketcasts-password)"
+export OPENROUTER_API_KEY="$(_kc openrouter-api-key)"
+export UI_AUTH_PASSWORD="$(_kc ui-auth-password)"
+EOF
+chmod +x secrets.sh
+```
+
+The UI also reads Keychain automatically on startup if env vars are unset, but
+`source secrets.sh` is still recommended so shell scripts and `start_services.sh`
+see the same values.
+
+#### LLM tunables in `.env`
+
 ```bash
 cp .env.example .env
-$EDITOR .env   # add POCKETCASTS_EMAIL and POCKETCASTS_PASSWORD
+$EDITOR .env   # LLM_PROVIDER, OPENAI_MODEL, LARGE_WINDOW_SECONDS, etc.
 ```
+
+Do **not** put `POCKETCASTS_EMAIL`, `POCKETCASTS_PASSWORD`, `OPENROUTER_API_KEY`,
+or `UI_AUTH_PASSWORD` in `.env`.
 
 ### 3. Python env + dependencies
 
@@ -246,9 +305,11 @@ OpenRouter honours `cache_control` annotations for prompt caching —
 set `ENABLE_PROMPT_CACHING=true` and the code sends them automatically.
 
 ```bash
-# .env — OpenRouter
+# Keychain — store API key (see Credentials section)
+security add-generic-password -a "$(id -un)" -s "openrouter-api-key" -w "sk-or-v1-your-key-here"
+
+# .env — OpenRouter tunables
 export LLM_PROVIDER=openrouter
-export OPENROUTER_API_KEY=sk-or-v1-your-key-here
 export OPENAI_MODEL=deepseek/deepseek-v4-flash
 
 # Cost optimizations for OpenRouter (works on any cloud provider):
@@ -323,10 +384,12 @@ changing.
 ### 6. Launch
 
 ```bash
-source .env && python3 pocketcasts_adfree.py ui
+source secrets.sh && source .env && python3 pocketcasts_adfree.py ui
 ```
 
-Open <http://localhost:5050>. The UI starts Whisper and MinusPod automatically
+Open <http://localhost:5050>. If `UI_AUTH_PASSWORD` is set, the browser prompts
+for HTTP Basic Auth (default username `admin`, or `UI_AUTH_USER`). The UI starts
+Whisper and MinusPod automatically
 (Ollama too, when `LLM_PROVIDER=ollama`) — watch the floating log panel for
 progress.
 First launch takes ~60 s for MinusPod to initialise; subsequent starts are
@@ -334,12 +397,29 @@ faster because services are already running.
 
 > **Manual service control:** `./start_services.sh` is still available if you
 > want to pre-warm services before launching the UI, or start them without the
-> UI at all (e.g. CLI use). It also handles the `--mlx` flag for MLX-based
-> LLM inference.
+> UI at all (e.g. CLI use). It sources `secrets.sh` then `.env` automatically.
+> It also handles the `--mlx` flag for MLX-based LLM inference.
 
 ## Web UI
 
-The dashboard at `http://localhost:5050` has two views:
+The dashboard at `http://localhost:5050` has two views.
+
+### Dashboard login
+
+When `UI_AUTH_PASSWORD` is set (recommended), every page and API call requires
+HTTP Basic Auth. Default username is `admin` (`UI_AUTH_USER` overrides it).
+Password is the value stored in Keychain (`ui-auth-password` service). The
+browser caches credentials after the first successful login, so the existing
+`fetch()` calls in the UI work without changes.
+
+From another device on your home Wi‑Fi, use `http://<your-mac-lan-ip>:5050`
+(find the IP with `ipconfig getifaddr en0`). The Mac must be awake and on the
+same network. For access away from home, use a private mesh VPN such as
+[Tailscale](https://tailscale.com) on the Mac and your phone, then open
+`http://<tailscale-ip>:5050`.
+
+The UI binds to all interfaces (`0.0.0.0`) so LAN and Tailscale access work;
+do not expose port 5050 directly to the public internet without TLS.
 
 ### Dashboard
 
@@ -398,7 +478,7 @@ hosting it).
 ## CLI
 
 ```bash
-source .env && source venv/bin/activate
+source secrets.sh && source .env && source venv/bin/activate
 
 # Launch the dashboard (auto-starts all services)
 python3 pocketcasts_adfree.py ui
@@ -415,19 +495,28 @@ python3 pocketcasts_adfree.py auto --filter 'daily'
 
 ## Configuration reference
 
-All configuration lives in `.env`. Copy `.env.example` to start, then override
-only what you need.
+Configuration is split between **Keychain secrets** (via `secrets.sh`) and
+**`.env` tunables**. Copy `.env.example` to `.env` for tunables only.
 
-### Required
+### Secrets (Keychain → `secrets.sh`)
 
-| Variable | Purpose |
-|----------|---------|
-| `POCKETCASTS_EMAIL` | Pocket Casts account email. |
-| `POCKETCASTS_PASSWORD` | Pocket Casts account password. |
+| Keychain service | Env var | Purpose |
+|------------------|---------|---------|
+| `pocketcasts-email` | `POCKETCASTS_EMAIL` | Pocket Casts account email. **Required.** |
+| `pocketcasts-password` | `POCKETCASTS_PASSWORD` | Pocket Casts account password. **Required.** |
+| `openrouter-api-key` | `OPENROUTER_API_KEY` | Required when `LLM_PROVIDER=openrouter`. |
+| `ui-auth-password` | `UI_AUTH_PASSWORD` | Dashboard HTTP Basic Auth password. **Recommended** (UI is reachable on your LAN). |
 
-### LLM backend
+Optional: `UI_AUTH_USER` (default `admin`) can be set in `.env` — it is not
+secret and does not need Keychain.
 
-Set `LLM_PROVIDER` to choose how MinusPod runs ad detection. See
+MinusPod subprocess env intentionally **does not** receive Pocket Casts
+credentials; only `OPENROUTER_API_KEY` is overlaid from Keychain when starting
+MinusPod.
+
+### Tunables (`.env`)
+
+Set `LLM_PROVIDER` in `.env` to choose how MinusPod runs ad detection. See
 [Choosing an LLM backend](#5-choosing-an-llm-backend) for full examples.
 
 | Variable | Default | Effect |
@@ -436,7 +525,7 @@ Set `LLM_PROVIDER` to choose how MinusPod runs ad detection. See
 | `OPENAI_MODEL` | `qwen3.5-addetect` | Model name / ID passed to MinusPod. For OpenRouter use `provider/model` slugs; for Ollama use `ollama list` names. |
 | `OPENAI_BASE_URL` | `http://localhost:11434/v1` | Base URL for Ollama or `openai-compatible` providers (must end in `/v1`). Ignored for `openrouter` and `anthropic`. |
 | `OPENAI_API_KEY` | `not-needed` | API key for `openai-compatible` endpoints. Set to your provider's key (OpenAI, Groq, Together, etc.). |
-| `OPENROUTER_API_KEY` | — | Required when `LLM_PROVIDER=openrouter`. |
+| `OPENROUTER_API_KEY` | — | Required when `LLM_PROVIDER=openrouter`. Store in Keychain, not `.env`. |
 | `OPENROUTER_PROVIDER_ORDER` | — | Comma-separated OpenRouter host slugs to try in order (e.g. `GMICloud,Novita,Alibaba`). Pins discounted providers instead of blended pricing. |
 | `OPENROUTER_ALLOW_FALLBACKS` | `false` when order is set | Whether OpenRouter may use hosts outside `OPENROUTER_PROVIDER_ORDER`. |
 | `OPENROUTER_PROVIDER_SORT` | — | Auto-rank hosts: `price`, `throughput`, or `latency`. Alternative to an explicit order list. |
@@ -549,6 +638,9 @@ request reaches MinusPod, and MinusPod's own cross-field validation
 
 | Symptom | Likely cause / fix |
 |---------|-------------------|
+| Browser asks for login at `localhost:5050` | Expected when `UI_AUTH_PASSWORD` is set. Username defaults to `admin`; password is in Keychain (`security find-generic-password -s ui-auth-password -w`). |
+| `pocketcasts_auth_failed` banner | Wrong Pocket Casts credentials in Keychain. Update with `security add-generic-password -a "$(id -un)" -s "pocketcasts-password" -w "NEW" -U` and restart the UI. |
+| Phone can't reach the dashboard | Mac must be awake, on the same Wi‑Fi, and reachable at `http://<lan-ip>:5050`. Reserve a static LAN IP on your router or use Tailscale for away-from-home access. |
 | `No module named httpx` | `source venv/bin/activate && pip install -r requirements.txt` |
 | Upload fails with 403 / "subscription required" | Your Pocket Casts account is on the free tier. Custom-file upload is a [Plus](https://pocketcasts.com/plus/) feature. |
 | `Could not find RSS for: [name]` | The pipeline resolves feeds via the iTunes Search API. Pass `--rss-url` directly or add the feed manually in MinusPod. |
