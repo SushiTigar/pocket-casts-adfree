@@ -108,6 +108,10 @@ def create_app(email=None, password=None):
     def _require_auth():
         if _IS_TESTING or not _ui_pass:
             return None
+        # Liveness probe for services_manager (and similar internal callers).
+        # Intentionally unauthenticated — returns no sensitive data.
+        if request.path == "/api/health":
+            return None
         auth = request.authorization
         ok = (
             auth
@@ -257,6 +261,11 @@ def create_app(email=None, password=None):
         except Exception:
             html = "<pre>" + text.replace("<", "&lt;") + "</pre>"
         return render_template("readme.html", content=html)
+
+    @app.route("/api/health")
+    def api_health():
+        """Unauthenticated liveness probe for internal service health checks."""
+        return jsonify({"status": "ok"})
 
     @app.route("/api/status")
     def api_status():

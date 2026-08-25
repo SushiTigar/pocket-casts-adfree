@@ -755,6 +755,31 @@ class TestUIServerEndpoints(unittest.TestCase):
             self.assertIsNone(data.get('active_job'))
             self.assertEqual(data.get('queued_episodes'), 0)
 
+    def test_health_endpoint_public_when_auth_enabled(self):
+        """Internal liveness probe must work without Basic Auth credentials."""
+        import ui_server as _ui
+        from ui_server import create_app
+        old_pass = os.environ.get("UI_AUTH_PASSWORD")
+        old_testing = _ui._IS_TESTING
+        try:
+            os.environ["UI_AUTH_PASSWORD"] = "secret"
+            _ui._IS_TESTING = False
+            with patch("ui_server.PocketCastsClient"), \
+                 patch("ui_server.MinusPodClient"):
+                app = create_app("test@test.com", "testpass")
+                client = app.test_client()
+                resp = client.get("/api/health")
+                self.assertEqual(resp.status_code, 200)
+                self.assertEqual(resp.get_json(), {"status": "ok"})
+                resp = client.get("/api/queue/status")
+                self.assertEqual(resp.status_code, 401)
+        finally:
+            _ui._IS_TESTING = old_testing
+            if old_pass is None:
+                os.environ.pop("UI_AUTH_PASSWORD", None)
+            else:
+                os.environ["UI_AUTH_PASSWORD"] = old_pass
+
     def test_job_not_found_returns_404(self):
         from ui_server import create_app
         with patch('ui_server.PocketCastsClient'), \
@@ -2056,6 +2081,12 @@ class TestServicesManager(unittest.TestCase):
         self.assertFalse(s.can_stop)
         self.assertFalse(s.can_restart)
         self.assertFalse(s.can_start)
+
+    def test_status_ui_probes_health_endpoint(self):
+        with patch("services_manager._pid_listening", return_value=1), \
+             patch("services_manager._http_ok", return_value=True) as mock_ok:
+            self.sm.status_ui()
+        mock_ok.assert_called_once_with("http://localhost:5050/api/health")
 
     def test_perform_action_unknown_service_raises(self):
         with self.assertRaises(self.sm.ServiceError):

@@ -432,7 +432,7 @@ def status_minuspod() -> ServiceStatus:
 
 def status_ui() -> ServiceStatus:
     pid = _pid_listening(5050)
-    healthy = _http_ok("http://localhost:5050/api/queue/status")
+    healthy = _http_ok("http://localhost:5050/api/health")
     return ServiceStatus(
         id="ui", name="Pipeline UI",
         running=pid is not None, healthy=healthy, pid=pid, port=5050,
