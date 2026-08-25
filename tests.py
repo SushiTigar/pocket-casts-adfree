@@ -1280,9 +1280,13 @@ class TestUIServerEndpoints(unittest.TestCase):
         self.assertEqual(pods["pod-a"]["thumbnail"], "https://example.com/a.jpg")
         self.assertEqual(pods["pod-b"]["thumbnail"], "")
 
+    @patch('ui_server.services_manager.start_minuspod')
+    @patch('ui_server.time.sleep')
     @patch('ui_server.PocketCastsClient')
     @patch('ui_server.MinusPodClient')
-    def test_api_episodes_returns_503_when_minuspod_down(self, MockMP, MockPC):
+    def test_api_episodes_returns_503_when_minuspod_down(
+        self, MockMP, MockPC, _sleep, mock_start_minuspod,
+    ):
         """GET /api/episodes/<uuid> must return a clean 503 (not 500) when
         MinusPod is unreachable. The 500 was caused by an un-guarded call
         to list_feeds() that bubbled httpx.ConnectError out of the view.
@@ -1295,13 +1299,15 @@ class TestUIServerEndpoints(unittest.TestCase):
         ]
         MockPC.return_value = mock_pc
 
-        # MinusPod is down: health() raises a connection error.
+        # MinusPod is down: health() raises a connection error even after
+        # the one-shot auto-start attempt.
         mock_mp = MagicMock()
         mock_mp.health.side_effect = httpx.ConnectError(
             "[Errno 61] Connection refused")
         mock_mp.list_feeds.side_effect = httpx.ConnectError(
             "[Errno 61] Connection refused")
         MockMP.return_value = mock_mp
+        mock_start_minuspod.return_value = {"ok": True}
 
         from ui_server import create_app
         app = create_app("test@test.com", "testpass")
@@ -1313,9 +1319,48 @@ class TestUIServerEndpoints(unittest.TestCase):
         # The error message must mention MinusPod so the user knows
         # where to look (Services panel).
         self.assertIn("MinusPod", data["error"])
+        mock_start_minuspod.assert_called_once()
         # And we must NOT have tried to hit list_feeds (the health check
         # should have short-circuited first).
         mock_mp.list_feeds.assert_not_called()
+
+    @patch('ui_server.find_rss_url_for_podcast', return_value='https://a.example/rss')
+    @patch('ui_server.services_manager.start_minuspod', return_value={'ok': True})
+    @patch('ui_server.time.sleep')
+    @patch('ui_server.PocketCastsClient')
+    @patch('ui_server.MinusPodClient')
+    def test_api_episodes_auto_starts_minuspod_when_down(
+        self, MockMP, MockPC, _sleep, _start, _rss,
+    ):
+        """Expanding a podcast should recover if MinusPod was stopped."""
+        mock_pc = MagicMock()
+        mock_pc.get_subscriptions.return_value = [
+            {"uuid": "pod-a", "title": "Podcast A", "url": "https://a.example/rss"},
+        ]
+        mock_pc.get_podcast_episodes.return_value = []
+        MockPC.return_value = mock_pc
+
+        import httpx
+        mock_mp = MagicMock()
+        mock_mp.health.side_effect = [
+            httpx.ConnectError("[Errno 61] Connection refused"),
+            {"status": "healthy"},
+        ]
+        mock_mp.list_feeds.return_value = [
+            {"slug": "pod-a", "sourceUrl": "https://a.example/rss"},
+        ]
+        mock_mp.get_episodes.return_value = [
+            {"id": "ep1", "title": "Episode 1", "duration": 3600},
+        ]
+        MockMP.return_value = mock_mp
+
+        from ui_server import create_app
+        app = create_app("test@test.com", "testpass")
+        client = app.test_client()
+        resp = client.get('/api/episodes/pod-a')
+        self.assertEqual(resp.status_code, 200)
+        data = resp.get_json()
+        self.assertEqual(len(data["episodes"]), 1)
 
     @patch('ui_server.PocketCastsClient')
     @patch('ui_server.MinusPodClient')

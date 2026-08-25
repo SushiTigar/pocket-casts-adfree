@@ -6,6 +6,8 @@ let podcasts = [];
     let podcastEpisodes = {};
     let loadingEpisodes = new Set();
     let loadEpisodesErrors = new Set();
+    const loadEpisodesErrorMsg = new Map();
+    let lastMinusPodHealthy = null;
     let activeJobId = null;
     let pollTimer = null;
     let lastLogCursor = 0;
@@ -127,7 +129,18 @@ let podcasts = [];
     async function checkStatus() {
       try {
         const d = await api('/status');
-        serviceHealth = { minuspod: !!d.minuspod, pocketcasts: !!d.pocketcasts };
+        const minusPodUp = !!d.minuspod;
+        if (lastMinusPodHealthy === false && minusPodUp && loadEpisodesErrors.size > 0) {
+          for (const uuid of [...loadEpisodesErrors]) {
+            if (expandedPodcasts.has(uuid) || expandedPodcasts.has(`upnext-${uuid}`)) {
+              loadEpisodesErrors.delete(uuid);
+              loadEpisodesErrorMsg.delete(uuid);
+              loadEpisodes(uuid);
+            }
+          }
+        }
+        lastMinusPodHealthy = minusPodUp;
+        serviceHealth = { minuspod: minusPodUp, pocketcasts: !!d.pocketcasts };
         if (d.pocketcasts_error) {
           renderAuthBanner({ body: d.pocketcasts_error, message: d.pocketcasts_error.message });
         } else if (d.pocketcasts) {
@@ -1350,7 +1363,8 @@ let podcasts = [];
     function renderEpisodeList(uuid) {
       const eps = podcastEpisodes[uuid];
       if (loadEpisodesErrors.has(uuid)) {
-        return `<div class="episode-list"><div class="episodes-loading" style="color:#f85149">Failed to load episodes. <button class="btn small" onclick="event.stopPropagation(); loadEpisodes('${uuid}')">Retry</button></div></div>`;
+        const errMsg = loadEpisodesErrorMsg.get(uuid) || 'Failed to load episodes.';
+        return `<div class="episode-list"><div class="episodes-loading" style="color:#f85149">${escapeHtml(errMsg)} <button class="btn small" onclick="event.stopPropagation(); loadEpisodes('${uuid}')">Retry</button></div></div>`;
       }
       if (!eps) {
         if (!loadingEpisodes.has(uuid)) loadEpisodes(uuid);
@@ -1482,6 +1496,7 @@ let podcasts = [];
         const d = await api('/episodes/' + uuid);
         podcastEpisodes[uuid] = d.episodes || [];
         loadEpisodesErrors.delete(uuid);
+        loadEpisodesErrorMsg.delete(uuid);
         // Up Next rows may have been selected using Pocket Casts UUIDs (ep.uuid)
         // before episodes loaded. After loading, the rows use MinusPod episode IDs
         // (match.id). Remap selected IDs by title so selection state survives.
@@ -1507,6 +1522,13 @@ let podcasts = [];
       } catch(e) {
         podcastEpisodes[uuid] = null;
         loadEpisodesErrors.add(uuid);
+        let msg = 'Failed to load episodes.';
+        if (e instanceof ApiError && e.body) {
+          msg = e.body.error || e.body.message || msg;
+        } else if (e && e.message) {
+          msg = e.message;
+        }
+        loadEpisodesErrorMsg.set(uuid, msg);
         renderPodcasts();
       } finally {
         loadingEpisodes.delete(uuid);
@@ -1517,15 +1539,17 @@ let podcasts = [];
       const lookupUuid = realUuid || uuid;
       const p = podcasts.find(x => x.uuid === lookupUuid);
 
-      if (expandedPodcasts.has(uuid)) {
+      const wasExpanded = expandedPodcasts.has(uuid);
+      if (wasExpanded) {
         expandedPodcasts.delete(uuid);
       } else {
         expandedPodcasts.add(uuid);
       }
       // For Up Next items, we use 'upnext-{uuid}' as the expand key
       // but load episodes using the real podcast UUID
-      if (realUuid && !podcastEpisodes[realUuid] && !loadingEpisodes.has(realUuid)) {
-        loadEpisodes(realUuid);
+      const episodeUuid = realUuid || uuid;
+      if (!wasExpanded && !podcastEpisodes[episodeUuid] && !loadingEpisodes.has(episodeUuid)) {
+        loadEpisodes(episodeUuid);
       }
       renderPodcasts();
     }

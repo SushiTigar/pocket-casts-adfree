@@ -573,6 +573,27 @@ def create_app(email=None, password=None):
                 log.debug(f"Could not sweep {title[:40]}: {exc}")
         return swept
 
+    def _ensure_minuspod_healthy() -> tuple[bool, str | None]:
+        """Return (ok, error_message). Attempts a one-shot start if down."""
+        try:
+            MinusPodClient().health()
+            return True, None
+        except Exception as first_err:  # noqa: BLE001
+            try:
+                log.info(
+                    "MinusPod unreachable (%s); attempting auto-start...",
+                    first_err,
+                )
+                services_manager.start_minuspod()
+                time.sleep(2)
+                MinusPodClient().health()
+                return True, None
+            except Exception as second_err:  # noqa: BLE001
+                return False, (
+                    "MinusPod is not running (start it from the Services panel). "
+                    f"({second_err})"
+                )
+
     @app.route("/api/episodes/<podcast_uuid>")
     def api_episodes(podcast_uuid):
         """Get episodes for a podcast via MinusPod (resolves RSS, adds feed if needed)."""
@@ -587,13 +608,11 @@ def create_app(email=None, password=None):
 
         # Quick health check so a down MinusPod surfaces a clean 503 with a
         # hint to the user, rather than a raw 500 from a refused connection.
-        try:
-            MinusPodClient().health()
-        except Exception as e:  # noqa: BLE001
-            return jsonify({
-                "episodes": [],
-                "error": f"MinusPod is not running (start it from the Services panel). ({e})",
-            }), 503
+        # If MinusPod was stopped (e.g. via Services panel) try starting it
+        # once — same recovery path as the UI's boot-time auto-start.
+        mp_ok, mp_err = _ensure_minuspod_healthy()
+        if not mp_ok:
+            return jsonify({"episodes": [], "error": mp_err}), 503
 
         mp = MinusPodClient()
         try:
