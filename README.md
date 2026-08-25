@@ -158,7 +158,9 @@ export OPENROUTER_PROVIDER_SORT=price
 
 # Full transcript in one window (up to ~10 hr); 1M context on this model
 export LARGE_WINDOW_SECONDS=36000
-export AD_DETECTION_MAX_TOKENS=8192
+# Output budget for the ad list JSON. 8192 truncates on ad-heavy ~1 hr episodes
+# (log: "hit max_tokens" / "empty completion"); 16384 is the safe default here.
+export AD_DETECTION_MAX_TOKENS=16384
 export LARGE_WINDOW_MIN_SECONDS=300
 export LARGE_WINDOW_MAX_SECONDS=36000
 export SKIP_VERIFICATION_UNDER_SECONDS=86400
@@ -797,7 +799,7 @@ Set `LLM_PROVIDER` in `.env` to choose how MinusPod runs ad detection. See
 | `LARGE_WINDOW_MAX_SECONDS` | `36000` | Upper bound for the accepted `LARGE_WINDOW_SECONDS` range. Widen for larger-context models (e.g. Gemini 1.5 Pro at 2M). |
 | `SKIP_VERIFICATION_UNDER_SECONDS` | `86400` (default, updated) | Skip the verification pass on episodes shorter than this. Default 86400 (24 h) means verification is effectively disabled — the detection pass is accurate enough on 1M-context models and skipping it halves the cost. Set to `0` to always verify. |
 | `ENABLE_PROMPT_CACHING` | `true` | Annotate the system prompt with `cache_control: ephemeral` so the provider can cache it across the ~22 windows of a long episode. **Provider-dependent**: works on OpenRouter and Anthropic (both honour the annotation); **no-op on DeepSeek** (caching is automatic and prefix-based — see [api-docs.deepseek.com/guides/kv_cache](https://api-docs.deepseek.com/guides/kv_cache)) and on Ollama. The code auto-detects the provider from `LLM_PROVIDER` and only annotates when it will be honoured. Cached input tokens are reported in the response log regardless of provider. |
-| `AD_DETECTION_MAX_TOKENS` | `8192` | Token budget per LLM call. Raised from 4096 so a single-window ad list (10 hr episode on LARGE_WINDOW_SECONDS=36000) fits without truncation. Override via `.env` for smaller models/contexts. |
+| `AD_DETECTION_MAX_TOKENS` | `16384` | Output token budget per LLM call. With full-transcript windowing (`LARGE_WINDOW_SECONDS=36000`), ad-heavy ~1 hr episodes can exceed 8192 tokens and MinusPod retries forever (`hit max_tokens` / `empty completion` in `/tmp/minuspod.log`). **16384** is the recommended value for this OpenRouter quick setup. Lower for smaller models/contexts; raise further only if truncation persists. |
 | `CHAPTERS_ENABLED` | `true` | **Not in .env** — stored in MinusPod DB. Toggle via Settings → Chapters in UI, or `PUT /api/v1/settings/ad-detection` with `{"chaptersEnabled": false}`. Disabling saves ~2 LLM calls/episode (boundary + title). |
 | `OLLAMA_NUM_PARALLEL` | `1` | *(Ollama only)* Concurrent requests. Each in-flight slot duplicates the KV cache. Increase only on machines with ≥48 GB free RAM. |
 | `OLLAMA_MAX_LOADED_MODELS` | `1` | *(Ollama only)* How many models Ollama keeps resident. Bumping this silently doubles memory if MinusPod swaps detection ↔ verification ↔ chapters models. |
@@ -901,7 +903,7 @@ request reaches MinusPod, and MinusPod's own cross-field validation
 | One episode takes 30+ minutes | A 4-hour show = ~30 LLM windows. With `qwen3.5:35b-a3b` that's ~30 × 1.5 min = 45 min. Switch to `qwen3:14b` (`echo 'OPENAI_MODEL=qwen3:14b' >> .env`) — same 30 windows, ~3 × faster. |
 | Mac kernel panics or hard freezes during a job | The default model is ~22 GB resident. Combined with Whisper Metal buffers (~2 GB), browser, IDE, etc. it can OOM the GPU on a 36 GB machine. The dashboard now shows a memory warning before each job; heed it, switch to `qwen3:14b`, or set `OLLAMA_NUM_PARALLEL=1` (already the default). |
 | Whisper crash with `kIOGPUCommandBufferCallbackErrorInnocentVictim` | Metal has a hard 8-command-buffer limit. The launcher now forces `--processors 1 --threads ≤8`; if you customised it, lower those numbers. |
-| Aborted on `pass1:detecting:N/M` | Ad detection uses your configured **LLM** (Ollama or API), not Whisper. With local Ollama, large models (`qwen3.5-addetect`) can exceed 10 min per window — use `OPENAI_MODEL=qwen3:14b` on ≤36 GB Macs, or raise `LLM_TIMEOUT_LOCAL`. The stall watchdog restarts Ollama (not Whisper) for detecting stages and waits up to 45 min (`EPISODE_STALL_THRESHOLD_LLM_SECONDS`). With a cloud API, check rate limits and model availability. |
+| Stuck on `pass1:detecting:N/M` | Ad detection uses your **LLM**, not Whisper. **OpenRouter / cloud:** check `/tmp/minuspod.log` for `hit max_tokens=8192` and `empty completion` — the ad-list JSON was truncated. Raise `AD_DETECTION_MAX_TOKENS` to **16384** (the [OpenRouter quick setup](#quick-setup-openrouter--deepseek-v4-flash) default), restart MinusPod, and re-queue. If it still truncates, lower `LARGE_WINDOW_SECONDS` (e.g. `600`) to split into smaller windows. Also check rate limits and model availability. **Ollama:** large models (`qwen3.5-addetect`) can exceed 10 min per window — use `OPENAI_MODEL=qwen3:14b` on ≤36 GB Macs, or raise `LLM_TIMEOUT_LOCAL`. The stall watchdog restarts Ollama for detecting stages and waits up to 45 min (`EPISODE_STALL_THRESHOLD_LLM_SECONDS`). |
 | Queue stalls on one episode forever | Wallclock cap 90 min (`EPISODE_MAX_WALLCLOCK_SECONDS`). Transcription stalls bounce whisper; LLM stalls bounce Ollama. See `EPISODE_STALL_THRESHOLD_*` above. |
 | Ad still partially in outro | Increase `TAIL_GAP_MIN_SECONDS` (smaller threshold = more aggressive) or `AD_END_PAD_TAIL`. See `patches/README.md`. |
 | Custom-file thumbnail stuck on the generic icon | Pocket Casts caches the colour fallback for ~1 minute after upload. The image does eventually render on every device — it's cosmetic only. |
