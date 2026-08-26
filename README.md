@@ -135,8 +135,8 @@ upstream on each start, and the
 
 This matches the author's cloud setup: **local Whisper** for transcription,
 **OpenRouter** for ad detection with `deepseek/deepseek-v4-flash-0731`, full-
-transcript windows (up to 10 hr episodes in one LLM call), no verification
-pass, and cheapest-host routing. No Ollama or GPU required beyond Whisper.
+transcript windows (up to 10 hr episodes in one LLM call), verification pass
+enabled, and cheapest-host routing. No Ollama or GPU required beyond Whisper.
 
 **You need:** Pocket Casts Plus, an [OpenRouter API key](https://openrouter.ai/keys),
 Python 3.10+, `ffmpeg`, and vendored MinusPod + whisper.cpp (complete
@@ -163,7 +163,9 @@ export LARGE_WINDOW_SECONDS=36000
 export AD_DETECTION_MAX_TOKENS=16384
 export LARGE_WINDOW_MIN_SECONDS=300
 export LARGE_WINDOW_MAX_SECONDS=36000
-export SKIP_VERIFICATION_UNDER_SECONDS=86400
+# 0 = always verify (catches mid-roll ads; ~2× LLM cost). Use 86400 to skip
+# verification on episodes under 24 h and halve cost (may miss mid-rolls).
+export SKIP_VERIFICATION_UNDER_SECONDS=0
 export ENABLE_PROMPT_CACHING=true
 ```
 
@@ -171,6 +173,10 @@ Use `deepseek/deepseek-v4-flash-0731` (not the older `deepseek/deepseek-v4-flash
 slug). `OPENROUTER_PROVIDER_SORT=price` auto-picks the cheapest host; to pin hosts
 instead, set `OPENROUTER_PROVIDER_ORDER=DeepInfra,StreamLake,GMICloud` and
 `OPENROUTER_ALLOW_FALLBACKS=false`.
+
+**Rough cost:** about **$0.01–0.02 per episode** on OpenRouter with verification
+enabled (~2 LLM passes). Set `SKIP_VERIFICATION_UNDER_SECONDS=86400` to skip
+verification and cut that roughly in half.
 
 ### Step 2 — Secrets (pick your OS)
 
@@ -201,9 +207,6 @@ python pocketcasts_adfree.py ui
 (`Load-DotEnv` is defined in [Step 2b.2](#step-2b2-add-the-load-dotenv-helper).)
 
 Open `http://localhost:5050`. Log in with `admin` and your `UI_AUTH_PASSWORD`.
-
-**Rough cost:** about **$0.001–0.01 per episode** on OpenRouter with this model
-and tunables, depending on length (one main LLM call per episode).
 
 ## First-time setup
 
@@ -542,7 +545,7 @@ export OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
 # Cost optimizations for OpenRouter (works on any cloud provider):
 export ENABLE_PROMPT_CACHING=true         # OpenRouter honours cache_control markers
 export LARGE_WINDOW_SECONDS=10800         # 3hr full-transcript window
-export SKIP_VERIFICATION_UNDER_SECONDS=86400  # skip verification entirely
+export SKIP_VERIFICATION_UNDER_SECONDS=0    # always verify (use 86400 to skip & save ~50%)
 
 # Optional: pin discounted infrastructure hosts (see the model's Providers tab
 # on openrouter.ai for exact slugs). Without this, OpenRouter load-balances at
@@ -570,9 +573,10 @@ export OPENAI_MODEL=deepseek-v4-flash
 # Cost optimizations for DeepSeek:
 # DeepSeek caches automatically (prefix-matching); cache_control is a no-op.
 # The code auto-detects the provider and skips annotations automatically.
-# Full-transcript windowing + no verification = 1 request per episode.
+# Full-transcript windowing. Pair with SKIP_VERIFICATION_UNDER_SECONDS=0 for
+# accuracy, or 86400 to skip verification (~1 LLM call per episode).
 export LARGE_WINDOW_SECONDS=10800         # 3hr full-transcript window
-export SKIP_VERIFICATION_UNDER_SECONDS=86400  # disable verification pass
+export SKIP_VERIFICATION_UNDER_SECONDS=86400  # cheapest: skip verification pass
 
 # .env — OpenAI
 export LLM_PROVIDER=openai-compatible
@@ -602,7 +606,7 @@ The code auto-detects your provider and adapts caching behaviour:
 
 | Provider | Caching mechanism | What you need |
 |---|---|---|
-| **DeepSeek** | Automatic prefix-based. No annotation needed — the code skips `cache_control` automatically. | `LARGE_WINDOW_SECONDS=10800` (full transcript in 1 window), `SKIP_VERIFICATION_UNDER_SECONDS=86400` (no verification) |
+| **DeepSeek** | Automatic prefix-based. No annotation needed — the code skips `cache_control` automatically. | `LARGE_WINDOW_SECONDS=10800`, `SKIP_VERIFICATION_UNDER_SECONDS=0` (or `86400` to skip verification and save cost) |
 | **OpenRouter** | `cache_control: ephemeral` annotations. The code sends them when `ENABLE_PROMPT_CACHING=true`. | Same cost tunables as DeepSeek plus `ENABLE_PROMPT_CACHING=true` |
 | **Anthropic** | `cache_control: ephemeral` annotations (prompt caching). | `ANTHROPIC_API_KEY`, `ENABLE_PROMPT_CACHING=true` |
 | **Ollama** | No caching. Annotations are skipped automatically. | Local model, free |
@@ -797,7 +801,7 @@ Set `LLM_PROVIDER` in `.env` to choose how MinusPod runs ad detection. See
 | `LARGE_WINDOW_SECONDS` | `10800` | Window size used in place of `WINDOW_SIZE_SECONDS` for 1M-context models (DeepSeek V4, Gemini Flash, Qwen Long, Llama 4 / 3.1-405B). Default 10800 covers a 3hr episode in a single window, cutting per-episode LLM cost by ~91 % vs the base 10-min windowing strategy. Set lower for smaller windows, higher for longer episodes. Range 300–36000 (10 hr ceiling, sized for 1M-context models). |
 | `LARGE_WINDOW_MIN_SECONDS` | `300` | Lower bound for the accepted `LARGE_WINDOW_SECONDS` range. Override in `.env` to tighten the envelope. |
 | `LARGE_WINDOW_MAX_SECONDS` | `36000` | Upper bound for the accepted `LARGE_WINDOW_SECONDS` range. Widen for larger-context models (e.g. Gemini 1.5 Pro at 2M). |
-| `SKIP_VERIFICATION_UNDER_SECONDS` | `86400` (default, updated) | Skip the verification pass on episodes shorter than this. Default 86400 (24 h) means verification is effectively disabled — the detection pass is accurate enough on 1M-context models and skipping it halves the cost. Set to `0` to always verify. |
+| `SKIP_VERIFICATION_UNDER_SECONDS` | `0` (recommended) | Skip the verification pass on episodes shorter than this threshold. **`0`** runs a second LLM pass on every episode — catches mid-roll ads that full-transcript detection misses (ad-heavy shows like The Filmcast). Costs ~2× LLM tokens. **`86400`** (24 h) skips verification on all realistic episodes and halves cost, but may leave mid-roll sponsor reads in place. |
 | `ENABLE_PROMPT_CACHING` | `true` | Annotate the system prompt with `cache_control: ephemeral` so the provider can cache it across the ~22 windows of a long episode. **Provider-dependent**: works on OpenRouter and Anthropic (both honour the annotation); **no-op on DeepSeek** (caching is automatic and prefix-based — see [api-docs.deepseek.com/guides/kv_cache](https://api-docs.deepseek.com/guides/kv_cache)) and on Ollama. The code auto-detects the provider from `LLM_PROVIDER` and only annotates when it will be honoured. Cached input tokens are reported in the response log regardless of provider. |
 | `AD_DETECTION_MAX_TOKENS` | `16384` | Output token budget per LLM call. With full-transcript windowing (`LARGE_WINDOW_SECONDS=36000`), ad-heavy ~1 hr episodes can exceed 8192 tokens and MinusPod retries forever (`hit max_tokens` / `empty completion` in `/tmp/minuspod.log`). **16384** is the recommended value for this OpenRouter quick setup. Lower for smaller models/contexts; raise further only if truncation persists. |
 | `CHAPTERS_ENABLED` | `true` | **Not in .env** — stored in MinusPod DB. Toggle via Settings → Chapters in UI, or `PUT /api/v1/settings/ad-detection` with `{"chaptersEnabled": false}`. Disabling saves ~2 LLM calls/episode (boundary + title). |
@@ -961,7 +965,8 @@ resolve manually and regenerate.
 | **Chapter generation** | Partially working | Produces 1–2 chapters per episode instead of granular boundaries. Root cause: chapter boundary model uses same long-context `deepseek-v4-flash` but prompt/template may need tuning. Workaround: disable with `CHAPTERS_ENABLED=false` (Settings → Chapters or `PUT /settings/ad-detection`). Fix planned: investigate chapter boundary prompt and consider dedicated chapter model setting. |
 | **Auto-update guard** | Functional but manual | `update_minuspod()` pins to `d900bdd0` and skips pull if local patches detected. For true upstream updates, run `bash scripts/setup_minuspod.sh` (re-clones at pin, re-applies patches). A proper version-pinning + diff-based patch rebasing tool would be better. |
 | **DeepSeek prompt caching** | No-op | DeepSeek auto-caches prefix; our `cache_control: ephemeral` annotation is ignored. Not harmful, just unused tokens. |
-| **Verification pass on short episodes** | Defaults to off | `SKIP_VERIFICATION_UNDER_SECONDS=86400` (24h) effectively disables verification. Detection on 1M-context models is accurate enough, but if you need verification for compliance, set to `0` or a lower threshold. |
+| Mid-roll ads still in episode | Full-transcript detection (`LARGE_WINDOW_SECONDS=36000`) often catches only pre/post-roll in one LLM call. Set **`SKIP_VERIFICATION_UNDER_SECONDS=0`** (the [OpenRouter quick setup](#quick-setup-openrouter--deepseek-v4-flash) default), restart MinusPod, reset processed, and re-queue. Check `/tmp/minuspod.log` for `pass2` / verification lines. To save cost at the expense of mid-roll recall, use `86400`. |
+| **Verification pass** | On by default in quick setup | `SKIP_VERIFICATION_UNDER_SECONDS=0` runs verification on every episode. Set to `86400` to skip it and halve LLM cost (may miss mid-rolls). |
 
 ## License & credits
 
