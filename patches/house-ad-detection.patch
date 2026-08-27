@@ -1,0 +1,68 @@
+diff --git a/src/ad_detector/prompts.py b/src/ad_detector/prompts.py
+--- a/src/ad_detector/prompts.py
++++ b/src/ad_detector/prompts.py
+@@ -42,6 +42,53 @@ def resolve_window_size_seconds(model: str, episode_duration: float) -> float:
+     return max(large, base)
+ 
+ 
++# Keywords and phrases that indicate a self-promotion / house ad.
++# Used by _has_self_promo_language to allow these through the
++# "no sponsor identified" gate (see parse_ads_from_response).
++SELF_PROMO_KEYWORDS = (
++    # Premium / membership / subscription language
++    'premium',
++    'membership',
++    'subscribe',
++    'subscription',
++    'member',
++    'patron',
++    'patreon',
++    # Merch / store
++    'merch',
++    'store',
++    'shop',
++    # Cross-promotion
++    'cross-promo',
++    'crosspromo',
++    'cross promo',
++    'other show',
++    'sister show',
++    'network show',
++    # Ad-free / support
++    'ad-free',
++    'ad free',
++    'adfree',
++    'support the show',
++    'support us',
++    'help the show',
++    'keep the show',
++)
++
++
++def _has_self_promo_language(text: str) -> bool:
++    """Return True if `text` contains self-promotion / house-ad language.
++
++    This is used as a positive evidence signal in the ad gate so that
++    long self-promo segments (e.g., "Giant Bomb Premium" membership reads)
++    are not rejected by the "no sponsor identified" filter.
++    """
++    if not text:
++        return False
++    lowered = text.lower()
++    return any(kw in lowered for kw in SELF_PROMO_KEYWORDS)
++
++
+ # User prompt template (not configurable via UI - just formats the transcript)
+ # Description is optional - may contain sponsor lists, chapter markers, or content context
+ USER_PROMPT_TEMPLATE = """Podcast: {podcast_name}
+@@ -395,8 +442,9 @@ def parse_ads_from_response(response_text: str, slug: str = None,
+                         sponsor_service.find_sponsor_in_text(reason)
+                     ) if reason else False
+                     has_ad_language = bool(extract_sponsor_from_text(reason)) if reason else False
++                    has_self_promo = bool(_has_self_promo_language(reason)) if reason else False
+ 
+-                    if not has_sponsor_field and not has_known_sponsor and not has_ad_language:
++                    if not has_sponsor_field and not has_known_sponsor and not has_ad_language and not has_self_promo:
+                         # Low confidence + no evidence = reject regardless of duration
+                         if norm_conf < LOW_CONFIDENCE:
+                             logger.info(

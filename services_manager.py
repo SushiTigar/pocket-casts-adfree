@@ -53,6 +53,7 @@ MINUSPOD_PATCH = ROOT / "patches" / "minuspod-local.patch"
 # each patch is applied to whatever the previous one left behind.
 MINUSPOD_ADDITIONAL_PATCHES = [
     ROOT / "patches" / "llm-cost-optimizations.patch",
+    ROOT / "patches" / "house-ad-detection.patch",
 ]
 
 _KEYCHAIN_ENV_MAP = {

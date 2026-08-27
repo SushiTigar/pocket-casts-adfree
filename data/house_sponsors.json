@@ -1,0 +1,34 @@
+{
+  "house_sponsors": [
+    {
+      "name": "Giant Bomb Premium",
+      "aliases": ["Giant Bomb", "giantbomb.com", "store.giantbomb.com", "GB Premium", "Giant Bomb Membership"],
+      "category": "house_promo"
+    },
+    {
+      "name": "Video Game Town",
+      "aliases": ["Video Game Town Podcast", "VGT"],
+      "category": "cross_promo"
+    },
+    {
+      "name": "DLC Podcast",
+      "aliases": ["DLC", "Downloadable Content Podcast"],
+      "category": "cross_promo"
+    },
+    {
+      "name": "Blight Club",
+      "aliases": ["Blight Club Podcast"],
+      "category": "cross_promo"
+    },
+    {
+      "name": "Radiotopia",
+      "aliases": ["Radiotopia.fm", "PRX"],
+      "category": "network_promo"
+    },
+    {
+      "name": "Patreon",
+      "aliases": ["Patreon.com", "Patreon supporter", "Patreon member"],
+      "category": "house_promo"
+    }
+  ]
+}

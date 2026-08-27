@@ -15,6 +15,7 @@ PATCH="${ROOT}/patches/minuspod-local.patch"
 # are no-ops because the working tree already contains the changes.
 ADDITIONAL_PATCHES=(
   "${ROOT}/patches/llm-cost-optimizations.patch"
+  "${ROOT}/patches/house-ad-detection.patch"
 )
 
 if [[ ! -d "${TARGET}/.git" ]]; then

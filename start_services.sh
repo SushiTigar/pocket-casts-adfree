@@ -127,7 +127,7 @@ fi
 # 3. Start MinusPod
 MINUSPOD_PORT=8000
 MINUSPOD_DIR="$SCRIPT_DIR/MinusPod"
-echo "[3/3] Starting MinusPod on port $MINUSPOD_PORT..."
+echo "[3/4] Starting MinusPod on port $MINUSPOD_PORT..."
 
 # --- Auto-update MinusPod from upstream ---
 _update_minuspod() {
@@ -232,6 +232,16 @@ else
         echo "  OK"
     else
         echo "  WARNING: MinusPod may still be starting. Check /tmp/minuspod.log"
+    fi
+
+    # 4. Run sponsor audit to keep known_sponsors current
+    echo "[4/4] Running sponsor audit..."
+    if [ -f "$SCRIPT_DIR/scripts/audit_sponsors.py" ]; then
+        cd "$SCRIPT_DIR"
+        source venv/bin/activate 2>/dev/null || true
+        python3 scripts/audit_sponsors.py --apply 2>&1 | sed 's/^/  /'
+    else
+        echo "  Skipping: audit script not found"
     fi
 
     # Ensure the model is set correctly and disable auto-processing
