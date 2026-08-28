@@ -8,6 +8,7 @@ custom files for cross-device sync.
 """
 
 import argparse
+import difflib
 import io
 import ipaddress
 import json
@@ -134,6 +135,97 @@ def _normalize_title_strong(title: str) -> str:
     s = re.sub(r"\bno\.?\s*(\d)", r"number \1", s, flags=re.I)
     s = re.sub(r"#(\d)", r"number \1", s)
     return _normalize_title(s)
+
+
+def _normalize_episode_url(url: str) -> str:
+    """Normalize an episode audio URL for cross-source matching."""
+    if not url:
+        return ""
+    try:
+        from urllib.parse import unquote, urlparse
+
+        path = unquote(urlparse(url.strip()).path)
+        return path.rsplit("/", 1)[-1].lower()
+    except Exception:
+        return url.strip().lower()
+
+
+def resolve_pc_episode_uuid(
+    title: str,
+    episodes: list[dict],
+    *,
+    audio_url: str = "",
+    duration: float = 0,
+    duration_tolerance: float = 5.0,
+) -> str | None:
+    """Resolve a Pocket Casts episode UUID from catalog metadata.
+
+    Tries, in order: strong title match, audio URL basename, basic title
+    match/substring, then duration disambiguation.
+    """
+    if not episodes:
+        return None
+
+    title_strong = _normalize_title_strong(title)
+    title_basic = _normalize_title(title)
+    url_key = _normalize_episode_url(audio_url)
+
+    for ep in episodes:
+        ep_title = ep.get("title") or ""
+        eu = ep.get("uuid")
+        if ep_title and eu and _normalize_title_strong(ep_title) == title_strong:
+            return eu
+
+    if url_key:
+        for ep in episodes:
+            ep_url = ep.get("url") or ""
+            eu = ep.get("uuid")
+            if not eu or not ep_url:
+                continue
+            if _normalize_episode_url(ep_url) == url_key or url_key in ep_url.lower():
+                return eu
+
+    for ep in episodes:
+        ep_title = ep.get("title") or ""
+        eu = ep.get("uuid")
+        if ep_title and eu and _normalize_title(ep_title) == title_basic:
+            return eu
+
+    if title_basic:
+        for ep in episodes:
+            ep_title = ep.get("title") or ""
+            eu = ep.get("uuid")
+            if not ep_title or not eu:
+                continue
+            ep_norm = _normalize_title(ep_title)
+            if title_basic in ep_norm or ep_norm in title_basic:
+                return eu
+
+    if duration > 0:
+        candidates = []
+        for ep in episodes:
+            eu = ep.get("uuid")
+            if not eu:
+                continue
+            try:
+                ep_dur = float(ep.get("duration") or 0)
+            except (TypeError, ValueError):
+                continue
+            if ep_dur > 0 and abs(ep_dur - duration) <= duration_tolerance:
+                candidates.append(ep)
+        if len(candidates) == 1:
+            return candidates[0].get("uuid")
+        if candidates and title_strong:
+            for ep in candidates:
+                ep_title = ep.get("title") or ""
+                eu = ep.get("uuid")
+                if not ep_title or not eu:
+                    continue
+                ep_norm = _normalize_title_strong(ep_title)
+                if title_strong in ep_norm or ep_norm in title_strong:
+                    return eu
+
+    return None
 
 
 def _sanitize_published_date(published: str | None) -> str:
@@ -513,6 +605,25 @@ class PocketCastsClient:
         )
         resp.raise_for_status()
         return resp.json().get("episodes", [])
+
+    def get_podcast_episodes_catalog(self, podcast_uuid: str) -> list[dict]:
+        """Full episode metadata (title, url, uuid) from Pocket Casts CDN."""
+        try:
+            resp, _ = _httpx_request_public(
+                "GET",
+                f"https://podcast-api.pocketcasts.com/podcast/full/{podcast_uuid}",
+                timeout=30,
+            )
+            if resp.status_code == 200:
+                episodes = resp.json().get("podcast", {}).get("episodes") or []
+                log.debug(
+                    f"  Loaded {len(episodes)} episodes from PC catalog "
+                    f"for {podcast_uuid[:12]}"
+                )
+                return episodes
+        except Exception as e:
+            log.debug(f"  Episode catalog fetch failed: {e}")
+        return []
 
     def get_files(self) -> dict:
         resp = self.client.get(
@@ -1786,56 +1897,11 @@ class MinusPodClient:
         """
         import sqlite3
 
-        def _parse_vtt_ts(ts_str: str) -> float:
-            """Parse VTT timestamp (MM:SS.mmm or HH:MM:SS.mmm) to seconds."""
-            parts = ts_str.replace(",", ".").split(":")
-            if len(parts) == 3:
-                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
-            elif len(parts) == 2:
-                return int(parts[0]) * 60 + float(parts[1])
-            return float(parts[0])
-
-        def _fmt_ts(seconds: float) -> str:
-            h = int(seconds // 3600)
-            m = int((seconds % 3600) // 60)
-            s = seconds % 60
-            return f"{h:02d}:{m:02d}:{s:06.3f}"
-
-        lines = []
-        current_start = None
-        current_end = None
-        current_text = []
-
-        for line in vtt_text.strip().splitlines():
-            line = line.strip()
-            if line == "WEBVTT" or not line or line.isdigit():
-                continue
-            ts_match = re.match(
-                r'([\d:.]+)\s*-->\s*([\d:.]+)',
-                line,
-            )
-            if ts_match:
-                if current_start is not None and current_text:
-                    text = " ".join(current_text).strip()
-                    if text:
-                        lines.append(f"[{current_start} --> {current_end}] {text}")
-                start_sec = _parse_vtt_ts(ts_match.group(1))
-                end_sec = _parse_vtt_ts(ts_match.group(2))
-                current_start = _fmt_ts(start_sec)
-                current_end = _fmt_ts(end_sec)
-                current_text = []
-            elif current_start is not None:
-                current_text.append(line)
-
-        if current_start is not None and current_text:
-            text = " ".join(current_text).strip()
-            if text:
-                lines.append(f"[{current_start} --> {current_end}] {text}")
-
-        if not lines:
+        cues = _parse_vtt_cues(vtt_text)
+        if not cues:
             return False
 
-        transcript_text = "\n".join(lines)
+        transcript_text = _vtt_cues_to_minuspod_text(cues)
         db_path = Path(__file__).parent / "MinusPod" / "data" / "podcast.db"
         if not db_path.exists():
             log.warning("MinusPod database not found")
@@ -1865,7 +1931,7 @@ class MinusPodClient:
             """, (ep_db_id, transcript_text, transcript_text))
             conn.commit()
             conn.close()
-            log.info(f"  Pre-populated transcript ({len(lines)} segments)")
+            log.info(f"  Pre-populated transcript ({len(cues)} segments)")
             return True
         except Exception as e:
             log.warning(f"  Failed to pre-populate transcript: {e}")
@@ -2308,6 +2374,575 @@ def find_rss_url_for_podcast(podcast_uuid: str, subscription_data: dict = None, 
     return None
 
 
+# --- Pocket Casts transcript reuse (gated injection) -------------------------
+
+_VTT_INLINE_TIME_RE = re.compile(r"<\d{2}:\d{2}:\d{2}\.\d{3}>")
+_VTT_VOICE_TAG_RE = re.compile(r"</?v[^>]*>", re.I)
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
+def pc_transcript_reuse_enabled() -> bool:
+    """True when the PC transcript fetch/verify/inject path should run."""
+    return _env_bool("PC_TRANSCRIPT_REUSE", True) and not _env_bool(
+        "DISABLE_TRANSCRIPT_SYNC", False
+    )
+
+
+def pc_transcript_min_coverage() -> float:
+    return _env_float("PC_TRANSCRIPT_MIN_COVERAGE", 0.97)
+
+
+def pc_transcript_max_duration_delta() -> float:
+    return _env_float("PC_TRANSCRIPT_MAX_DURATION_DELTA", 10.0)
+
+
+def pc_transcript_effective_max_duration_delta(audio_duration: float) -> float:
+    """Max |audio_duration - vtt_duration| allowed for a given episode length.
+
+    Uses the greater of the configured floor (``PC_TRANSCRIPT_MAX_DURATION_DELTA``)
+    and the gap implied by ``PC_TRANSCRIPT_MIN_COVERAGE``. A flat 10s cap
+    contradicts a 97% coverage floor on long episodes (3% of 2h ≈ 216s).
+    """
+    floor = pc_transcript_max_duration_delta()
+    if audio_duration <= 0:
+        return floor
+    proportional = audio_duration * (1.0 - pc_transcript_min_coverage())
+    return max(floor, proportional)
+
+
+def pc_transcript_coverage_metrics(
+    vtt_duration: float, audio_duration: float
+) -> dict:
+    """Coverage / duration metrics for a PC VTT vs audio length."""
+    coverage = (vtt_duration / audio_duration) if audio_duration > 0 else 0.0
+    duration_delta = abs(audio_duration - vtt_duration) if audio_duration > 0 else 0.0
+    max_delta = pc_transcript_effective_max_duration_delta(audio_duration)
+    return {
+        "coverage": coverage,
+        "duration_delta": duration_delta,
+        "max_duration_delta": max_delta,
+        "coverage_pass": coverage >= pc_transcript_min_coverage(),
+        "duration_pass": duration_delta <= max_delta,
+    }
+
+
+def estimate_transcript_drift(drift_probes: list[dict]) -> float:
+    """Median timestamp offset from multi-point Whisper-vs-PC alignment.
+
+    Filters out low-confidence matches that indicate a false alignment.
+    """
+    usable = [
+        p
+        for p in drift_probes
+        if p.get("similarity", 0) >= 0.4 and abs(p.get("offset", 0)) < 600
+    ]
+    if not usable:
+        usable = [p for p in drift_probes if p.get("similarity", 0) >= 0.25]
+    if not usable:
+        return 0.0
+    offsets = sorted(float(p["offset"]) for p in usable)
+    return offsets[len(offsets) // 2]
+
+
+def compare_ad_markers_in_transcripts(
+    whisper_segments: list[dict],
+    pc_cues: list[dict],
+    ad_markers: list[dict],
+    *,
+    drift: float = 0.0,
+    min_similarity: float = 0.4,
+) -> list[dict]:
+    """Compare ad-marker windows between Whisper and PC transcript text."""
+    results = []
+    for ad in ad_markers:
+        start = float(ad.get("start", 0))
+        end = float(ad.get("end", start))
+        w_text = _normalize_for_align(
+            _text_for_time_range(whisper_segments, start, end)
+        )
+        pc_start = max(0.0, start + drift)
+        pc_end = max(pc_start, end + drift)
+        p_text = _normalize_for_align(
+            _text_for_time_range(pc_cues, pc_start, pc_end)
+        )
+        similarity = (
+            difflib.SequenceMatcher(None, w_text, p_text).ratio()
+            if w_text and p_text
+            else 0.0
+        )
+        results.append(
+            {
+                "start": start,
+                "end": end,
+                "drift_applied": round(drift, 2),
+                "whisper_chars": len(w_text),
+                "pc_chars": len(p_text),
+                "similarity": round(similarity, 3),
+                "ad_present_in_pc": similarity >= min_similarity if w_text else None,
+            }
+        )
+    return results
+
+
+def simulate_pc_transcript_gate_from_segments(
+    whisper_segments: list[dict],
+    pc_cues: list[dict],
+    audio_duration: float,
+) -> dict:
+    """Offline gate simulation using Whisper DB segments instead of live probes.
+
+    Mirrors ``_verify_pc_transcript`` probe logic for validation harnesses.
+    """
+    cov = pc_transcript_coverage_metrics(
+        pc_cues[-1]["end"] if pc_cues else 0.0, audio_duration
+    )
+    result = {
+        **cov,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": False,
+        "gate_failure_reason": "",
+    }
+    if not pc_cues:
+        result["gate_failure_reason"] = "no cues"
+        return result
+    if not cov["coverage_pass"]:
+        result["gate_failure_reason"] = "coverage"
+        return result
+    if not cov["duration_pass"]:
+        result["gate_failure_reason"] = "duration delta"
+        return result
+
+    min_sim = pc_transcript_min_similarity()
+    max_offset = pc_transcript_max_offset()
+    probe_times = _probe_times_for_duration(
+        audio_duration, pc_transcript_probe_count()
+    )
+    probes: list[dict] = []
+
+    for probe_time in probe_times:
+        sample = _text_for_time_range(whisper_segments, probe_time, probe_time + 20.0)
+        if not sample.strip():
+            result["gate_failure_reason"] = f"empty probe at {probe_time:.0f}s"
+            return result
+        ratio, matched_time = _align_sample(sample, pc_cues, probe_time)
+        offset = matched_time - probe_time
+        probes.append(
+            {
+                "time": probe_time,
+                "similarity": round(ratio, 3),
+                "offset": round(offset, 2),
+                "matched_time": round(matched_time, 2),
+            }
+        )
+
+    result["probes"] = probes
+    passed, reason, stats = _judge_pc_transcript_probes(probes)
+    result.update(stats)
+    if passed:
+        result["gate_pass_simulated"] = True
+    else:
+        result["gate_failure_reason"] = reason
+    return result
+
+
+def pc_transcript_probe_count() -> int:
+    return _env_int("PC_TRANSCRIPT_PROBES", 5)
+
+
+def pc_transcript_min_similarity() -> float:
+    return _env_float("PC_TRANSCRIPT_MIN_SIMILARITY", 0.55)
+
+
+def pc_transcript_max_offset() -> float:
+    return _env_float("PC_TRANSCRIPT_MAX_OFFSET", 3.0)
+
+
+def pc_transcript_probe_warmup_seconds() -> float:
+    """Skip the first N seconds when placing the opening probe.
+
+    Cold opens (theme music, sparse speech) routinely misalign across ASR
+    engines even when the rest of the episode is in sync.
+    """
+    return _env_float("PC_TRANSCRIPT_PROBE_WARMUP_SECONDS", 90.0)
+
+
+def pc_transcript_probe_max_failures() -> int:
+    """How many probe checks may fail before rejecting the transcript."""
+    return _env_int("PC_TRANSCRIPT_PROBE_MAX_FAILURES", 1)
+
+
+def pc_transcript_allow_rss() -> bool:
+    return _env_bool("PC_TRANSCRIPT_ALLOW_RSS", False)
+
+
+def _parse_vtt_ts(ts_str: str) -> float:
+    """Parse VTT timestamp (MM:SS.mmm or HH:MM:SS.mmm) to seconds."""
+    parts = ts_str.replace(",", ".").strip().split(":")
+    if len(parts) == 3:
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+    if len(parts) == 2:
+        return int(parts[0]) * 60 + float(parts[1])
+    return float(parts[0])
+
+
+def _fmt_vtt_ts(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = seconds % 60
+    return f"{h:02d}:{m:02d}:{s:06.3f}"
+
+
+def _clean_vtt_cue_text(text: str) -> str:
+    text = _VTT_VOICE_TAG_RE.sub("", text)
+    text = _VTT_INLINE_TIME_RE.sub("", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _parse_vtt_cues(vtt_text: str) -> list[dict]:
+    """Parse WEBVTT into cue dicts with start, end, text (seconds)."""
+    cues: list[dict] = []
+    current_start = None
+    current_end = None
+    current_text: list[str] = []
+
+    for raw_line in vtt_text.strip().splitlines():
+        line = raw_line.strip()
+        if not line or line == "WEBVTT" or line.startswith("NOTE") or line.isdigit():
+            continue
+        ts_match = re.match(r"([\d:.]+)\s*-->\s*([\d:.]+)", line)
+        if ts_match:
+            if current_start is not None and current_text:
+                text = _clean_vtt_cue_text(" ".join(current_text))
+                if text:
+                    cues.append(
+                        {"start": current_start, "end": current_end, "text": text}
+                    )
+            current_start = _parse_vtt_ts(ts_match.group(1))
+            end_token = ts_match.group(2).split()[0]
+            current_end = _parse_vtt_ts(end_token)
+            current_text = []
+        elif current_start is not None:
+            if line.lower().startswith(("align:", "position:", "size:", "line:")):
+                continue
+            current_text.append(line)
+
+    if current_start is not None and current_text:
+        text = _clean_vtt_cue_text(" ".join(current_text))
+        if text:
+            cues.append({"start": current_start, "end": current_end, "text": text})
+    return cues
+
+
+def _vtt_cues_to_minuspod_text(cues: list[dict]) -> str:
+    lines = [
+        f"[{_fmt_vtt_ts(c['start'])} --> {_fmt_vtt_ts(c['end'])}] {c['text']}"
+        for c in cues
+    ]
+    return "\n".join(lines)
+
+
+def _parse_minuspod_transcript(transcript_text: str) -> list[dict]:
+    """Parse MinusPod timestamped transcript lines into segment dicts."""
+    segments: list[dict] = []
+    for line in transcript_text.split("\n"):
+        line = line.strip()
+        if not line.startswith("["):
+            continue
+        try:
+            time_part, text_part = line.split("] ", 1)
+            time_range = time_part.strip("[")
+            start_str, end_str = time_range.split(" --> ")
+            segments.append(
+                {
+                    "start": _parse_vtt_ts(start_str),
+                    "end": _parse_vtt_ts(end_str),
+                    "text": text_part,
+                }
+            )
+        except (ValueError, TypeError):
+            continue
+    return segments
+
+
+def _normalize_for_align(text: str) -> str:
+    if not text:
+        return ""
+    t = text.strip().lower()
+    t = re.sub(r"[^\w\s]", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t
+
+
+def _cues_to_word_timeline(cues: list[dict]) -> list[dict]:
+    timeline: list[dict] = []
+    for cue in cues:
+        words = cue["text"].split()
+        if not words:
+            continue
+        start = cue["start"]
+        end = cue["end"]
+        duration = max(end - start, 0.001)
+        if len(words) == 1:
+            timeline.append({"word": words[0], "time": start})
+            continue
+        step = duration / len(words)
+        for i, word in enumerate(words):
+            timeline.append({"word": word, "time": start + i * step})
+    return timeline
+
+
+def _align_sample(
+    sample_text: str,
+    cues: list[dict],
+    expected_time: float,
+    band: float = 180.0,
+) -> tuple[float, float]:
+    """Fuzzy-align sample text against VTT cues near expected_time.
+
+    Returns (similarity_ratio, matched_timestamp).
+    """
+    sample_norm = _normalize_for_align(sample_text)
+    sample_words = sample_norm.split()
+    if not sample_words:
+        return 0.0, expected_time
+
+    timeline = _cues_to_word_timeline(cues)
+    if not timeline:
+        return 0.0, expected_time
+
+    in_band = [
+        w for w in timeline
+        if expected_time - band <= w["time"] <= expected_time + band
+    ]
+    if len(in_band) < len(sample_words):
+        in_band = timeline
+
+    words = [w["word"] for w in in_band]
+    times = [w["time"] for w in in_band]
+    n = len(sample_words)
+    best_ratio = 0.0
+    best_time = expected_time
+
+    if len(words) < n:
+        window_norm = _normalize_for_align(" ".join(words))
+        best_ratio = difflib.SequenceMatcher(None, sample_norm, window_norm).ratio()
+        if words:
+            best_time = times[0]
+        return best_ratio, best_time
+
+    for start in range(len(words) - n + 1):
+        window_norm = _normalize_for_align(" ".join(words[start : start + n]))
+        ratio = difflib.SequenceMatcher(None, sample_norm, window_norm).ratio()
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_time = times[start]
+    return best_ratio, best_time
+
+
+def _probe_times_for_duration(duration: float, n_probes: int) -> list[float]:
+    if duration <= 0 or n_probes <= 0:
+        return []
+    warmup = pc_transcript_probe_warmup_seconds()
+    first_probe = min(warmup, max(0.0, duration - 20.0))
+    candidates = [
+        first_probe,
+        duration * 0.25,
+        duration * 0.5,
+        duration * 0.75,
+        max(0.0, duration - 90.0),
+    ]
+    times: list[float] = []
+    for t in candidates:
+        t = max(0.0, min(t, max(0.0, duration - 20.0)))
+        if t not in times:
+            times.append(t)
+        if len(times) >= n_probes:
+            break
+    return times[:n_probes]
+
+
+def _judge_pc_transcript_probes(probes: list[dict]) -> tuple[bool, str, dict]:
+    """Evaluate collected probe results. Returns (passed, reason, stats)."""
+    stats: dict = {
+        "probes_passed": 0,
+        "probes_failed": 0,
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "median_abs_offset": 0.0,
+    }
+    if not probes:
+        return False, "no probes", stats
+
+    min_sim = pc_transcript_min_similarity()
+    max_offset = pc_transcript_max_offset()
+    max_failures = pc_transcript_probe_max_failures()
+
+    passed_probes: list[dict] = []
+    failures: list[str] = []
+    for probe in probes:
+        ratio = float(probe.get("similarity", 0))
+        offset = float(probe.get("offset", 0))
+        stats["max_offset"] = max(stats["max_offset"], abs(offset))
+        stats["min_similarity"] = min(stats["min_similarity"], ratio)
+        probe_ok = ratio >= min_sim and abs(offset) <= max_offset
+        if probe_ok:
+            passed_probes.append(probe)
+            stats["probes_passed"] += 1
+        else:
+            stats["probes_failed"] += 1
+            reason_parts = []
+            if ratio < min_sim:
+                reason_parts.append(f"similarity {ratio:.2f} < {min_sim}")
+            if abs(offset) > max_offset:
+                reason_parts.append(f"offset {offset:+.1f}s > {max_offset}s")
+            failures.append(
+                f"{probe.get('time', '?')}s ({', '.join(reason_parts)})"
+            )
+
+    if passed_probes:
+        abs_offsets = sorted(abs(float(p["offset"])) for p in passed_probes)
+        stats["median_abs_offset"] = abs_offsets[len(abs_offsets) // 2]
+
+    if stats["probes_failed"] > max_failures:
+        return (
+            False,
+            f"{stats['probes_failed']}/{len(probes)} probes failed "
+            f"(max {max_failures}): {failures[0]}",
+            stats,
+        )
+
+    if not passed_probes:
+        return False, failures[0] if failures else "no probes passed", stats
+
+    return True, "", stats
+
+
+def _whisper_sample_available() -> bool:
+    root = Path(__file__).parent
+    whisper_bin = root / "whisper.cpp" / "build" / "bin" / "whisper-cli"
+    model_path = root / "whisper.cpp" / "models" / "ggml-large-v3-turbo.bin"
+    return whisper_bin.exists() and model_path.exists()
+
+
+def _text_for_time_range(segments: list[dict], start: float, end: float) -> str:
+    parts = []
+    for seg in segments:
+        if seg["end"] <= start or seg["start"] >= end:
+            continue
+        parts.append(seg["text"])
+    return " ".join(parts)
+
+
+def _verify_pc_transcript(
+    vtt: str,
+    audio_url: str,
+    audio_duration: float,
+    progress_callback=None,
+) -> tuple[bool, dict]:
+    """Gate PC transcript before injection. Returns (passed, metrics)."""
+    metrics: dict = {
+        "cue_count": 0,
+        "vtt_duration": 0.0,
+        "audio_duration": audio_duration,
+        "coverage": 0.0,
+        "duration_delta": 0.0,
+        "max_duration_delta": 0.0,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "failure_reason": "",
+    }
+
+    cues = _parse_vtt_cues(vtt)
+    metrics["cue_count"] = len(cues)
+    if not cues:
+        metrics["failure_reason"] = "no cues parsed"
+        return False, metrics
+
+    vtt_duration = cues[-1]["end"]
+    metrics["vtt_duration"] = vtt_duration
+    if audio_duration <= 0:
+        metrics["failure_reason"] = "unknown audio duration"
+        return False, metrics
+
+    cov = pc_transcript_coverage_metrics(vtt_duration, audio_duration)
+    metrics.update(cov)
+    if not cov["coverage_pass"]:
+        metrics["failure_reason"] = (
+            f"coverage {cov['coverage']:.1%} < {pc_transcript_min_coverage():.0%}"
+        )
+        return False, metrics
+
+    if not cov["duration_pass"]:
+        metrics["failure_reason"] = (
+            f"duration delta {cov['duration_delta']:.1f}s > "
+            f"{cov['max_duration_delta']:.1f}s"
+        )
+        return False, metrics
+
+    if not _whisper_sample_available():
+        metrics["failure_reason"] = "whisper-cli unavailable for probe verification"
+        return False, metrics
+
+    if not audio_url:
+        metrics["failure_reason"] = "no audio URL for probe verification"
+        return False, metrics
+
+    probe_times = _probe_times_for_duration(
+        audio_duration, pc_transcript_probe_count()
+    )
+    probes: list[dict] = []
+
+    for probe_time in probe_times:
+        if progress_callback:
+            progress_callback(f"Sync probe at {probe_time:.0f}s...")
+        sample = _transcribe_sample(audio_url, start=probe_time, duration=20.0)
+        if not sample:
+            metrics["failure_reason"] = f"empty probe at {probe_time:.0f}s"
+            return False, metrics
+        ratio, matched_time = _align_sample(sample, cues, probe_time)
+        offset = matched_time - probe_time
+        probes.append(
+            {
+                "time": probe_time,
+                "similarity": round(ratio, 3),
+                "offset": round(offset, 2),
+                "matched_time": round(matched_time, 2),
+            }
+        )
+
+    metrics["probes"] = probes
+    passed, reason, stats = _judge_pc_transcript_probes(probes)
+    metrics.update(stats)
+    if not passed:
+        metrics["failure_reason"] = reason
+        return False, metrics
+    return True, metrics
+
+
 def _get_audio_summary(url: str) -> dict:
     """Fetch audio duration and metadata using ffprobe.
     
@@ -2377,22 +3012,8 @@ def _transcribe_sample(url: str, start: float, duration: float = 15.0) -> str:
 
 def _get_vtt_duration(vtt_text: str) -> float:
     """Calculate the total duration covered by a VTT transcript."""
-    # Matches both HH:MM:SS.mmm and MM:SS.mmm
-    timestamps = re.findall(r'((?:\d+:)?\d+:\d+\.\d+) --> ((?:\d+:)?\d+:\d+\.\d+)', vtt_text)
-    if not timestamps: return 0
-    
-    def to_sec(s):
-        parts = s.split(':')
-        if len(parts) == 3:
-            h, m, sec = parts
-            return int(h)*3600 + int(m)*60 + float(sec)
-        elif len(parts) == 2:
-            m, sec = parts
-            return int(m)*60 + float(sec)
-        return 0
-
-    _, last_end = timestamps[-1]
-    return to_sec(last_end)
+    cues = _parse_vtt_cues(vtt_text)
+    return cues[-1]["end"] if cues else 0.0
 
 
 def process_single_episode(
@@ -2478,141 +3099,184 @@ def process_single_episode(
     if progress_callback:
         progress_callback(f"Downloading/processing: {ep_title}")
 
-    # If Pocket Casts has a transcript for this episode, use it as a sync
-    # confidence check but DO NOT pre-populate it into MinusPod's ad
-    # detector input.
-    #
-    # Why: PC/RSS transcripts are produced from the show's own content
-    # and never include dynamically-inserted host-read ads. Feeding one
-    # into the ad detector guarantees it finds zero ads — the episode
-    # is uploaded "clean" with every ad still in it.
-    #
-    # The sync check is still useful: it catches episodes where the PC
-    # transcript is for the wrong language, the wrong cut, or stale, so
-    # the user sees a log warning if something looks off. The actual
-    # transcription always runs locally via Whisper so the ad detector
-    # has the full audio to work with.
-    #
-    # Requires a real Pocket Casts episode UUID — MinusPod IDs won't work.
-    if podcast_uuid and ep_status != "completed":
+    # Pocket Casts generated transcripts can replace Whisper when verified.
+    # PC runs ASR over the CDN audio (ads included). RSS publisher transcripts
+    # are injectable only when PC_TRANSCRIPT_ALLOW_RSS=true.
+    if pc_transcript_reuse_enabled() and podcast_uuid and ep_status != "completed":
         if not original_episode_uuid:
-            log.info(f"  Could not match episode to Pocket Casts UUID (title matching failed)")
+            log.info("  Could not match episode to Pocket Casts UUID (title matching failed)")
             if progress_callback:
                 progress_callback("Could not match to PC episode, will use Whisper for transcript")
         else:
             try:
-                # 1. Try Pocket Casts internal transcript
+                vtt = None
+                vtt_source = None  # 'pc' or 'rss'
+
+                def _resolve_source_audio_url() -> str:
+                    source = episode.get("url", "")
+                    if source:
+                        return source
+                    if podcast_uuid in ("_files", USER_PODCAST_UUID):
+                        return ""
+                    try:
+                        resolved_rss = rss_url or find_rss_url_for_podcast(
+                            podcast_uuid, pc=pc
+                        )
+                        if not resolved_rss:
+                            return ""
+                        resp = httpx.get(resolved_rss, timeout=15)
+                        root = ET.fromstring(resp.text)
+                        ep_norm = _normalize_title(ep_title)
+                        for item in root.findall(".//item"):
+                            item_title = item.find("title")
+                            if item_title is None:
+                                continue
+                            if _normalize_title(item_title.text or "") != ep_norm:
+                                continue
+                            enclosure = item.find("enclosure")
+                            if enclosure is not None:
+                                log.info("  Resolved source audio URL from RSS")
+                                return enclosure.get("url", "")
+                    except Exception as e:
+                        log.debug(f"  Could not resolve audio URL from RSS: {e}")
+                    return ""
+
+                # 1. Pocket Casts generated transcript
                 vtt = pc.get_transcript_vtt(podcast_uuid, original_episode_uuid)
-                
-                # 2. Try RSS transcript fallback
-                if not vtt and podcast_uuid and podcast_uuid != '_files':
-                    rss_url = find_rss_url_for_podcast(podcast_uuid, pc=pc)
-                    if rss_url:
-                        vtt = pc.get_transcript_vtt_from_rss(rss_url, ep_title)
-                
+                if vtt:
+                    vtt_source = "pc"
+
+                # 2. RSS transcript fallback (verify-only unless allow_rss)
+                if not vtt and podcast_uuid != "_files":
+                    resolved_rss = rss_url or find_rss_url_for_podcast(
+                        podcast_uuid, pc=pc
+                    )
+                    if resolved_rss:
+                        vtt = pc.get_transcript_vtt_from_rss(resolved_rss, ep_title)
+                        if vtt:
+                            vtt_source = "rss"
+
+                source_audio_url = _resolve_source_audio_url()
+                audio_info = _get_audio_summary(source_audio_url)
+                actual_dur = audio_info["duration"]
+
+                def _coverage_for_vtt(vtt_text: str) -> float:
+                    if actual_dur <= 0:
+                        return 0.0
+                    return _get_vtt_duration(vtt_text) / actual_dur
+
                 if not vtt:
-                    log.info(f"  Transcript not found for {original_episode_uuid[:12]}, requesting generation...")
+                    log.info(
+                        f"  Transcript not found for {original_episode_uuid[:12]}, "
+                        "requesting generation..."
+                    )
                     if progress_callback:
                         progress_callback("Transcript not found, requesting generation...")
-                    
-                    # Request generation and retry
                     for attempt in range(5):
                         pc.request_transcript_generation(original_episode_uuid)
                         time.sleep(10)
-                        vtt = pc.get_transcript_vtt(podcast_uuid, original_episode_uuid)
-                        if vtt: break
+                        vtt = pc.get_transcript_vtt(
+                            podcast_uuid, original_episode_uuid
+                        )
+                        if vtt:
+                            vtt_source = "pc"
+                            break
                         log.info(f"  Retry {attempt+1}/5 for transcript...")
-                
-                if vtt:
-                    if progress_callback: progress_callback("Verifying transcript sync...")
-                    log.info("  Verifying transcript sync with audio...")
-                    
-                    # Resolve the actual source audio URL from RSS.
-                    # MinusPod episodes don't include the source URL, so we
-                    # need to look it up from the RSS feed for sync verification.
-                    source_audio_url = episode.get("url", "")
-                    if not source_audio_url and podcast_uuid and podcast_uuid not in ('_files', 'da7aba5e-f11e-f11e-f11e-da7aba5ef11e'):
-                        try:
-                            rss_url = find_rss_url_for_podcast(podcast_uuid, pc=pc)
-                            if rss_url:
-                                resp = httpx.get(rss_url, timeout=15)
-                                import xml.etree.ElementTree as ET
-                                root = ET.fromstring(resp.text)
-                                ep_norm = _normalize_title(ep_title)
-                                for item in root.findall(".//item"):
-                                    item_title = item.find("title")
-                                    if item_title is not None and _normalize_title(item_title.text or "") == ep_norm:
-                                        enclosure = item.find("enclosure")
-                                        if enclosure is not None:
-                                            source_audio_url = enclosure.get("url", "")
-                                            log.info(f"  Resolved source audio URL from RSS")
-                                        break
-                        except Exception as e:
-                            log.debug(f"  Could not resolve audio URL from RSS: {e}")
-                    
-                    audio_info = _get_audio_summary(source_audio_url)
-                    vtt_dur = _get_vtt_duration(vtt)
-                    actual_dur = audio_info["duration"]
-                    
-                    is_synced = False
-                    
-                    # 1. ALWAYS perform Start-Sync check (15s sample).
-                    #    ffmpeg handles redirects natively so _transcribe_sample
-                    #    works even when ffprobe can't reach the URL.
-                    if progress_callback: progress_callback("Sync check (Start)...")
-                    sample_start = _transcribe_sample(source_audio_url, start=0, duration=15)
-                    vtt_norm_start = _normalize_title(vtt[:4000])  # First ~4k chars
-                    
-                    if sample_start:
-                        if sample_start in vtt_norm_start:
-                            log.info("  START SYNC PASSED: Audio matches transcript start.")
-                            is_synced = True
-                        else:
-                            log.warning(f"  START SYNC FAILED: Heard '{sample_start[:80]}...'")
-                            log.warning(f"    Expected (first 80 chars): '{vtt_norm_start[:80]}...'")
-                    else:
-                        log.warning("  Whisper sample returned empty — trusting transcript as fallback.")
-                        is_synced = True
 
-                    # 2. End-check only if start passed AND we have a valid duration
-                    if is_synced and actual_dur > 60:
-                        discrepancy = abs(actual_dur - vtt_dur)
-                        if discrepancy > 15:
-                            log.warning(f"  Duration mismatch: Audio {actual_dur:.0f}s vs Transcript {vtt_dur:.0f}s")
-                            if progress_callback: progress_callback("Sync check (End)...")
-                            sample_end = _transcribe_sample(source_audio_url, start=actual_dur - 30, duration=15)
-                            vtt_norm_end = _normalize_title(vtt[-4000:])
-                            
-                            if sample_end and sample_end not in vtt_norm_end:
-                                log.error("  END SYNC FAILED: Audio content mismatch at end.")
-                                is_synced = False
+                # Re-request when PC returned a partial transcript
+                if vtt and vtt_source == "pc" and actual_dur > 0:
+                    coverage = _coverage_for_vtt(vtt)
+                    if coverage < pc_transcript_min_coverage():
+                        log.info(
+                            f"  PC transcript coverage {coverage:.1%} — "
+                            "requesting regeneration..."
+                        )
+                        for attempt in range(3):
+                            pc.request_transcript_generation(original_episode_uuid)
+                            time.sleep(10)
+                            refreshed = pc.get_transcript_vtt(
+                                podcast_uuid, original_episode_uuid
+                            )
+                            if refreshed and _coverage_for_vtt(refreshed) > coverage:
+                                vtt = refreshed
+                                coverage = _coverage_for_vtt(vtt)
+                            if coverage >= pc_transcript_min_coverage():
+                                break
+                            log.info(
+                                f"  Regeneration retry {attempt+1}/3 "
+                                f"(coverage {coverage:.1%})..."
+                            )
 
-                    if is_synced:
-                        # PC transcript is in sync with the audio but
-                        # we deliberately do NOT hand it to MinusPod's
-                        # ad detector — it has no ad segments, so the
-                        # detector would find nothing to cut. Whisper
-                        # will re-transcribe the whole episode and the
-                        # ad detector will run on that. We still keep
-                        # the sync check above so the user sees a
-                        # warning if PC has a wrong-language or
-                        # wrong-cut transcript.
-                        log.info("  PC/RSS transcript verified in sync with audio — NOT pre-populating (PC transcripts omit dynamically inserted ads). Whisper will transcribe.")
-                        if progress_callback:
-                            progress_callback("PC transcript verified — using Whisper to capture ads")
-                    else:
-                        vtt = None # Discard and fall back to Whisper
-                        log.info("  SYNC VERIFICATION FAILED. Falling back to full Whisper transcription.")
-                        if progress_callback:
-                            progress_callback("Sync failed, falling back to Whisper...")
+                injectable = bool(
+                    vtt
+                    and (vtt_source == "pc" or pc_transcript_allow_rss())
+                )
 
-                # Final fallback check: if we have NO vtt (or sync failed), use Whisper
-                if not vtt:
-                    log.info("  No valid transcript found (or sync failed). Proceeding with Whisper for accurate ad detection.")
+                if vtt and not injectable:
+                    log.info(
+                        "  RSS transcript found but injection disabled "
+                        "(PC_TRANSCRIPT_ALLOW_RSS=false) — Whisper will transcribe"
+                    )
+
+                if vtt and injectable:
                     if progress_callback:
-                        progress_callback("Using Whisper for accurate ad detection...")
-                
-                # Cleanup: we no longer raise error for missing transcripts, we just use Whisper.
+                        progress_callback("Verifying PC transcript alignment...")
+                    log.info("  Verifying PC transcript alignment with audio...")
+
+                    if actual_dur <= 0:
+                        log.warning(
+                            "  Could not determine audio duration — "
+                            "skipping PC transcript injection"
+                        )
+                    else:
+                        verified, metrics = _verify_pc_transcript(
+                            vtt,
+                            source_audio_url,
+                            actual_dur,
+                            progress_callback=progress_callback,
+                        )
+                        if verified:
+                            if mp.pre_populate_transcript(feed_slug, ep_id, vtt):
+                                log.info(
+                                    "  Injected PC transcript "
+                                    f"({metrics['cue_count']} cues, "
+                                    f"coverage {metrics['coverage']:.1%}, "
+                                    f"max offset {metrics['max_offset']:.1f}s) "
+                                    "— skipping Whisper"
+                                )
+                                if progress_callback:
+                                    progress_callback(
+                                        "PC transcript verified — skipping Whisper"
+                                    )
+                            else:
+                                log.warning(
+                                    "  pre_populate_transcript failed — "
+                                    "falling back to Whisper"
+                                )
+                        else:
+                            reason = metrics.get("failure_reason", "unknown")
+                            log.info(
+                                f"  PC transcript verification failed ({reason}) "
+                                "— falling back to Whisper"
+                            )
+                            if progress_callback:
+                                progress_callback(
+                                    f"PC transcript rejected ({reason}) — Whisper"
+                                )
+                            if (
+                                vtt_source == "pc"
+                                and metrics.get("coverage", 0)
+                                < pc_transcript_min_coverage()
+                            ):
+                                pc.request_transcript_generation(
+                                    original_episode_uuid
+                                )
+                elif not vtt:
+                    log.info(
+                        "  No PC transcript available — Whisper will transcribe"
+                    )
+                    if progress_callback:
+                        progress_callback("Using Whisper for transcription...")
             except Exception as e:
                 log.error(f"  Transcript error: {e}")
                 raise
@@ -2825,7 +3489,24 @@ def run_automation(pc_email, pc_password, rss_urls=None, podcast_filter=None):
     log.info("\nAutomation run complete!")
 
 
+def _load_dotenv_file() -> None:
+    """Load ``.env`` into ``os.environ`` when the UI/CLI starts.
+
+    Shell ``source .env`` is still supported; this makes
+    ``python3 pocketcasts_adfree.py ui`` work without it.
+    """
+    try:
+        from services_manager import _reload_dotenv_into
+
+        count = _reload_dotenv_into(os.environ)
+        if count:
+            log.debug("Loaded %d keys from .env", count)
+    except Exception as exc:
+        log.warning("Could not load .env: %s", exc)
+
+
 def main():
+    _load_dotenv_file()
     parser = argparse.ArgumentParser(description="Pocket Casts Ad-Free Pipeline")
     parser.add_argument("command", choices=["test", "auto", "ui"])
     parser.add_argument("--email", default=os.environ.get("POCKETCASTS_EMAIL"))

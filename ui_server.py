@@ -33,6 +33,7 @@ from pocketcasts_adfree import (
     get_podcast_artwork_url,
     load_state,
     normalize_feed_url,
+    resolve_pc_episode_uuid,
     save_state,
     process_single_episode,
     unload_ollama_models,
@@ -155,8 +156,8 @@ def create_app(email=None, password=None):
 
     # Auto-start all backend services in the background so the UI is ready
     # immediately while Ollama / Whisper / MinusPod come up.
-    # This makes `source .env && python3 pocketcasts_adfree.py ui` the only
-    # command needed — no separate ./start_services.sh required.
+    # pocketcasts_adfree.py loads .env at startup; secrets still need secrets.sh.
+    # No separate ./start_services.sh required.
     def _startup_services():
         try:
             log.info("Auto-starting backend services (Ollama, Whisper, MinusPod)...")
@@ -1698,10 +1699,24 @@ def create_app(email=None, password=None):
                         ep_map[eid] = ep
 
                 pc_episode_map = {}
+                pc_episode_catalog: list[dict] = []
+                try:
+                    pc_episode_catalog = pc.get_podcast_episodes_catalog(puuid)
+                    for pce in pc_episode_catalog:
+                        t = pce.get("title") or ""
+                        eu = pce.get("uuid")
+                        if t and eu:
+                            pc_episode_map[_normalize_title(t)] = eu
+                            pc_episode_map[_normalize_title_strong(t)] = eu
+                except Exception:
+                    pass
+
                 try:
                     pc_eps = pc.get_podcast_episodes(puuid)
                     for pce in pc_eps:
-                        pc_episode_map[_normalize_title(pce.get("title", ""))] = pce["uuid"]
+                        t = pce.get("title") or ""
+                        if t and pce.get("uuid"):
+                            pc_episode_map[_normalize_title(t)] = pce["uuid"]
                 except Exception:
                     pass
 
@@ -1842,6 +1857,10 @@ def create_app(email=None, password=None):
 
                     original_ep_uuid = pc_episode_map.get(_normalize_title(ep_title))
                     if not original_ep_uuid:
+                        original_ep_uuid = pc_episode_map.get(
+                            _normalize_title_strong(ep_title)
+                        )
+                    if not original_ep_uuid:
                         # Fallback: substring match for titles that differ
                         # between MinusPod (RSS) and Pocket Casts
                         norm = _normalize_title(ep_title)
@@ -1849,6 +1868,13 @@ def create_app(email=None, password=None):
                             if norm in pc_title or pc_title in norm:
                                 original_ep_uuid = pc_uuid
                                 break
+                    if not original_ep_uuid and pc_episode_catalog:
+                        original_ep_uuid = resolve_pc_episode_uuid(
+                            ep_title,
+                            pc_episode_catalog,
+                            audio_url=ep.get("url") or "",
+                            duration=float(ep.get("duration") or 0),
+                        )
 
                     try:
                         cb = lambda msg, _jid=job_id: _job_log(_jid, "info", f"    {msg}")

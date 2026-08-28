@@ -1549,18 +1549,11 @@ class TestUIServerEndpoints(unittest.TestCase):
 
 
 class TestTranscriptPrePopulation(unittest.TestCase):
-    """`pre_populate_transcript` is kept as a utility for future use, but the
-    main `process_single_episode` flow no longer calls it. PC/RSS transcripts
-    omit dynamically-inserted host-read ads, so feeding one to MinusPod's ad
-    detector would guarantee it finds nothing to cut.
-
-    These tests guard the helper itself (VTT parsing + DB insert) so it stays
-    usable for callers that have a *complete* transcript (e.g. a transcript
-    that does include the ad reads, or a sidecar VTT use case).
-    """
+    """PC transcript parsing, alignment gate, and gated injection guards."""
 
     def test_vtt_to_minuspod_format(self):
-        """Verify VTT timestamp conversion to MinusPod's format."""
+        from pocketcasts_adfree import _parse_vtt_cues, _vtt_cues_to_minuspod_text
+
         vtt = """WEBVTT
 
 1
@@ -1571,69 +1564,296 @@ Hello world
 00:01:30.456 --> 00:01:35.789
 Second segment
 """
-        # Simulate the parsing logic from pre_populate_transcript
-        lines = []
-        current_start = None
-        current_end = None
-        current_text = []
-
-        def _parse_vtt_ts(ts_str):
-            parts = ts_str.replace(",", ".").split(":")
-            if len(parts) == 3:
-                return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
-            elif len(parts) == 2:
-                return int(parts[0]) * 60 + float(ts_str.split(":")[1])
-            return float(ts_str.split(":")[0])
-
-        def _fmt_ts(seconds):
-            h = int(seconds // 3600)
-            m = int((seconds % 3600) // 60)
-            s = seconds % 60
-            return f"{h:02d}:{m:02d}:{s:06.3f}"
-
-        for line in vtt.strip().splitlines():
-            line = line.strip()
-            if line == "WEBVTT" or not line or line.isdigit():
-                continue
-            ts_match = re.match(r'([\d:.]+)\s*-->\s*([\d:.]+)', line)
-            if ts_match:
-                if current_start is not None and current_text:
-                    text = " ".join(current_text).strip()
-                    if text:
-                        lines.append(f"[{current_start} --> {current_end}] {text}")
-                start_sec = _parse_vtt_ts(ts_match.group(1))
-                end_sec = _parse_vtt_ts(ts_match.group(2))
-                current_start = _fmt_ts(start_sec)
-                current_end = _fmt_ts(end_sec)
-                current_text = []
-            elif current_start is not None:
-                current_text.append(line)
-
-        if current_start is not None and current_text:
-            text = " ".join(current_text).strip()
-            if text:
-                lines.append(f"[{current_start} --> {current_end}] {text}")
-
+        cues = _parse_vtt_cues(vtt)
+        lines = _vtt_cues_to_minuspod_text(cues).splitlines()
         self.assertEqual(len(lines), 2)
         self.assertIn("[00:00:00.000 --> 00:00:05.123] Hello world", lines[0])
         self.assertIn("[00:01:30.456 --> 00:01:35.789] Second segment", lines[1])
 
-    def test_main_flow_does_not_pre_populate(self):
-        """Regression guard: `process_single_episode` must never call
-        `pre_populate_transcript` from the PC/RSS transcript branch, even
-        when the VTT passes sync verification. The whole point of the
-        branch is just a sync confidence check; pre-populating would
-        poison the ad-detector input with an ad-free transcript and
-        cause the episode to ship with all its ads still in it."""
+    def test_parse_vtt_cues_strips_voice_tags(self):
+        from pocketcasts_adfree import _parse_vtt_cues
+
+        vtt = """WEBVTT
+
+00:00:00.000 --> 00:00:03.000
+<v Speaker>Hello <00:00:01.000>there</v>
+"""
+        cues = _parse_vtt_cues(vtt)
+        self.assertEqual(len(cues), 1)
+        self.assertEqual(cues[0]["text"], "Hello there")
+
+    def test_old_substring_sync_would_fail_on_timestamps(self):
+        """Regression: normalizing raw VTT interleaves timestamp digits."""
+        from pocketcasts_adfree import _normalize_title
+
+        vtt = """WEBVTT
+00:00:00.000 --> 00:00:05.000
+hello world from the podcast
+00:00:05.000 --> 00:00:10.000
+and here is more content
+"""
+        sample = "hello world from the podcast and here"
+        vtt_norm = _normalize_title(vtt[:4000])
+        self.assertNotIn(sample, vtt_norm)
+
+    def test_align_sample_finds_match(self):
+        from pocketcasts_adfree import _align_sample, _parse_vtt_cues
+
+        vtt = """WEBVTT
+00:00:28.000 --> 00:00:35.000
+welcome back to the show everyone
+00:00:35.000 --> 00:00:42.000
+today we talk about video games
+"""
+        cues = _parse_vtt_cues(vtt)
+        ratio, matched = _align_sample(
+            "welcome back to the show everyone", cues, expected_time=30.0
+        )
+        self.assertGreaterEqual(ratio, 0.8)
+        self.assertAlmostEqual(matched, 28.0, delta=2.0)
+
+    def test_verify_rejects_partial_transcript(self):
+        from pocketcasts_adfree import _verify_pc_transcript
+
+        vtt = """WEBVTT
+00:00:00.000 --> 00:01:30.000
+short partial transcript only
+"""
+        ok, metrics = _verify_pc_transcript(vtt, "", audio_duration=3600.0)
+        self.assertFalse(ok)
+        self.assertIn("coverage", metrics["failure_reason"])
+
+    def test_proportional_duration_allows_trailing_gap(self):
+        from pocketcasts_adfree import (
+            pc_transcript_coverage_metrics,
+            pc_transcript_effective_max_duration_delta,
+        )
+
+        # 7100s VTT on 7200s audio: 98.6% coverage, 100s gap — should pass
+        cov = pc_transcript_coverage_metrics(7100.0, 7200.0)
+        self.assertTrue(cov["coverage_pass"])
+        self.assertTrue(cov["duration_pass"])
+        self.assertAlmostEqual(
+            pc_transcript_effective_max_duration_delta(7200.0), 216.0, places=0
+        )
+
+    def test_low_coverage_still_fails(self):
+        from pocketcasts_adfree import pc_transcript_coverage_metrics
+
+        cov = pc_transcript_coverage_metrics(6000.0, 7200.0)
+        self.assertFalse(cov["coverage_pass"])
+        self.assertFalse(cov["duration_pass"])
+
+    @patch("pocketcasts_adfree._whisper_sample_available", return_value=False)
+    def test_verify_rejects_when_whisper_unavailable(self, _mock_whisper):
+        from pocketcasts_adfree import _verify_pc_transcript
+
+        vtt = """WEBVTT
+00:00:00.000 --> 00:10:00.000
+""" + "word " * 500
+        ok, metrics = _verify_pc_transcript(
+            vtt, "http://example.com/ep.mp3", audio_duration=600.0
+        )
+        self.assertFalse(ok)
+        self.assertIn("whisper-cli unavailable", metrics["failure_reason"])
+
+    @patch("pocketcasts_adfree._transcribe_sample")
+    @patch("pocketcasts_adfree._whisper_sample_available", return_value=True)
+    def test_verify_accepts_matching_transcript(self, _mock_avail, mock_sample):
+        from pocketcasts_adfree import _verify_pc_transcript
+
+        def _fake_sample(url, start, duration=15.0):
+            if start < 135:
+                return "we are sponsored by raycon wireless earbuds today"
+            if start < 225:
+                return "lets talk about the latest video game news"
+            if start < 375:
+                return "thanks for listening to giant bomb premium members"
+            if start < 495:
+                return "almost at the end of giant bombcast episode"
+            return "see you next week on the bombcast goodbye everyone"
+
+        mock_sample.side_effect = _fake_sample
+
+        cues = []
+        texts = [
+            (0, 20, "welcome to the giant bombcast episode nine fifty one"),
+            (90, 110, "we are sponsored by raycon wireless earbuds today"),
+            (150, 180, "lets talk about the latest video game news"),
+            (300, 330, "thanks for listening to giant bomb premium members"),
+            (450, 470, "almost at the end of giant bombcast episode"),
+            (510, 600, "see you next week on the bombcast goodbye everyone"),
+        ]
+        for start, end, text in texts:
+            cues.append(
+                f"00:{start//60:02d}:{start%60:02d}.000 --> "
+                f"00:{end//60:02d}:{end%60:02d}.000\n{text}"
+            )
+        vtt = "WEBVTT\n" + "\n".join(cues)
+
+        ok, metrics = _verify_pc_transcript(
+            vtt, "http://example.com/ep.mp3", audio_duration=600.0
+        )
+        self.assertTrue(ok, metrics)
+        self.assertGreater(metrics["coverage"], 0.9)
+
+    @patch("pocketcasts_adfree._transcribe_sample")
+    @patch("pocketcasts_adfree._whisper_sample_available", return_value=True)
+    def test_verify_rejects_preroll_offset(self, _mock_avail, mock_sample):
+        from pocketcasts_adfree import _verify_pc_transcript
+
+        mock_sample.return_value = "this is the actual audio at thirty seconds"
+
+        vtt = """WEBVTT
+00:01:00.000 --> 00:01:20.000
+this is the actual audio at thirty seconds
+00:02:30.000 --> 00:02:50.000
+middle of the episode content here today
+00:03:00.000 --> 00:03:20.000
+more middle content for alignment checks
+00:04:30.000 --> 00:04:50.000
+late episode content continues here now
+00:09:40.000 --> 00:10:00.000
+near the end of this test episode goodbye
+"""
+        ok, metrics = _verify_pc_transcript(
+            vtt, "http://example.com/ep.mp3", audio_duration=600.0
+        )
+        self.assertFalse(ok)
+        self.assertTrue(
+            "offset" in metrics["failure_reason"]
+            or "similarity" in metrics["failure_reason"]
+        )
+
+    def test_main_flow_pre_populates_on_verified_branch(self):
+        """pre_populate_transcript must only run inside the verified gate."""
         import inspect
         from pocketcasts_adfree import process_single_episode
+
         src = inspect.getsource(process_single_episode)
+        self.assertIn("pre_populate_transcript(", src)
+        idx = src.index("if verified:")
+        branch = src[idx : idx + 800]
+        self.assertIn("pre_populate_transcript(", branch)
         self.assertNotIn(
             "pre_populate_transcript(",
-            src,
-            "process_single_episode must not call pre_populate_transcript — "
-            "PC/RSS transcripts omit dynamically-inserted ads.",
+            src[: idx],
+            "pre_populate_transcript must not run before verification",
         )
+
+
+class TestResolvePcEpisodeUuid(unittest.TestCase):
+    """PC episode UUID resolution from catalog metadata."""
+
+    def _catalog(self):
+        return [
+            {
+                "uuid": "ep-955",
+                "title": "Giant Bombcast 955: Smash or Pass",
+                "url": "https://cdn.example.com/giant_bombcast_955.mp3",
+                "duration": 7638,
+            },
+            {
+                "uuid": "ep-954",
+                "title": "Giant Bombcast 954: Other Episode",
+                "url": "https://cdn.example.com/giant_bombcast_954.mp3",
+                "duration": 7200,
+            },
+        ]
+
+    def test_resolve_by_strong_title(self):
+        from pocketcasts_adfree import resolve_pc_episode_uuid
+
+        eu = resolve_pc_episode_uuid(
+            "Giant Bombcast 955: Smash or Pass", self._catalog()
+        )
+        self.assertEqual(eu, "ep-955")
+
+    def test_resolve_by_audio_url(self):
+        from pocketcasts_adfree import resolve_pc_episode_uuid
+
+        eu = resolve_pc_episode_uuid(
+            "Completely Different Title",
+            self._catalog(),
+            audio_url="https://dts.podtrac.com/redirect.mp3/cdn.example.com/giant_bombcast_955.mp3",
+        )
+        self.assertEqual(eu, "ep-955")
+
+    def test_resolve_by_duration_unique(self):
+        from pocketcasts_adfree import resolve_pc_episode_uuid
+
+        eu = resolve_pc_episode_uuid(
+            "Unknown",
+            self._catalog(),
+            duration=7200.0,
+        )
+        self.assertEqual(eu, "ep-954")
+
+
+class TestPcTranscriptValidationHelpers(unittest.TestCase):
+    def test_drift_correction_improves_ad_overlap(self):
+        from pocketcasts_adfree import (
+            compare_ad_markers_in_transcripts,
+            estimate_transcript_drift,
+        )
+
+        whisper_segments = [
+            {"start": 100.0, "end": 120.0, "text": "brought to you by acme widgets"},
+        ]
+        pc_cues = [
+            {"start": 230.0, "end": 250.0, "text": "brought to you by acme widgets"},
+        ]
+        ad_markers = [{"start": 100.0, "end": 120.0}]
+        drift_probes = [{"similarity": 0.9, "offset": 130.0}]
+        drift = estimate_transcript_drift(drift_probes)
+
+        raw = compare_ad_markers_in_transcripts(
+            whisper_segments, pc_cues, ad_markers, drift=0.0
+        )
+        corrected = compare_ad_markers_in_transcripts(
+            whisper_segments, pc_cues, ad_markers, drift=drift
+        )
+        self.assertFalse(raw[0]["ad_present_in_pc"])
+        self.assertTrue(corrected[0]["ad_present_in_pc"])
+
+    def test_judge_allows_one_probe_failure(self):
+        from pocketcasts_adfree import _judge_pc_transcript_probes
+
+        probes = [
+            {"time": 90.0, "similarity": 0.9, "offset": -9.6},
+            {"time": 300.0, "similarity": 0.95, "offset": -0.4},
+            {"time": 600.0, "similarity": 0.92, "offset": 0.1},
+        ]
+        passed, reason, stats = _judge_pc_transcript_probes(probes)
+        self.assertTrue(passed, reason)
+        self.assertEqual(stats["probes_failed"], 1)
+
+    def test_probe_times_skip_cold_open(self):
+        from pocketcasts_adfree import _probe_times_for_duration
+
+        times = _probe_times_for_duration(3600.0, 5)
+        self.assertGreaterEqual(times[0], 90.0)
+
+    def test_simulate_gate_passes_aligned_transcript(self):
+        from pocketcasts_adfree import simulate_pc_transcript_gate_from_segments
+
+        texts = [
+            (90, 110, "opening welcome to our perfectly aligned podcast show"),
+            (150, 180, "first sponsor read from acme widgets and friends"),
+            (300, 330, "middle discussion about games movies and culture"),
+            (450, 470, "second sponsor read from raycon earbuds today"),
+            (510, 600, "closing thanks for listening see you next week"),
+        ]
+        whisper_segments = []
+        pc_cues = []
+        for start, end, text in texts:
+            whisper_segments.append({"start": float(start), "end": float(end), "text": text})
+            pc_cues.append({"start": float(start), "end": float(end), "text": text})
+
+        gate = simulate_pc_transcript_gate_from_segments(
+            whisper_segments, pc_cues, audio_duration=600.0
+        )
+        self.assertTrue(gate["gate_pass_simulated"], gate)
 
 
 class TestEpisodeTitleMatching(unittest.TestCase):
@@ -2334,7 +2554,7 @@ class TestServicesManager(unittest.TestCase):
             "LARGE_WINDOW_SECONDS": "36000",
             "LARGE_WINDOW_MIN_SECONDS": "300",
             "LARGE_WINDOW_MAX_SECONDS": "36000",
-            "SKIP_VERIFICATION_UNDER_SECONDS": "86400",
+            "SKIP_VERIFICATION_UNDER_SECONDS": "0",
             "ENABLE_PROMPT_CACHING": "true",
             "AD_DETECTION_MAX_TOKENS": "8192",
             "LLM_PROVIDER": "openrouter",
@@ -2349,7 +2569,7 @@ class TestServicesManager(unittest.TestCase):
         self.assertEqual(captured.get("env", {}).get("LARGE_WINDOW_SECONDS"), "36000")
         self.assertEqual(captured.get("env", {}).get("LARGE_WINDOW_MIN_SECONDS"), "300")
         self.assertEqual(captured.get("env", {}).get("LARGE_WINDOW_MAX_SECONDS"), "36000")
-        self.assertEqual(captured.get("env", {}).get("SKIP_VERIFICATION_UNDER_SECONDS"), "86400")
+        self.assertEqual(captured.get("env", {}).get("SKIP_VERIFICATION_UNDER_SECONDS"), "0")
         self.assertEqual(captured.get("env", {}).get("ENABLE_PROMPT_CACHING"), "true")
         self.assertEqual(captured.get("env", {}).get("AD_DETECTION_MAX_TOKENS"), "8192")
 

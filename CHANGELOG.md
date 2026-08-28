@@ -7,6 +7,14 @@ loosely tracks [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+- **Auto-load `.env` at startup** — `pocketcasts_adfree.py` reads `.env` from
+  the repo root when the UI or CLI starts, so `source .env` is no longer
+  required before `python3 pocketcasts_adfree.py ui`. Secrets still come from
+  `secrets.sh` / Passwords app / `secrets.ps1` only.
+- **Verification pass on by default** — `SKIP_VERIFICATION_UNDER_SECONDS` now
+  defaults to `0` in quick-setup docs and MinusPod env passthrough (always run
+  the second LLM pass; catches mid-roll ads). Set `86400` to skip verification
+  and save ~50% LLM cost.
 - **Ad detection — LLM cost optimisations panel** — new "Ad detection"
   button in the dashboard toolbar opens a modal that surfaces three
   tunables from MinusPod's stage-tunables system:
@@ -43,14 +51,17 @@ loosely tracks [Semantic Versioning](https://semver.org/).
   ("start it from the Services panel"), with the individual calls also
   wrapped in try/except as defence in depth. Tests:
   `test_api_episodes_returns_503_when_minuspod_down`.
-- **Misleading pre-populated MinusPod transcripts** — the main episode flow
-  used to pass any cached Pocket Casts WebVTT into the LLM ad detector.
-  Pocket Casts' transcripts are usually only available for the first
-  ~1–2 minutes, which is exactly where the show's cold-open lives, so
-  pre-populated transcripts routinely caused the detector to delete the
-  intro. The pre-populate call is now removed from the main flow
-  (intact on `MinusPodClient` for callers that want it) and a source
-  guard test ensures it can't be re-introduced by accident.
+- **Gated Pocket Casts transcript reuse** — when Pocket Casts Plus has
+  already transcribed an episode, the pipeline verifies alignment (coverage,
+  proportional duration parity, multi-point fuzzy probes) and injects the VTT
+  into MinusPod to skip the expensive Whisper pass. Duration delta scales with
+  episode length (`max(10s, 3% of duration)` at default coverage). Validation
+  harness: `scripts/validate_pc_transcripts.py` (drift-corrected ad overlap +
+  simulated gate pass rate).
+- **Misleading pre-populated MinusPod transcripts (partial VTT)** — an
+  earlier build injected *partial* Pocket Casts WebVTT (~1–2 minutes) which
+  caused the detector to delete cold opens. The new gate rejects partial
+  transcripts via `PC_TRANSCRIPT_MIN_COVERAGE` (default 97%) before injection.
 - **Cryptic "MinusPod is not reachable" from the job runner** — `_process_job`
   used to bail with a generic stack trace if MinusPod was down at job
   start. Now logs a clear "MinusPod is not reachable on startup" with

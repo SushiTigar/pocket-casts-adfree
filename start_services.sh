@@ -269,9 +269,9 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
 fi
 
 echo "To launch the web UI dashboard:"
-echo "  source .env && python3 pocketcasts_adfree.py ui"
+echo "  source secrets.sh && python3 pocketcasts_adfree.py ui"
 echo "  Then open: http://localhost:5050"
 echo ""
 echo "To run from command line:"
-echo "  source .env && python3 pocketcasts_adfree.py test --rss-url 'https://feeds.simplecast.com/54nAGcIl'"
-echo "  source .env && python3 pocketcasts_adfree.py auto --rss-url 'https://feeds.simplecast.com/54nAGcIl'"
+echo "  source secrets.sh && python3 pocketcasts_adfree.py test --rss-url 'https://feeds.simplecast.com/54nAGcIl'"
+echo "  source secrets.sh && python3 pocketcasts_adfree.py auto --rss-url 'https://feeds.simplecast.com/54nAGcIl'"

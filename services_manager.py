@@ -205,8 +205,9 @@ def _http_ok(url: str, timeout: float = 2.0, expect_substr: str | None = None) -
 def _reload_dotenv_into(env: dict, exclude: set[str] | None = None) -> int:
     """Re-read ``ROOT/.env`` and overlay keys onto ``env``.
 
-    The parent process (UI / pocketcasts_adfree.py) sources ``.env`` once at
-    startup. If the user edits ``.env`` afterwards and clicks "Restart
+    The parent process (UI / pocketcasts_adfree.py) loads ``.env`` at startup
+    (see ``_load_dotenv_file`` in pocketcasts_adfree.py). If the user edits
+    ``.env`` afterwards and clicks "Restart
     MinusPod", the parent's ``os.environ`` is stale and would otherwise be
     copied into the subprocess unchanged. This helper re-reads ``.env`` and
     merges it on top so the subprocess picks up the latest values without
@@ -910,7 +911,7 @@ def start_minuspod() -> dict:
         "LARGE_WINDOW_SECONDS":          env.get("LARGE_WINDOW_SECONDS", ""),
         "LARGE_WINDOW_MIN_SECONDS":      env.get("LARGE_WINDOW_MIN_SECONDS", ""),
         "LARGE_WINDOW_MAX_SECONDS":      env.get("LARGE_WINDOW_MAX_SECONDS", ""),
-        "SKIP_VERIFICATION_UNDER_SECONDS": env.get("SKIP_VERIFICATION_UNDER_SECONDS", ""),
+        "SKIP_VERIFICATION_UNDER_SECONDS": env.get("SKIP_VERIFICATION_UNDER_SECONDS", "0"),
         "ENABLE_PROMPT_CACHING":         env.get("ENABLE_PROMPT_CACHING", ""),
         "PYTHONPATH": ".",
     })

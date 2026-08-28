@@ -92,12 +92,13 @@ The hard parts (transcription, ad detection, audio surgery) come from
                   cleaned `.mp3`  →  uploaded to Pocket Casts
 ```
 
-When Pocket Casts already has its own AI transcript for an episode, the
-pipeline still uses Whisper locally — the PC transcript is checked against
-the audio as a confidence check, but it is never used as the ad-detector
-input. PC transcripts are produced from the show's own content and omit
-dynamically-inserted host-read ads; feeding one to the ad detector would
-guarantee it finds nothing to cut.
+When Pocket Casts Plus has already transcribed an episode, the pipeline
+fetches that VTT, verifies it against the audio (coverage, duration
+parity, and multi-point fuzzy probes), and injects it into MinusPod to
+**skip the Whisper pass** when verification passes. RSS publisher transcripts
+are not injected by default (`PC_TRANSCRIPT_ALLOW_RSS=false`) since those
+often come from ad-free master cuts. Set `DISABLE_TRANSCRIPT_SYNC=true` to
+skip the entire path and always use local Whisper.
 
 ## Quick start
 
@@ -116,9 +117,9 @@ cp .env.example .env
 # Step 2 — secrets (one-time; see Credentials in First-time setup)
 # macOS: Passwords app + secrets.sh | Windows: secrets.ps1 | Linux: plain secrets.sh
 
-# Step 3 — launch
+# Step 3 — launch (.env tunables are auto-loaded by pocketcasts_adfree.py)
 source venv/bin/activate    # or: source .venv/bin/activate
-source secrets.sh && source .env && python3 pocketcasts_adfree.py ui
+source secrets.sh && python3 pocketcasts_adfree.py ui
 # Open http://localhost:5050 (browser prompts for login if UI_AUTH_PASSWORD is set)
 ```
 
@@ -163,9 +164,9 @@ export LARGE_WINDOW_SECONDS=3600
 export AD_DETECTION_MAX_TOKENS=16384
 export LARGE_WINDOW_MIN_SECONDS=300
 export LARGE_WINDOW_MAX_SECONDS=36000
-# 86400 = skip verification on episodes under 24 h (cheaper; may miss mid-rolls).
-# Use 0 to always verify (catches mid-roll ads; ~2× LLM cost).
-export SKIP_VERIFICATION_UNDER_SECONDS=86400
+# Always run verification (catches mid-roll ads; ~2× LLM cost).
+# Set 86400 to skip verification on episodes under 24 h (cheaper; may miss mid-rolls).
+export SKIP_VERIFICATION_UNDER_SECONDS=0
 export ENABLE_PROMPT_CACHING=true
 ```
 
@@ -174,9 +175,9 @@ slug). `OPENROUTER_PROVIDER_SORT=price` auto-picks the cheapest host; to pin hos
 instead, set `OPENROUTER_PROVIDER_ORDER=DeepInfra,StreamLake,GMICloud` and
 `OPENROUTER_ALLOW_FALLBACKS=false`.
 
-**Rough cost:** about **$0.005–0.01 per episode** on OpenRouter without verification
-(~1 LLM pass). Set `SKIP_VERIFICATION_UNDER_SECONDS=0` to always verify
-and double the cost for better mid-roll recall.
+**Rough cost:** about **$0.01–0.02 per episode** on OpenRouter with verification
+(~2 LLM passes). Set `SKIP_VERIFICATION_UNDER_SECONDS=86400` to skip verification
+and roughly halve cost (may leave mid-roll ads in place).
 
 ### Step 2 — Secrets (pick your OS)
 
@@ -192,19 +193,22 @@ and double the cost for better mid-roll recall.
 
 ```bash
 source venv/bin/activate   # or: source .venv/bin/activate
-source secrets.sh && source .env && python3 pocketcasts_adfree.py ui
+source secrets.sh && python3 pocketcasts_adfree.py ui
 ```
+
+`.env` is read automatically at startup; you only need `source secrets.sh` for
+Pocket Casts credentials and API keys.
 
 **Windows (PowerShell):**
 
 ```powershell
 .\venv\Scripts\Activate.ps1
 . .\secrets.ps1
-Load-DotEnv .env
 python pocketcasts_adfree.py ui
 ```
 
-(`Load-DotEnv` is defined in [Step 2b.2](#step-2b2-add-the-load-dotenv-helper).)
+(Optional: `Load-DotEnv .env` before other shell commands — see
+[Step 2b.2](#step-2b2-add-the-load-dotenv-helper). Python loads `.env` on its own.)
 
 Open `http://localhost:5050`. Log in with `admin` and your `UI_AUTH_PASSWORD`.
 
@@ -271,9 +275,9 @@ committed. **Tunables** (LLM provider, window sizes, cost optimizations) live in
 
 | Platform | Secret storage | Launch helper |
 |----------|----------------|---------------|
-| macOS | Passwords app + `secrets.sh` | `source secrets.sh && source .env` |
-| Windows | `secrets.ps1` + `Load-DotEnv .env` | See [Step 2b.3](#step-2b3-launch-the-ui-windows) |
-| Linux | `secrets.sh` (plain exports) | `source secrets.sh && source .env` |
+| macOS | Passwords app + `secrets.sh` | `source secrets.sh` (`.env` auto-loaded by Python) |
+| Windows | `secrets.ps1` | `. .\secrets.ps1` then `python pocketcasts_adfree.py ui` |
+| Linux | `secrets.sh` (plain exports) | `source secrets.sh` (`.env` auto-loaded by Python) |
 
 `secrets.sh`, `secrets.ps1`, and `.env` are gitignored — never commit them.
 
@@ -417,9 +421,12 @@ function Load-DotEnv($path) {
 cd pocket-casts-adfree
 .\venv\Scripts\Activate.ps1
 . .\secrets.ps1
-Load-DotEnv .env
 python pocketcasts_adfree.py ui
 ```
+
+`pocketcasts_adfree.py` loads `.env` from the repo root automatically.
+`Load-DotEnv` (below) is only needed if you want tunables in your PowerShell
+session before starting Python.
 
 On Windows, Whisper usually runs via **Docker** (see
 [Platform-specific notes](#platform-specific-notes)); use the Services panel to
@@ -545,7 +552,7 @@ export OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
 # Cost optimizations for OpenRouter (works on any cloud provider):
 export ENABLE_PROMPT_CACHING=true         # OpenRouter honours cache_control markers
 export LARGE_WINDOW_SECONDS=3600          # 1hr full-transcript window
-export SKIP_VERIFICATION_UNDER_SECONDS=86400  # skip verification (use 0 to always verify & catch mid-rolls)
+export SKIP_VERIFICATION_UNDER_SECONDS=0  # always verify (use 86400 to skip & save ~50% LLM cost)
 
 # Optional: pin discounted infrastructure hosts (see the model's Providers tab
 # on openrouter.ai for exact slugs). Without this, OpenRouter load-balances at
@@ -573,10 +580,10 @@ export OPENAI_MODEL=deepseek-v4-flash
 # Cost optimizations for DeepSeek:
 # DeepSeek caches automatically (prefix-matching); cache_control is a no-op.
 # The code auto-detects the provider and skips annotations automatically.
-# Full-transcript windowing. Default 86400 skips verification (~1 LLM call).
-# Set SKIP_VERIFICATION_UNDER_SECONDS=0 to always verify (~2× cost, better mid-roll recall).
+# Full-transcript windowing. Default 0 always runs verification (~2 LLM calls).
+# Set SKIP_VERIFICATION_UNDER_SECONDS=86400 to skip verification (~1 LLM call; may miss mid-rolls).
 export LARGE_WINDOW_SECONDS=3600          # 1hr full-transcript window
-export SKIP_VERIFICATION_UNDER_SECONDS=86400  # cheapest: skip verification pass
+export SKIP_VERIFICATION_UNDER_SECONDS=0
 
 # .env — OpenAI
 export LLM_PROVIDER=openai-compatible
@@ -606,7 +613,7 @@ The code auto-detects your provider and adapts caching behaviour:
 
 | Provider | Caching mechanism | What you need |
 |---|---|---|
-| **DeepSeek** | Automatic prefix-based. No annotation needed — the code skips `cache_control` automatically. | `LARGE_WINDOW_SECONDS=3600`, `SKIP_VERIFICATION_UNDER_SECONDS=86400` (or `0` to always verify and catch mid-rolls) |
+| **DeepSeek** | Automatic prefix-based. No annotation needed — the code skips `cache_control` automatically. | `LARGE_WINDOW_SECONDS=3600`, `SKIP_VERIFICATION_UNDER_SECONDS=0` (or `86400` to skip verification and save ~50% LLM cost) |
 | **OpenRouter** | `cache_control: ephemeral` annotations. The code sends them when `ENABLE_PROMPT_CACHING=true`. | Same cost tunables as DeepSeek plus `ENABLE_PROMPT_CACHING=true` |
 | **Anthropic** | `cache_control: ephemeral` annotations (prompt caching). | `ANTHROPIC_API_KEY`, `ENABLE_PROMPT_CACHING=true` |
 | **Ollama** | No caching. Annotations are skipped automatically. | Local model, free |
@@ -622,7 +629,7 @@ changing.
 
 ```bash
 source venv/bin/activate
-source secrets.sh && source .env && python3 pocketcasts_adfree.py ui
+source secrets.sh && python3 pocketcasts_adfree.py ui
 ```
 
 **Windows:** [Step 2b.3](#step-2b3-launch-the-ui-windows).
@@ -637,7 +644,9 @@ faster because services are already running.
 
 > **Manual service control:** `./start_services.sh` is still available if you
 > want to pre-warm services before launching the UI, or start them without the
-> UI at all (e.g. CLI use). It sources `secrets.sh` then `.env` automatically.
+> UI at all (e.g. CLI use). It sources `secrets.sh` and `.env` for its own
+> shell session. `pocketcasts_adfree.py` loads `.env` automatically when you
+> run the UI or CLI either way.
 > It also handles the `--mlx` flag for MLX-based LLM inference.
 
 ## Web UI
@@ -721,9 +730,9 @@ hosting it).
 **macOS / Linux:**
 
 ```bash
-source secrets.sh && source .env && source venv/bin/activate
+source secrets.sh && source venv/bin/activate
 
-# Launch the dashboard (auto-starts all services)
+# Launch the dashboard (auto-starts all services; .env loaded automatically)
 python3 pocketcasts_adfree.py ui
 
 # Test the pipeline end-to-end on a single feed (services must be running)
@@ -736,13 +745,21 @@ python3 pocketcasts_adfree.py auto
 python3 pocketcasts_adfree.py auto --filter 'daily'
 ```
 
-**Windows:** use [Step 2b.3](#step-2b3-launch-the-ui-windows) to load env vars, then run the same `python pocketcasts_adfree.py …` commands.
+**Windows:** load secrets with `. .\secrets.ps1`, then run the same
+`python pocketcasts_adfree.py …` commands (`.env` is loaded automatically).
 
 ## Configuration reference
 
 Configuration is split between **secrets** (`secrets.sh` / Passwords app on macOS,
 `secrets.ps1` on Windows) and **`.env` tunables**. Copy `.env.example` to
 `.env` for tunables only.
+
+**`.env` loading:** `pocketcasts_adfree.py` reads `.env` from the repo root at
+startup (UI and CLI). You do **not** need `source .env` before launch. Secrets
+are **not** read from `.env` automatically — use `secrets.sh` / Passwords app /
+`secrets.ps1`. Keep passwords and API keys out of `.env`. Restart the UI after
+editing `.env` so the process picks up changes (MinusPod alone re-reads `.env`
+when you click **Restart MinusPod** in the Services panel).
 
 ### Secrets (`secrets.sh` / `secrets.ps1`)
 
@@ -792,6 +809,23 @@ Set `LLM_PROVIDER` in `.env` to choose how MinusPod runs ad detection. See
 | `AD_END_PAD_TAIL` | `5.0` | Extra padding for ads that end at the very end of the file. Catches musical outros that Whisper truncates. |
 | `TAIL_GAP_MIN_SECONDS` | `60` | If Whisper's transcript ends this many seconds before the audio file does, treat the gap as an untranscribed post-roll ad and cut it. |
 
+### Pocket Casts transcript reuse (optional)
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `PC_TRANSCRIPT_REUSE` | `true` | When Pocket Casts Plus has a generated VTT, verify and inject it to skip Whisper. |
+| `DISABLE_TRANSCRIPT_SYNC` | `false` | Skip the entire PC transcript path (fetch, verify, inject). |
+| `PC_TRANSCRIPT_MIN_COVERAGE` | `0.97` | Reject partial transcripts (coverage vs audio duration). |
+| `PC_TRANSCRIPT_MAX_DURATION_DELTA` | `10` | Floor for allowed gap between VTT end and audio duration. Effective max is `max(10s, audio_duration × (1 − MIN_COVERAGE))` so a 97% coverage floor and a 10s cap do not contradict on long episodes. |
+| `PC_TRANSCRIPT_PROBES` | `5` | Fuzzy alignment probe count across the episode. |
+| `PC_TRANSCRIPT_MIN_SIMILARITY` | `0.55` | Minimum text match ratio per probe. |
+| `PC_TRANSCRIPT_MAX_OFFSET` | `3.0` | Max timestamp drift (seconds) per probe. |
+| `PC_TRANSCRIPT_PROBE_WARMUP_SECONDS` | `90` | First probe starts here (skips cold-open misalignment). |
+| `PC_TRANSCRIPT_PROBE_MAX_FAILURES` | `1` | Allow this many probe failures before rejecting. |
+| `PC_TRANSCRIPT_ALLOW_RSS` | `false` | Allow injecting RSS `podcast:transcript` files (often ad-free masters). |
+
+Validate thresholds against your library: `python scripts/validate_pc_transcripts.py --with-ads-only`.
+
 ### MinusPod runtime (optional)
 
 | Variable | Default | Effect |
@@ -801,7 +835,7 @@ Set `LLM_PROVIDER` in `.env` to choose how MinusPod runs ad detection. See
 | `LARGE_WINDOW_SECONDS` | `3600` | Window size used in place of `WINDOW_SIZE_SECONDS` for 1M-context models (DeepSeek V4, Gemini Flash, Qwen Long, Llama 4 / 3.1-405B). Default 3600 covers a 1hr episode in a single window, cutting per-episode LLM cost. Set lower for smaller windows, higher for longer episodes. Range 300–36000 (10 hr ceiling, sized for 1M-context models). |
 | `LARGE_WINDOW_MIN_SECONDS` | `300` | Lower bound for the accepted `LARGE_WINDOW_SECONDS` range. Override in `.env` to tighten the envelope. |
 | `LARGE_WINDOW_MAX_SECONDS` | `36000` | Upper bound for the accepted `LARGE_WINDOW_SECONDS` range. Widen for larger-context models (e.g. Gemini 1.5 Pro at 2M). |
-| `SKIP_VERIFICATION_UNDER_SECONDS` | `86400` (recommended) | Skip the verification pass on episodes shorter than this threshold. **`86400`** (24 h) skips verification on all realistic episodes and halves cost, but may leave mid-roll sponsor reads in place. **`0`** runs a second LLM pass on every episode — catches mid-roll ads that full-transcript detection misses (ad-heavy shows like The Filmcast). Costs ~2× LLM tokens. |
+| `SKIP_VERIFICATION_UNDER_SECONDS` | `0` (recommended) | Run the verification pass on every episode. **`0`** runs a second LLM pass — catches mid-roll ads (in-house + DAI stacks, timestamp mistakes in pass 1) that full-transcript detection misses. Costs ~2× LLM tokens. **`86400`** (24 h) skips verification on all realistic episodes and halves cost, but may leave mid-roll sponsor reads in place. |
 | `ENABLE_PROMPT_CACHING` | `true` | Annotate the system prompt with `cache_control: ephemeral` so the provider can cache it across the ~22 windows of a long episode. **Provider-dependent**: works on OpenRouter and Anthropic (both honour the annotation); **no-op on DeepSeek** (caching is automatic and prefix-based — see [api-docs.deepseek.com/guides/kv_cache](https://api-docs.deepseek.com/guides/kv_cache)) and on Ollama. The code auto-detects the provider from `LLM_PROVIDER` and only annotates when it will be honoured. Cached input tokens are reported in the response log regardless of provider. |
 | `AD_DETECTION_MAX_TOKENS` | `16384` | Output token budget per LLM call. With full-transcript windowing (`LARGE_WINDOW_SECONDS=3600`), ad-heavy ~1 hr episodes can exceed 8192 tokens and MinusPod retries forever (`hit max_tokens` / `empty completion` in `/tmp/minuspod.log`). **16384** is the recommended value for this OpenRouter quick setup. Lower for smaller models/contexts; raise further only if truncation persists. |
 | `CHAPTERS_ENABLED` | `true` | **Not in .env** — stored in MinusPod DB. Toggle via Settings → Chapters in UI, or `PUT /api/v1/settings/ad-detection` with `{"chaptersEnabled": false}`. Disabling saves ~2 LLM calls/episode (boundary + title). |
@@ -966,8 +1000,8 @@ resolve manually and regenerate.
 | **Chapter generation** | Partially working | Produces 1–2 chapters per episode instead of granular boundaries. Root cause: chapter boundary model uses same long-context `deepseek-v4-flash` but prompt/template may need tuning. Workaround: disable with `CHAPTERS_ENABLED=false` (Settings → Chapters or `PUT /settings/ad-detection`). Fix planned: investigate chapter boundary prompt and consider dedicated chapter model setting. |
 | **Auto-update guard** | Functional but manual | `update_minuspod()` pins to `d900bdd0` and skips pull if local patches detected. For true upstream updates, run `bash scripts/setup_minuspod.sh` (re-clones at pin, re-applies patches). A proper version-pinning + diff-based patch rebasing tool would be better. |
 | **DeepSeek prompt caching** | No-op | DeepSeek auto-caches prefix; our `cache_control: ephemeral` annotation is ignored. Not harmful, just unused tokens. |
-| Mid-roll ads still in episode | Full-transcript detection (`LARGE_WINDOW_SECONDS=3600`) often catches only pre/post-roll in one LLM call. Set **`SKIP_VERIFICATION_UNDER_SECONDS=0`** to always run verification (catches mid-rolls; ~2× LLM cost), restart MinusPod, reset processed, and re-queue. Check `/tmp/minuspod.log` for `pass2` / verification lines. Default `86400` skips verification (cheaper, may miss mid-rolls). Also check the house-ad filter: `Rejecting suspected content: ... no sponsor identified in reason` in the log indicates a self-promo ad was dropped. |
-| **Verification pass** | Off by default in quick setup | `SKIP_VERIFICATION_UNDER_SECONDS=86400` skips verification on all realistic episodes (cheaper, may miss mid-rolls). Set to `0` to run verification on every episode (~2× LLM cost; catches mid-rolls). |
+| Mid-roll ads still in episode | Full-transcript detection (`LARGE_WINDOW_SECONDS=3600`) often catches only pre/post-roll in one LLM call. Confirm **`SKIP_VERIFICATION_UNDER_SECONDS=0`** (default in quick setup), restart MinusPod, reset processed, and re-queue. Check `/tmp/minuspod.log` for `pass2` / verification lines. Set `86400` only if you accept cheaper runs that may miss mid-rolls. Also check the house-ad filter: `Rejecting suspected content: ... no sponsor identified in reason` in the log indicates a self-promo ad was dropped. |
+| **Verification pass** | On by default in quick setup | `SKIP_VERIFICATION_UNDER_SECONDS=0` runs verification on every episode (~2× LLM cost; catches mid-rolls). Set `86400` to skip verification on episodes under 24 h (cheaper, may miss mid-rolls). |
 
 ## License & credits
 

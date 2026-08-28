@@ -1,0 +1,6493 @@
+{
+  "summary": {
+    "episodes_total": 60,
+    "episodes_ok": 40,
+    "status_counts": {
+      "no_pc_vtt": 20,
+      "ok": 40
+    },
+    "coverage_pass_rate": 0.425,
+    "duration_pass_rate": 0.425,
+    "gate_pass_rate_simulated": 0.05,
+    "coverage_min": 0.8072,
+    "coverage_median": 0.9603,
+    "coverage_max": 1.0193,
+    "duration_delta_max": 540.89,
+    "max_drift_offset_p95": 4202.77,
+    "min_drift_similarity_median": 0.089,
+    "ads_present_in_pc_rate": 0.0880503144654088,
+    "ads_present_in_pc_rate_drift_corrected": 0.16981132075471697
+  },
+  "episodes": [
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "e7d7b3707e22",
+      "title": "Panic is Actually Refunding Tariffs from the Playdate",
+      "podcast_title": "Game Mess Mornings",
+      "status": "no_pc_vtt",
+      "audio_duration": 3838.210667,
+      "whisper_segments": 1535,
+      "ad_count": 4,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "56b1ca29-1116-420f-9f2e-54a9cef833bc"
+    },
+    {
+      "slug": "the-nextlander-podcast",
+      "episode_id": "245862d7e7d4",
+      "title": "262: Walt's Mouth-Watering Heisenburger",
+      "podcast_title": "The Nextlander Podcast",
+      "status": "ok",
+      "audio_duration": 9062.792,
+      "whisper_segments": 4129,
+      "ad_count": 3,
+      "podcast_uuid": "6ee496d0-a9c1-0139-c17b-0acc26574db2",
+      "episode_uuid": "a5c3119f-5f23-42e1-a3f0-d2e0d7012541",
+      "pc_cue_count": 2355,
+      "vtt_duration": 8861.78,
+      "coverage": 0.9778,
+      "duration_delta": 201.01,
+      "max_duration_delta": 271.88,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 72.69,
+          "drift_applied": 0.0,
+          "whisper_chars": 595,
+          "pc_chars": 985,
+          "similarity": 0.008,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4388.0,
+          "end": 4484.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 1403,
+          "pc_chars": 1596,
+          "similarity": 0.021,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 8981.7,
+          "end": 9062.792,
+          "drift_applied": 0.0,
+          "whisper_chars": 1276,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 72.69,
+          "drift_applied": -23.32,
+          "whisper_chars": 595,
+          "pc_chars": 752,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4388.0,
+          "end": 4484.0,
+          "drift_applied": -23.32,
+          "whisper_chars": 1403,
+          "pc_chars": 1547,
+          "similarity": 0.012,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 8981.7,
+          "end": 9062.792,
+          "drift_applied": -23.32,
+          "whisper_chars": 1276,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -23.32,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.904,
+          "offset": -23.32
+        },
+        {
+          "time": 2265.7,
+          "similarity": 0.659,
+          "offset": -20.74
+        },
+        {
+          "time": 4531.4,
+          "similarity": 0.93,
+          "offset": -129.93
+        },
+        {
+          "time": 6797.1,
+          "similarity": 0.92,
+          "offset": -132.15
+        },
+        {
+          "time": 8972.8,
+          "similarity": 0.223,
+          "offset": -134.24
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9778200801695549,
+        "duration_delta": 201.0119999999988,
+        "max_duration_delta": 271.8837600000002,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.904,
+            "offset": -23.32,
+            "matched_time": 66.68
+          },
+          {
+            "time": 2265.698,
+            "similarity": 0.659,
+            "offset": -20.74,
+            "matched_time": 2244.96
+          },
+          {
+            "time": 4531.396,
+            "similarity": 0.93,
+            "offset": -129.93,
+            "matched_time": 4401.47
+          },
+          {
+            "time": 6797.093999999999,
+            "similarity": 0.92,
+            "offset": -132.15,
+            "matched_time": 6664.95
+          },
+          {
+            "time": 8972.792,
+            "similarity": 0.223,
+            "offset": -134.24,
+            "matched_time": 8838.56
+          }
+        ],
+        "max_offset": 134.24,
+        "min_similarity": 0.223,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -23.3s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 3,
+      "ads_missing_from_pc_drift_corrected": 3,
+      "max_drift_offset": 134.24,
+      "min_drift_similarity": 0.223
+    },
+    {
+      "slug": "hyperfixed",
+      "episode_id": "64e3db57d5cc",
+      "title": "Captive Audience",
+      "podcast_title": "Hyperfixed",
+      "status": "ok",
+      "audio_duration": 2172.216,
+      "whisper_segments": 797,
+      "ad_count": 3,
+      "podcast_uuid": "37ab1040-3d4d-013d-0376-0affdaeeef4b",
+      "episode_uuid": "79d7dd41-1a96-4bb6-bf52-1347ad1348b6",
+      "pc_cue_count": 382,
+      "vtt_duration": 1777.82,
+      "coverage": 0.8184,
+      "duration_delta": 394.4,
+      "max_duration_delta": 65.17,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 279.5,
+          "drift_applied": 0.0,
+          "whisper_chars": 4399,
+          "pc_chars": 4168,
+          "similarity": 0.011,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1436.26,
+          "end": 1632.01,
+          "drift_applied": 0.0,
+          "whisper_chars": 2883,
+          "pc_chars": 2954,
+          "similarity": 0.002,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2136.1,
+          "end": 2172.216,
+          "drift_applied": 0.0,
+          "whisper_chars": 194,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 279.5,
+          "drift_applied": -392.25,
+          "whisper_chars": 4399,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1436.26,
+          "end": 1632.01,
+          "drift_applied": -392.25,
+          "whisper_chars": 2883,
+          "pc_chars": 2852,
+          "similarity": 0.014,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2136.1,
+          "end": 2172.216,
+          "drift_applied": -392.25,
+          "whisper_chars": 194,
+          "pc_chars": 166,
+          "similarity": 0.606,
+          "ad_present_in_pc": true
+        }
+      ],
+      "estimated_drift": -392.25,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.066,
+          "offset": 96.78
+        },
+        {
+          "time": 543.1,
+          "similarity": 0.095,
+          "offset": -119.7
+        },
+        {
+          "time": 1086.1,
+          "similarity": 0.097,
+          "offset": 136.58
+        },
+        {
+          "time": 1629.2,
+          "similarity": 0.07,
+          "offset": -16.77
+        },
+        {
+          "time": 2082.2,
+          "similarity": 0.868,
+          "offset": -392.25
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8184361039601955,
+        "duration_delta": 394.39599999999996,
+        "max_duration_delta": 65.16648000000005,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 1,
+      "ads_missing_from_pc": 3,
+      "ads_missing_from_pc_drift_corrected": 2,
+      "max_drift_offset": 392.25,
+      "min_drift_similarity": 0.066
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "eff788ed6a83",
+      "title": "Rockstar Games Addresses GTA VI Leaks",
+      "podcast_title": "Game Mess Mornings",
+      "status": "no_pc_vtt",
+      "audio_duration": 4196.746667,
+      "whisper_segments": 1669,
+      "ad_count": 2,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "52201e13-6223-4ece-9697-fa9992f5e942"
+    },
+    {
+      "slug": "giant-bombcast",
+      "episode_id": "573636e0002d",
+      "title": "Giant Bombcast 955: Smash or Pass",
+      "podcast_title": "Giant Bombcast",
+      "status": "no_pc_vtt",
+      "audio_duration": 7638.163197,
+      "whisper_segments": 3951,
+      "ad_count": 5,
+      "podcast_uuid": "ea0a6200-c70f-012f-7eeb-723c91aeae46",
+      "episode_uuid": "a61c3ba5-6730-43af-9b1c-2c0c2c93b92d"
+    },
+    {
+      "slug": "the-jeff-gerstmann-show-a-podcast-about-video-games",
+      "episode_id": "09ac8d473684",
+      "title": "220: Big Beta Weekend, Gamescom, and More!",
+      "podcast_title": "The Jeff Gerstmann Show - A Podcast About Video Games",
+      "status": "ok",
+      "audio_duration": 7187.121625,
+      "whisper_segments": 2976,
+      "ad_count": 1,
+      "podcast_uuid": "160f23f0-c8a7-013a-d953-0acc26574db2",
+      "episode_uuid": "70ed483f-e584-4f9d-bbf3-f3aa7676eb22",
+      "pc_cue_count": 2355,
+      "vtt_duration": 7149.02,
+      "coverage": 0.9947,
+      "duration_delta": 38.1,
+      "max_duration_delta": 215.61,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 7162.62,
+          "end": 7187.121625,
+          "drift_applied": 0.0,
+          "whisper_chars": 346,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 7162.62,
+          "end": 7187.121625,
+          "drift_applied": -29.12,
+          "whisper_chars": 346,
+          "pc_chars": 153,
+          "similarity": 0.132,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -29.12,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.818,
+          "offset": -3.74
+        },
+        {
+          "time": 1796.8,
+          "similarity": 0.99,
+          "offset": -2.21
+        },
+        {
+          "time": 3593.6,
+          "similarity": 0.869,
+          "offset": -29.12
+        },
+        {
+          "time": 5390.3,
+          "similarity": 0.55,
+          "offset": -33.61
+        },
+        {
+          "time": 7097.1,
+          "similarity": 0.918,
+          "offset": -33.15
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9946986252650206,
+        "duration_delta": 38.10162499999933,
+        "max_duration_delta": 215.61364875000018,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.818,
+            "offset": -3.74,
+            "matched_time": 86.26
+          },
+          {
+            "time": 1796.78040625,
+            "similarity": 0.99,
+            "offset": -2.21,
+            "matched_time": 1794.57
+          },
+          {
+            "time": 3593.5608125,
+            "similarity": 0.869,
+            "offset": -29.12,
+            "matched_time": 3564.44
+          },
+          {
+            "time": 5390.34121875,
+            "similarity": 0.55,
+            "offset": -33.61,
+            "matched_time": 5356.73
+          },
+          {
+            "time": 7097.121625,
+            "similarity": 0.918,
+            "offset": -33.15,
+            "matched_time": 7063.97
+          }
+        ],
+        "max_offset": 33.61,
+        "min_similarity": 0.55,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "4/5 probes failed (max 1): 90.0s (offset -3.7s > 3.0s)",
+        "probes_passed": 1,
+        "probes_failed": 4,
+        "median_abs_offset": 2.21
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 1,
+      "ads_missing_from_pc_drift_corrected": 1,
+      "max_drift_offset": 33.61,
+      "min_drift_similarity": 0.55
+    },
+    {
+      "slug": "decoding-tv",
+      "episode_id": "a3765bc9dfaa",
+      "title": "Ep. 125 - \u2018Lanterns\u2019 S1E02 Asks a Lot of Its Viewers (Plus: Will the Paramount-Warner Merger Be Good for Movie Theaters?)",
+      "podcast_title": "Decoding TV",
+      "status": "ok",
+      "audio_duration": 4904.280375,
+      "whisper_segments": 2125,
+      "ad_count": 2,
+      "podcast_uuid": "77794610-6f22-0134-787d-4ffec63d9550",
+      "episode_uuid": "79ec3388-400b-4f2d-afcf-96095d2952d2",
+      "pc_cue_count": 1224,
+      "vtt_duration": 4620.34,
+      "coverage": 0.9421,
+      "duration_delta": 283.94,
+      "max_duration_delta": 147.13,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 90.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 1279,
+          "pc_chars": 1426,
+          "similarity": 0.01,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4786.9,
+          "end": 4904.280375,
+          "drift_applied": 0.0,
+          "whisper_chars": 1604,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 90.4,
+          "drift_applied": -113.34,
+          "whisper_chars": 1279,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4786.9,
+          "end": 4904.280375,
+          "drift_applied": -113.34,
+          "whisper_chars": 1604,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -113.34,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.96,
+          "offset": -44.95
+        },
+        {
+          "time": 1226.1,
+          "similarity": 0.699,
+          "offset": -113.34
+        },
+        {
+          "time": 2452.1,
+          "similarity": 0.945,
+          "offset": -114.95
+        },
+        {
+          "time": 3678.2,
+          "similarity": 0.663,
+          "offset": -165.87
+        },
+        {
+          "time": 4814.3,
+          "similarity": 0.089,
+          "offset": -4119.62
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9421035598928211,
+        "duration_delta": 283.94037500000013,
+        "max_duration_delta": 147.12841125000014,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 2,
+      "ads_missing_from_pc_drift_corrected": 2,
+      "max_drift_offset": 4119.62,
+      "min_drift_similarity": 0.089
+    },
+    {
+      "slug": "the-filmcast",
+      "episode_id": "f714040b92f6",
+      "title": "Ep. 889 - Tony",
+      "podcast_title": "The Filmcast",
+      "status": "ok",
+      "audio_duration": 6267.331689,
+      "whisper_segments": 3018,
+      "ad_count": 2,
+      "podcast_uuid": "9879f2c0-0cf8-012e-fb78-00163e1b201c",
+      "episode_uuid": "e6484cc1-3a88-46a0-b6c0-2dc7626a3b76",
+      "pc_cue_count": 1648,
+      "vtt_duration": 5951.06,
+      "coverage": 0.9495,
+      "duration_delta": 316.27,
+      "max_duration_delta": 188.02,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 59.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 881,
+          "pc_chars": 497,
+          "similarity": 0.012,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6143.04,
+          "end": 6267.331689,
+          "drift_applied": 0.0,
+          "whisper_chars": 1353,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 59.0,
+          "drift_applied": -48.6,
+          "whisper_chars": 881,
+          "pc_chars": 130,
+          "similarity": 0.166,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6143.04,
+          "end": 6267.331689,
+          "drift_applied": -48.6,
+          "whisper_chars": 1353,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -48.6,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.99,
+          "offset": -48.6
+        },
+        {
+          "time": 1566.8,
+          "similarity": 0.963,
+          "offset": -101.85
+        },
+        {
+          "time": 3133.7,
+          "similarity": 0.104,
+          "offset": -167.52
+        },
+        {
+          "time": 4700.5,
+          "similarity": 0.09,
+          "offset": 139.04
+        },
+        {
+          "time": 6177.3,
+          "similarity": 0.096,
+          "offset": -319.58
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9495364686769174,
+        "duration_delta": 316.27168899999924,
+        "max_duration_delta": 188.01995067000016,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 2,
+      "ads_missing_from_pc_drift_corrected": 2,
+      "max_drift_offset": 319.58,
+      "min_drift_similarity": 0.09
+    },
+    {
+      "slug": "dlc",
+      "episode_id": "d53de93a7256",
+      "title": "666: Anthony Taormina: GTA VI leaks, Duskbloods, Mortal Shell 2, The Sinking City 2, Assassin\u2019s Creed Black Flag Resynced, 2XKO ends, Warren Spector Retires, Feed the Scorchpot, Fogpiercer",
+      "podcast_title": "DLC",
+      "status": "ok",
+      "audio_duration": 7060.64,
+      "whisper_segments": 2627,
+      "ad_count": 5,
+      "podcast_uuid": "fa554850-5aed-0131-8cf2-723c91aeae46",
+      "episode_uuid": "850f9b99-b2b1-444f-8da7-6a70541281e0",
+      "pc_cue_count": 1560,
+      "vtt_duration": 6706.2,
+      "coverage": 0.9498,
+      "duration_delta": 354.44,
+      "max_duration_delta": 211.82,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 59.8,
+          "drift_applied": 0.0,
+          "whisper_chars": 909,
+          "pc_chars": 846,
+          "similarity": 0.009,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1945.0666666666666,
+          "end": 2016.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 1236,
+          "pc_chars": 1111,
+          "similarity": 0.01,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6424.5,
+          "end": 6443.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 314,
+          "pc_chars": 357,
+          "similarity": 0.015,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6976.6,
+          "end": 7004.2,
+          "drift_applied": 0.0,
+          "whisper_chars": 408,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 7031.2,
+          "end": 7060.64,
+          "drift_applied": 0.0,
+          "whisper_chars": 408,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 59.8,
+          "drift_applied": -60.07,
+          "whisper_chars": 909,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1945.0666666666666,
+          "end": 2016.4,
+          "drift_applied": -60.07,
+          "whisper_chars": 1236,
+          "pc_chars": 1007,
+          "similarity": 0.216,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6424.5,
+          "end": 6443.4,
+          "drift_applied": -60.07,
+          "whisper_chars": 314,
+          "pc_chars": 375,
+          "similarity": 0.023,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6976.6,
+          "end": 7004.2,
+          "drift_applied": -60.07,
+          "whisper_chars": 408,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 7031.2,
+          "end": 7060.64,
+          "drift_applied": -60.07,
+          "whisper_chars": 408,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -60.07,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.991,
+          "offset": -57.98
+        },
+        {
+          "time": 1765.2,
+          "similarity": 0.99,
+          "offset": -60.07
+        },
+        {
+          "time": 3530.3,
+          "similarity": 0.984,
+          "offset": -123.26
+        },
+        {
+          "time": 5295.5,
+          "similarity": 0.99,
+          "offset": -179.9
+        },
+        {
+          "time": 6970.6,
+          "similarity": 0.097,
+          "offset": -5729.28
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9498005846495501,
+        "duration_delta": 354.4400000000005,
+        "max_duration_delta": 211.8192000000002,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 5,
+      "ads_missing_from_pc_drift_corrected": 5,
+      "max_drift_offset": 5729.28,
+      "min_drift_similarity": 0.097
+    },
+    {
+      "slug": "search-engine",
+      "episode_id": "753194c2f814",
+      "title": "The Chosen One",
+      "podcast_title": "Search Engine",
+      "status": "ok",
+      "audio_duration": 3577.704333,
+      "whisper_segments": 1337,
+      "ad_count": 5,
+      "podcast_uuid": "cb2108e0-8619-013a-d7f7-0acc26574db2",
+      "episode_uuid": "7ea317c0-b20e-45af-9992-a5442fe0c115",
+      "pc_cue_count": 820,
+      "vtt_duration": 3059.22,
+      "coverage": 0.8551,
+      "duration_delta": 518.48,
+      "max_duration_delta": 107.33,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 177.48,
+          "drift_applied": 0.0,
+          "whisper_chars": 1658,
+          "pc_chars": 2419,
+          "similarity": 0.188,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 445.40000000000003,
+          "end": 664.3,
+          "drift_applied": 0.0,
+          "whisper_chars": 3623,
+          "pc_chars": 3748,
+          "similarity": 0.449,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 675.4,
+          "end": 752.2,
+          "drift_applied": 0.0,
+          "whisper_chars": 1320,
+          "pc_chars": 1415,
+          "similarity": 0.019,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 757.3,
+          "end": 793.89,
+          "drift_applied": 0.0,
+          "whisper_chars": 553,
+          "pc_chars": 642,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3532.0,
+          "end": 3577.704333,
+          "drift_applied": 0.0,
+          "whisper_chars": 832,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 177.48,
+          "drift_applied": -443.6,
+          "whisper_chars": 1658,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 445.40000000000003,
+          "end": 664.3,
+          "drift_applied": -443.6,
+          "whisper_chars": 3623,
+          "pc_chars": 3252,
+          "similarity": 0.012,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 675.4,
+          "end": 752.2,
+          "drift_applied": -443.6,
+          "whisper_chars": 1320,
+          "pc_chars": 1191,
+          "similarity": 0.019,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 757.3,
+          "end": 793.89,
+          "drift_applied": -443.6,
+          "whisper_chars": 553,
+          "pc_chars": 398,
+          "similarity": 0.006,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3532.0,
+          "end": 3577.704333,
+          "drift_applied": -443.6,
+          "whisper_chars": 832,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -443.6,
+      "drift_probes": [
+        {
+          "time": 894.4,
+          "similarity": 0.074,
+          "offset": -166.61
+        },
+        {
+          "time": 1788.9,
+          "similarity": 0.091,
+          "offset": 146.35
+        },
+        {
+          "time": 2683.3,
+          "similarity": 0.075,
+          "offset": 75.78
+        },
+        {
+          "time": 3487.7,
+          "similarity": 0.959,
+          "offset": -443.6
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8550790437830178,
+        "duration_delta": 518.4843330000003,
+        "max_duration_delta": 107.3311299900001,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 1,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 4,
+      "ads_missing_from_pc_drift_corrected": 5,
+      "max_drift_offset": 443.6,
+      "min_drift_similarity": 0.074
+    },
+    {
+      "slug": "the-flop-house",
+      "episode_id": "81a59ea0f357",
+      "title": "The Moment, with Hallie Haglund",
+      "podcast_title": "The Flop House",
+      "status": "ok",
+      "audio_duration": 6667.755063,
+      "whisper_segments": 3509,
+      "ad_count": 2,
+      "podcast_uuid": "6b7afbb0-62de-012e-2871-00163e1b201c",
+      "episode_uuid": "780324ac-e002-4b0f-b9df-16dc50b7bf9f",
+      "pc_cue_count": 2600,
+      "vtt_duration": 6667.18,
+      "coverage": 0.9999,
+      "duration_delta": 0.58,
+      "max_duration_delta": 200.03,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 6465.0,
+          "end": 6516.04,
+          "drift_applied": 0.0,
+          "whisper_chars": 857,
+          "pc_chars": 829,
+          "similarity": 0.983,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 6659.0,
+          "end": 6667.755063,
+          "drift_applied": 0.0,
+          "whisper_chars": 69,
+          "pc_chars": 81,
+          "similarity": 0.92,
+          "ad_present_in_pc": true
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 6465.0,
+          "end": 6516.04,
+          "drift_applied": -0.47,
+          "whisper_chars": 857,
+          "pc_chars": 829,
+          "similarity": 0.983,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 6659.0,
+          "end": 6667.755063,
+          "drift_applied": -0.47,
+          "whisper_chars": 69,
+          "pc_chars": 81,
+          "similarity": 0.92,
+          "ad_present_in_pc": true
+        }
+      ],
+      "estimated_drift": -0.47,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.782,
+          "offset": -1.72
+        },
+        {
+          "time": 1666.9,
+          "similarity": 0.615,
+          "offset": -2.24
+        },
+        {
+          "time": 3333.9,
+          "similarity": 0.962,
+          "offset": -0.35
+        },
+        {
+          "time": 5000.8,
+          "similarity": 0.72,
+          "offset": -0.47
+        },
+        {
+          "time": 6577.8,
+          "similarity": 0.924,
+          "offset": 0.07
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9999137546303717,
+        "duration_delta": 0.575062999999318,
+        "max_duration_delta": 200.03265189000015,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.782,
+            "offset": -1.72,
+            "matched_time": 88.28
+          },
+          {
+            "time": 1666.93876575,
+            "similarity": 0.615,
+            "offset": -2.24,
+            "matched_time": 1664.7
+          },
+          {
+            "time": 3333.8775315,
+            "similarity": 0.962,
+            "offset": -0.35,
+            "matched_time": 3333.53
+          },
+          {
+            "time": 5000.8162972499995,
+            "similarity": 0.72,
+            "offset": -0.47,
+            "matched_time": 5000.35
+          },
+          {
+            "time": 6577.755063,
+            "similarity": 0.924,
+            "offset": 0.07,
+            "matched_time": 6577.83
+          }
+        ],
+        "max_offset": 2.24,
+        "min_similarity": 0.615,
+        "gate_pass_simulated": true,
+        "gate_failure_reason": "",
+        "probes_passed": 5,
+        "probes_failed": 0,
+        "median_abs_offset": 0.47
+      },
+      "gate_pass_simulated": true,
+      "ads_present_in_pc": 2,
+      "ads_present_in_pc_drift_corrected": 2,
+      "ads_missing_from_pc": 0,
+      "ads_missing_from_pc_drift_corrected": 0,
+      "max_drift_offset": 2.24,
+      "min_drift_similarity": 0.615
+    },
+    {
+      "slug": "voicemail-dump-truck",
+      "episode_id": "a3d005ce9b51",
+      "title": "Grandma's Favorite.mp3 | Voicemail Dump Truck 219",
+      "podcast_title": "Voicemail Dump Truck",
+      "status": "no_pc_vtt",
+      "audio_duration": 4083.316939,
+      "whisper_segments": 2421,
+      "ad_count": 2,
+      "podcast_uuid": "4d47baa0-ac6d-0135-9e5c-5bb073f92b78",
+      "episode_uuid": "f996be04-d940-4357-8a47-b084432c1397"
+    },
+    {
+      "slug": "the-nextlander-podcast",
+      "episode_id": "772739aed5e8",
+      "title": "261: Jedi Master Frank Columbo",
+      "podcast_title": "The Nextlander Podcast",
+      "status": "ok",
+      "audio_duration": 8357.864,
+      "whisper_segments": 4362,
+      "ad_count": 2,
+      "podcast_uuid": "6ee496d0-a9c1-0139-c17b-0acc26574db2",
+      "episode_uuid": "ca3ad7f0-faf9-4df0-9a69-226e412989d4",
+      "pc_cue_count": 2433,
+      "vtt_duration": 8144.544,
+      "coverage": 0.9745,
+      "duration_delta": 213.32,
+      "max_duration_delta": 250.74,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 83.37,
+          "drift_applied": 0.0,
+          "whisper_chars": 1187,
+          "pc_chars": 1129,
+          "similarity": 0.017,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 8265.7,
+          "end": 8357.864,
+          "drift_applied": 0.0,
+          "whisper_chars": 1294,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 83.37,
+          "drift_applied": -95.41,
+          "whisper_chars": 1187,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 8265.7,
+          "end": 8357.864,
+          "drift_applied": -95.41,
+          "whisper_chars": 1294,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -95.41,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.856,
+          "offset": -52.13
+        },
+        {
+          "time": 2089.5,
+          "similarity": 0.526,
+          "offset": -95.41
+        },
+        {
+          "time": 4178.9,
+          "similarity": 0.976,
+          "offset": -95.97
+        },
+        {
+          "time": 6268.4,
+          "similarity": 0.976,
+          "offset": -134.98
+        },
+        {
+          "time": 8267.9,
+          "similarity": 0.037,
+          "offset": -176.26
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9744767323325673,
+        "duration_delta": 213.3199999999997,
+        "max_duration_delta": 250.73592000000022,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.856,
+            "offset": -52.13,
+            "matched_time": 37.87
+          },
+          {
+            "time": 2089.466,
+            "similarity": 0.526,
+            "offset": -95.41,
+            "matched_time": 1994.06
+          },
+          {
+            "time": 4178.932,
+            "similarity": 0.976,
+            "offset": -95.97,
+            "matched_time": 4082.96
+          },
+          {
+            "time": 6268.397999999999,
+            "similarity": 0.976,
+            "offset": -134.98,
+            "matched_time": 6133.42
+          },
+          {
+            "time": 8267.864,
+            "similarity": 0.037,
+            "offset": -176.26,
+            "matched_time": 8091.6
+          }
+        ],
+        "max_offset": 176.26,
+        "min_similarity": 0.037,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -52.1s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 2,
+      "ads_missing_from_pc_drift_corrected": 2,
+      "max_drift_offset": 176.26,
+      "min_drift_similarity": 0.037
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "19d23a30bace",
+      "title": "Low Sales on Physical Xbox Games",
+      "podcast_title": "Game Mess Mornings",
+      "status": "no_pc_vtt",
+      "audio_duration": 3470.530667,
+      "whisper_segments": 1317,
+      "ad_count": 3,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "c6d8b4be-8355-4bae-8548-eb6f619fd7db"
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "f57420668e81",
+      "title": "Horizon Hunters Gathering Getting Big Overhaul",
+      "podcast_title": "Game Mess Mornings",
+      "status": "ok",
+      "audio_duration": 2996.482667,
+      "whisper_segments": 1164,
+      "ad_count": 3,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "a983b393-a1ef-4f7e-8f61-7e05e44a9816",
+      "pc_cue_count": 890,
+      "vtt_duration": 3054.36,
+      "coverage": 1.0193,
+      "duration_delta": 57.88,
+      "max_duration_delta": 89.89,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 23.7,
+          "drift_applied": 0.0,
+          "whisper_chars": 372,
+          "pc_chars": 386,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 194.0,
+          "end": 251.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 1089,
+          "pc_chars": 1285,
+          "similarity": 0.186,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2988.82,
+          "end": 2996.482667,
+          "drift_applied": 0.0,
+          "whisper_chars": 0,
+          "pc_chars": 246,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 23.7,
+          "drift_applied": 11.28,
+          "whisper_chars": 372,
+          "pc_chars": 417,
+          "similarity": 0.025,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 194.0,
+          "end": 251.4,
+          "drift_applied": 11.28,
+          "whisper_chars": 1089,
+          "pc_chars": 1240,
+          "similarity": 0.932,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 2988.82,
+          "end": 2996.482667,
+          "drift_applied": 11.28,
+          "whisper_chars": 0,
+          "pc_chars": 234,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "estimated_drift": 11.28,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 1.0,
+          "offset": 7.78
+        },
+        {
+          "time": 749.1,
+          "similarity": 0.91,
+          "offset": 9.19
+        },
+        {
+          "time": 1498.2,
+          "similarity": 0.767,
+          "offset": 11.28
+        },
+        {
+          "time": 2247.4,
+          "similarity": 0.992,
+          "offset": 65.42
+        },
+        {
+          "time": 2906.5,
+          "similarity": 0.776,
+          "offset": 60.54
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 1.0193150902013877,
+        "duration_delta": 57.87733299999991,
+        "max_duration_delta": 89.89448001000008,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 1.0,
+            "offset": 7.78,
+            "matched_time": 97.78
+          },
+          {
+            "time": 749.12066675,
+            "similarity": 0.91,
+            "offset": 9.19,
+            "matched_time": 758.31
+          },
+          {
+            "time": 1498.2413335,
+            "similarity": 0.767,
+            "offset": 11.28,
+            "matched_time": 1509.52
+          },
+          {
+            "time": 2247.36200025,
+            "similarity": 0.992,
+            "offset": 65.42,
+            "matched_time": 2312.78
+          },
+          {
+            "time": 2906.482667,
+            "similarity": 0.776,
+            "offset": 60.54,
+            "matched_time": 2967.03
+          }
+        ],
+        "max_offset": 65.42,
+        "min_similarity": 0.767,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset +7.8s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 1,
+      "ads_missing_from_pc": 3,
+      "ads_missing_from_pc_drift_corrected": 2,
+      "max_drift_offset": 65.42,
+      "min_drift_similarity": 0.767
+    },
+    {
+      "slug": "decoding-tv",
+      "episode_id": "f9fc51102e0f",
+      "title": "Ep. 124 - \u2018Lanterns\u2019 Is Awesome (Plus: \u2018Dark Matter\u2019 S1E09 Opens Up Interesting Possibilities for Season 2)",
+      "podcast_title": "Decoding TV",
+      "status": "ok",
+      "audio_duration": 6017.401875,
+      "whisper_segments": 2320,
+      "ad_count": 4,
+      "podcast_uuid": "77794610-6f22-0134-787d-4ffec63d9550",
+      "episode_uuid": "2af6e9ec-6733-4be2-af6d-3f8e8804fd78",
+      "pc_cue_count": 1385,
+      "vtt_duration": 5560.6,
+      "coverage": 0.9241,
+      "duration_delta": 456.8,
+      "max_duration_delta": 180.52,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 141.5,
+          "drift_applied": 0.0,
+          "whisper_chars": 2156,
+          "pc_chars": 2000,
+          "similarity": 0.001,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2171.27,
+          "end": 2251.7,
+          "drift_applied": 0.0,
+          "whisper_chars": 1140,
+          "pc_chars": 1282,
+          "similarity": 0.005,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3709.8,
+          "end": 3783.9,
+          "drift_applied": 0.0,
+          "whisper_chars": 1085,
+          "pc_chars": 1163,
+          "similarity": 0.005,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 5861.58,
+          "end": 6017.401875,
+          "drift_applied": 0.0,
+          "whisper_chars": 2027,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 141.5,
+          "drift_applied": -144.86,
+          "whisper_chars": 2156,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2171.27,
+          "end": 2251.7,
+          "drift_applied": -144.86,
+          "whisper_chars": 1140,
+          "pc_chars": 1336,
+          "similarity": 0.054,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3709.8,
+          "end": 3783.9,
+          "drift_applied": -144.86,
+          "whisper_chars": 1085,
+          "pc_chars": 1030,
+          "similarity": 0.021,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 5861.58,
+          "end": 6017.401875,
+          "drift_applied": -144.86,
+          "whisper_chars": 2027,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -144.86,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.055,
+          "offset": -68.38
+        },
+        {
+          "time": 1504.4,
+          "similarity": 0.99,
+          "offset": -144.86
+        },
+        {
+          "time": 3008.7,
+          "similarity": 0.073,
+          "offset": 72.16
+        },
+        {
+          "time": 4513.1,
+          "similarity": 0.093,
+          "offset": -108.41
+        },
+        {
+          "time": 5927.4,
+          "similarity": 0.089,
+          "offset": -2815.92
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9240865269614389,
+        "duration_delta": 456.8018749999992,
+        "max_duration_delta": 180.52205625000013,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 4,
+      "ads_missing_from_pc_drift_corrected": 4,
+      "max_drift_offset": 2815.92,
+      "min_drift_similarity": 0.055
+    },
+    {
+      "slug": "the-filmcast",
+      "episode_id": "9796d25d236b",
+      "title": "Ep. 888 - The End of Oak Street",
+      "podcast_title": "The Filmcast",
+      "status": "ok",
+      "audio_duration": 6210.176067,
+      "whisper_segments": 2805,
+      "ad_count": 3,
+      "podcast_uuid": "9879f2c0-0cf8-012e-fb78-00163e1b201c",
+      "episode_uuid": "fc1380a8-29ea-4c7f-9ab6-2ab6623b099e",
+      "pc_cue_count": 1724,
+      "vtt_duration": 6178.04,
+      "coverage": 0.9948,
+      "duration_delta": 32.14,
+      "max_duration_delta": 186.31,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 30.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 477,
+          "pc_chars": 205,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 984.0,
+          "end": 1084.29,
+          "drift_applied": 0.0,
+          "whisper_chars": 1269,
+          "pc_chars": 1383,
+          "similarity": 0.33,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1968.7,
+          "end": 2101.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 1798,
+          "pc_chars": 1805,
+          "similarity": 0.752,
+          "ad_present_in_pc": true
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 30.0,
+          "drift_applied": -31.64,
+          "whisper_chars": 477,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 984.0,
+          "end": 1084.29,
+          "drift_applied": -31.64,
+          "whisper_chars": 1269,
+          "pc_chars": 1294,
+          "similarity": 0.835,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 1968.7,
+          "end": 2101.4,
+          "drift_applied": -31.64,
+          "whisper_chars": 1798,
+          "pc_chars": 1934,
+          "similarity": 0.946,
+          "ad_present_in_pc": true
+        }
+      ],
+      "estimated_drift": -31.64,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.967,
+          "offset": -31.64
+        },
+        {
+          "time": 1552.5,
+          "similarity": 0.582,
+          "offset": -34.73
+        },
+        {
+          "time": 3105.1,
+          "similarity": 0.31,
+          "offset": -32.46
+        },
+        {
+          "time": 4657.6,
+          "similarity": 1.0,
+          "offset": -30.27
+        },
+        {
+          "time": 6120.2,
+          "similarity": 0.907,
+          "offset": -33.28
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9948252566991189,
+        "duration_delta": 32.13606700000037,
+        "max_duration_delta": 186.30528201000018,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.967,
+            "offset": -31.64,
+            "matched_time": 58.36
+          },
+          {
+            "time": 1552.54401675,
+            "similarity": 0.582,
+            "offset": -34.73,
+            "matched_time": 1517.81
+          },
+          {
+            "time": 3105.0880335,
+            "similarity": 0.31,
+            "offset": -32.46,
+            "matched_time": 3072.63
+          },
+          {
+            "time": 4657.63205025,
+            "similarity": 1.0,
+            "offset": -30.27,
+            "matched_time": 4627.36
+          },
+          {
+            "time": 6120.176067,
+            "similarity": 0.907,
+            "offset": -33.28,
+            "matched_time": 6086.9
+          }
+        ],
+        "max_offset": 34.73,
+        "min_similarity": 0.31,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -31.6s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 1,
+      "ads_present_in_pc_drift_corrected": 2,
+      "ads_missing_from_pc": 2,
+      "ads_missing_from_pc_drift_corrected": 1,
+      "max_drift_offset": 34.73,
+      "min_drift_similarity": 0.31
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "f397d1708037",
+      "title": "Kingdom Hearts IV Targetting 2027 Release",
+      "podcast_title": "Game Mess Mornings",
+      "status": "no_pc_vtt",
+      "audio_duration": 3532.618667,
+      "whisper_segments": 1562,
+      "ad_count": 3,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "f5340ed3-bea2-4b3b-b14d-403c712b82fb"
+    },
+    {
+      "slug": "giant-bombcast",
+      "episode_id": "56575d8b93d7",
+      "title": "Giant Bombcast 954: Milk Bath",
+      "podcast_title": "Giant Bombcast",
+      "status": "ok",
+      "audio_duration": 10383.431429,
+      "whisper_segments": 5259,
+      "ad_count": 6,
+      "podcast_uuid": "ea0a6200-c70f-012f-7eeb-723c91aeae46",
+      "episode_uuid": "be0512b4-a464-4e60-b079-27d7e6a3cea3",
+      "pc_cue_count": 3379,
+      "vtt_duration": 9971.02,
+      "coverage": 0.9603,
+      "duration_delta": 412.41,
+      "max_duration_delta": 311.5,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 85.5,
+          "drift_applied": 0.0,
+          "whisper_chars": 1423,
+          "pc_chars": 519,
+          "similarity": 0.019,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 302.4,
+          "end": 400.6,
+          "drift_applied": 0.0,
+          "whisper_chars": 1617,
+          "pc_chars": 1583,
+          "similarity": 0.013,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2025.1,
+          "end": 2128.9,
+          "drift_applied": 0.0,
+          "whisper_chars": 1762,
+          "pc_chars": 1639,
+          "similarity": 0.011,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 5723.4,
+          "end": 5827.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 1774,
+          "pc_chars": 1724,
+          "similarity": 0.019,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 8319.91,
+          "end": 8434.85,
+          "drift_applied": 0.0,
+          "whisper_chars": 1864,
+          "pc_chars": 2038,
+          "similarity": 0.009,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 10287.4,
+          "end": 10383.431429,
+          "drift_applied": 0.0,
+          "whisper_chars": 1620,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 85.5,
+          "drift_applied": -142.79,
+          "whisper_chars": 1423,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 302.4,
+          "end": 400.6,
+          "drift_applied": -142.79,
+          "whisper_chars": 1617,
+          "pc_chars": 1600,
+          "similarity": 0.05,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2025.1,
+          "end": 2128.9,
+          "drift_applied": -142.79,
+          "whisper_chars": 1762,
+          "pc_chars": 1470,
+          "similarity": 0.015,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 5723.4,
+          "end": 5827.4,
+          "drift_applied": -142.79,
+          "whisper_chars": 1774,
+          "pc_chars": 1027,
+          "similarity": 0.011,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 8319.91,
+          "end": 8434.85,
+          "drift_applied": -142.79,
+          "whisper_chars": 1864,
+          "pc_chars": 2145,
+          "similarity": 0.003,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 10287.4,
+          "end": 10383.431429,
+          "drift_applied": -142.79,
+          "whisper_chars": 1620,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -142.79,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 1.0,
+          "offset": -77.15
+        },
+        {
+          "time": 2595.9,
+          "similarity": 0.893,
+          "offset": -143.2
+        },
+        {
+          "time": 5191.7,
+          "similarity": 0.791,
+          "offset": -142.79
+        },
+        {
+          "time": 7787.6,
+          "similarity": 0.079,
+          "offset": -66.29
+        },
+        {
+          "time": 10293.4,
+          "similarity": 0.069,
+          "offset": -482.52
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9602817785411313,
+        "duration_delta": 412.41142899999977,
+        "max_duration_delta": 311.5029428700003,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 6,
+      "ads_missing_from_pc_drift_corrected": 6,
+      "max_drift_offset": 482.52,
+      "min_drift_similarity": 0.069
+    },
+    {
+      "slug": "the-jeff-gerstmann-show-a-podcast-about-video-games",
+      "episode_id": "6f4a8a08da40",
+      "title": "219: I Mean, Matt Groening Would Know, Right?",
+      "podcast_title": "The Jeff Gerstmann Show - A Podcast About Video Games",
+      "status": "ok",
+      "audio_duration": 11171.082625,
+      "whisper_segments": 4164,
+      "ad_count": 4,
+      "podcast_uuid": "160f23f0-c8a7-013a-d953-0acc26574db2",
+      "episode_uuid": "5a3bab48-caad-4c23-9364-834301037e70",
+      "pc_cue_count": 3741,
+      "vtt_duration": 11091.64,
+      "coverage": 0.9929,
+      "duration_delta": 79.44,
+      "max_duration_delta": 335.13,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 89.98,
+          "drift_applied": 0.0,
+          "whisper_chars": 1084,
+          "pc_chars": 677,
+          "similarity": 0.028,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1026.6,
+          "end": 1196.3,
+          "drift_applied": 0.0,
+          "whisper_chars": 2712,
+          "pc_chars": 2921,
+          "similarity": 0.013,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2374.3,
+          "end": 2567.1,
+          "drift_applied": 0.0,
+          "whisper_chars": 2598,
+          "pc_chars": 2677,
+          "similarity": 0.073,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 11139.2,
+          "end": 11171.082625,
+          "drift_applied": 0.0,
+          "whisper_chars": 473,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 89.98,
+          "drift_applied": -72.94,
+          "whisper_chars": 1084,
+          "pc_chars": 146,
+          "similarity": 0.114,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1026.6,
+          "end": 1196.3,
+          "drift_applied": -72.94,
+          "whisper_chars": 2712,
+          "pc_chars": 2786,
+          "similarity": 0.157,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2374.3,
+          "end": 2567.1,
+          "drift_applied": -72.94,
+          "whisper_chars": 2598,
+          "pc_chars": 2426,
+          "similarity": 0.801,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 11139.2,
+          "end": 11171.082625,
+          "drift_applied": -72.94,
+          "whisper_chars": 473,
+          "pc_chars": 193,
+          "similarity": 0.084,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -72.94,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.915,
+          "offset": -32.96
+        },
+        {
+          "time": 2792.8,
+          "similarity": 0.977,
+          "offset": -72.94
+        },
+        {
+          "time": 5585.5,
+          "similarity": 1.0,
+          "offset": -73.15
+        },
+        {
+          "time": 8378.3,
+          "similarity": 0.8,
+          "offset": -72.46
+        },
+        {
+          "time": 11081.1,
+          "similarity": 0.709,
+          "offset": -84.76
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9928885473622572,
+        "duration_delta": 79.44262499999968,
+        "max_duration_delta": 335.13247875000025,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.915,
+            "offset": -32.96,
+            "matched_time": 57.04
+          },
+          {
+            "time": 2792.77065625,
+            "similarity": 0.977,
+            "offset": -72.94,
+            "matched_time": 2719.83
+          },
+          {
+            "time": 5585.5413125,
+            "similarity": 1.0,
+            "offset": -73.15,
+            "matched_time": 5512.39
+          },
+          {
+            "time": 8378.31196875,
+            "similarity": 0.8,
+            "offset": -72.46,
+            "matched_time": 8305.85
+          },
+          {
+            "time": 11081.082625,
+            "similarity": 0.709,
+            "offset": -84.76,
+            "matched_time": 10996.32
+          }
+        ],
+        "max_offset": 84.76,
+        "min_similarity": 0.709,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -33.0s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 1,
+      "ads_missing_from_pc": 4,
+      "ads_missing_from_pc_drift_corrected": 3,
+      "max_drift_offset": 84.76,
+      "min_drift_similarity": 0.709
+    },
+    {
+      "slug": "conan-obrien-needs-a-friend",
+      "episode_id": "da9b90f4003a",
+      "title": "Gillian Anderson",
+      "podcast_title": "Conan O\u2019Brien Needs A Friend",
+      "status": "ok",
+      "audio_duration": 4380.5515,
+      "whisper_segments": 2026,
+      "ad_count": 5,
+      "podcast_uuid": "7c388990-aa35-0136-7b93-27f978dac4db",
+      "episode_uuid": "b73e07fa-0dc6-4458-8aed-e0db9a635211",
+      "pc_cue_count": 1217,
+      "vtt_duration": 3839.66,
+      "coverage": 0.8765,
+      "duration_delta": 540.89,
+      "max_duration_delta": 131.42,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 82.6,
+          "drift_applied": 0.0,
+          "whisper_chars": 1259,
+          "pc_chars": 1307,
+          "similarity": 0.019,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1369.2,
+          "end": 1440.52,
+          "drift_applied": 0.0,
+          "whisper_chars": 1243,
+          "pc_chars": 1061,
+          "similarity": 0.003,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1445.8,
+          "end": 1557.9,
+          "drift_applied": 0.0,
+          "whisper_chars": 1834,
+          "pc_chars": 1337,
+          "similarity": 0.005,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3381.0,
+          "end": 3607.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 3729,
+          "pc_chars": 3736,
+          "similarity": 0.021,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4331.68,
+          "end": 4380.5515,
+          "drift_applied": 0.0,
+          "whisper_chars": 543,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 82.6,
+          "drift_applied": -83.36,
+          "whisper_chars": 1259,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1369.2,
+          "end": 1440.52,
+          "drift_applied": -83.36,
+          "whisper_chars": 1243,
+          "pc_chars": 983,
+          "similarity": 0.004,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1445.8,
+          "end": 1557.9,
+          "drift_applied": -83.36,
+          "whisper_chars": 1834,
+          "pc_chars": 1365,
+          "similarity": 0.006,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3381.0,
+          "end": 3607.0,
+          "drift_applied": -83.36,
+          "whisper_chars": 3729,
+          "pc_chars": 4165,
+          "similarity": 0.017,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4331.68,
+          "end": 4380.5515,
+          "drift_applied": -83.36,
+          "whisper_chars": 543,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -83.36,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.581,
+          "offset": -81.47
+        },
+        {
+          "time": 1095.1,
+          "similarity": 0.84,
+          "offset": -83.36
+        },
+        {
+          "time": 2190.3,
+          "similarity": 0.066,
+          "offset": -100.24
+        },
+        {
+          "time": 3285.4,
+          "similarity": 0.055,
+          "offset": -30.04
+        },
+        {
+          "time": 4290.6,
+          "similarity": 1.0,
+          "offset": -504.57
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8765243371753534,
+        "duration_delta": 540.8914999999997,
+        "max_duration_delta": 131.4165450000001,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 5,
+      "ads_missing_from_pc_drift_corrected": 5,
+      "max_drift_offset": 504.57,
+      "min_drift_similarity": 0.055
+    },
+    {
+      "slug": "dlc",
+      "episode_id": "4b00c45fcc06",
+      "title": "665: AndresPlays: Mortal Shell 2, Duskfade, Lootbound, Metroid Prime Origins, Super Mario Sunshine, Kingdom Hearts IV coming soon, Xbox CEO played Elder Scrolls VI, VR Games Showcase",
+      "podcast_title": "DLC",
+      "status": "ok",
+      "audio_duration": 6433.472,
+      "whisper_segments": 2527,
+      "ad_count": 5,
+      "podcast_uuid": "fa554850-5aed-0131-8cf2-723c91aeae46",
+      "episode_uuid": "7f8e37a9-44aa-4d11-a218-a3358b51e978",
+      "pc_cue_count": 1558,
+      "vtt_duration": 6212.28,
+      "coverage": 0.9656,
+      "duration_delta": 221.19,
+      "max_duration_delta": 193.0,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 63.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 955,
+          "pc_chars": 830,
+          "similarity": 0.016,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2218.96,
+          "end": 2286.21,
+          "drift_applied": 0.0,
+          "whisper_chars": 600,
+          "pc_chars": 944,
+          "similarity": 0.017,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3834.1,
+          "end": 3902.04,
+          "drift_applied": 0.0,
+          "whisper_chars": 704,
+          "pc_chars": 929,
+          "similarity": 0.031,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4897.7,
+          "end": 4964.88,
+          "drift_applied": 0.0,
+          "whisper_chars": 1035,
+          "pc_chars": 730,
+          "similarity": 0.012,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6357.8,
+          "end": 6433.472,
+          "drift_applied": 0.0,
+          "whisper_chars": 1105,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 63.0,
+          "drift_applied": -47.18,
+          "whisper_chars": 955,
+          "pc_chars": 262,
+          "similarity": 0.003,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2218.96,
+          "end": 2286.21,
+          "drift_applied": -47.18,
+          "whisper_chars": 600,
+          "pc_chars": 1108,
+          "similarity": 0.122,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3834.1,
+          "end": 3902.04,
+          "drift_applied": -47.18,
+          "whisper_chars": 704,
+          "pc_chars": 937,
+          "similarity": 0.217,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4897.7,
+          "end": 4964.88,
+          "drift_applied": -47.18,
+          "whisper_chars": 1035,
+          "pc_chars": 917,
+          "similarity": 0.008,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6357.8,
+          "end": 6433.472,
+          "drift_applied": -47.18,
+          "whisper_chars": 1105,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -47.18,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.928,
+          "offset": -28.55
+        },
+        {
+          "time": 1608.4,
+          "similarity": 0.897,
+          "offset": -22.11
+        },
+        {
+          "time": 3216.7,
+          "similarity": 0.81,
+          "offset": -47.18
+        },
+        {
+          "time": 4825.1,
+          "similarity": 0.848,
+          "offset": -88.77
+        },
+        {
+          "time": 6343.5,
+          "similarity": 0.628,
+          "offset": -151.59
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.965618564905544,
+        "duration_delta": 221.192,
+        "max_duration_delta": 193.00416000000016,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 5,
+      "ads_missing_from_pc_drift_corrected": 5,
+      "max_drift_offset": 151.59,
+      "min_drift_similarity": 0.628
+    },
+    {
+      "slug": "fire-escape-cast",
+      "episode_id": "01bf4deba179",
+      "title": "Fire Escape Cast #139",
+      "podcast_title": "Fire Escape Cast",
+      "status": "no_pc_vtt",
+      "audio_duration": 7978.061333,
+      "whisper_segments": 4151,
+      "ad_count": 4,
+      "podcast_uuid": "c7dfffc0-7d8f-0139-349a-0acc26574db2",
+      "episode_uuid": "46c350a0-cea7-43bf-b173-167311170ad6"
+    },
+    {
+      "slug": "voicemail-dump-truck",
+      "episode_id": "0d01fcd1b8dd",
+      "title": "Mall Massage Chairs.mp3 (feat. Jesse Vitelli) | Voicemail Dump Truck 218",
+      "podcast_title": "Voicemail Dump Truck",
+      "status": "no_pc_vtt",
+      "audio_duration": 4572.478912,
+      "whisper_segments": 2445,
+      "ad_count": 3,
+      "podcast_uuid": "4d47baa0-ac6d-0135-9e5c-5bb073f92b78",
+      "episode_uuid": "83e14279-248a-45bc-91d4-0434b4ab3f31"
+    },
+    {
+      "slug": "the-nextlander-podcast",
+      "episode_id": "06ce596be5cc",
+      "title": "260: The Straight Edge Continent",
+      "podcast_title": "The Nextlander Podcast",
+      "status": "ok",
+      "audio_duration": 9366.752,
+      "whisper_segments": 4226,
+      "ad_count": 3,
+      "podcast_uuid": "6ee496d0-a9c1-0139-c17b-0acc26574db2",
+      "episode_uuid": "6505101c-fd87-4136-9e7b-47ffc6d3618a",
+      "pc_cue_count": 2350,
+      "vtt_duration": 9232.22,
+      "coverage": 0.9856,
+      "duration_delta": 134.53,
+      "max_duration_delta": 281.0,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 57.89,
+          "drift_applied": 0.0,
+          "whisper_chars": 441,
+          "pc_chars": 856,
+          "similarity": 0.014,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2528.0,
+          "end": 2852.02,
+          "drift_applied": 0.0,
+          "whisper_chars": 4100,
+          "pc_chars": 4245,
+          "similarity": 0.663,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 9361.44,
+          "end": 9366.752,
+          "drift_applied": 0.0,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 57.89,
+          "drift_applied": -15.28,
+          "whisper_chars": 441,
+          "pc_chars": 666,
+          "similarity": 0.042,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2528.0,
+          "end": 2852.02,
+          "drift_applied": -15.28,
+          "whisper_chars": 4100,
+          "pc_chars": 4209,
+          "similarity": 0.68,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 9361.44,
+          "end": 9366.752,
+          "drift_applied": -15.28,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "estimated_drift": -15.28,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.973,
+          "offset": -9.82
+        },
+        {
+          "time": 2341.7,
+          "similarity": 0.955,
+          "offset": -12.81
+        },
+        {
+          "time": 4683.4,
+          "similarity": 0.908,
+          "offset": -15.28
+        },
+        {
+          "time": 7025.1,
+          "similarity": 0.97,
+          "offset": -130.17
+        },
+        {
+          "time": 9276.8,
+          "similarity": 0.859,
+          "offset": -129.07
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.985637283873855,
+        "duration_delta": 134.53200000000106,
+        "max_duration_delta": 281.00256000000024,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.973,
+            "offset": -9.82,
+            "matched_time": 80.18
+          },
+          {
+            "time": 2341.688,
+            "similarity": 0.955,
+            "offset": -12.81,
+            "matched_time": 2328.87
+          },
+          {
+            "time": 4683.376,
+            "similarity": 0.908,
+            "offset": -15.28,
+            "matched_time": 4668.1
+          },
+          {
+            "time": 7025.064,
+            "similarity": 0.97,
+            "offset": -130.17,
+            "matched_time": 6894.89
+          },
+          {
+            "time": 9276.752,
+            "similarity": 0.859,
+            "offset": -129.07,
+            "matched_time": 9147.68
+          }
+        ],
+        "max_offset": 130.17,
+        "min_similarity": 0.859,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -9.8s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 1,
+      "ads_present_in_pc_drift_corrected": 1,
+      "ads_missing_from_pc": 2,
+      "ads_missing_from_pc_drift_corrected": 2,
+      "max_drift_offset": 130.17,
+      "min_drift_similarity": 0.859
+    },
+    {
+      "slug": "conan-obrien-needs-a-friend",
+      "episode_id": "6500df963c55",
+      "title": "Summer S\u2019pouses Episode 3: Tak Boroyan",
+      "podcast_title": "Conan O\u2019Brien Needs A Friend",
+      "status": "ok",
+      "audio_duration": 1717.812,
+      "whisper_segments": 971,
+      "ad_count": 3,
+      "podcast_uuid": "7c388990-aa35-0136-7b93-27f978dac4db",
+      "episode_uuid": "9b3d6884-bf71-4c27-b6bd-ea1948025c5c",
+      "pc_cue_count": 713,
+      "vtt_duration": 1386.7,
+      "coverage": 0.8072,
+      "duration_delta": 331.11,
+      "max_duration_delta": 51.53,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 97.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 1504,
+          "pc_chars": 1127,
+          "similarity": 0.014,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 843.8,
+          "end": 1029.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 3035,
+          "pc_chars": 2843,
+          "similarity": 0.014,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1656.22,
+          "end": 1717.812,
+          "drift_applied": 0.0,
+          "whisper_chars": 839,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 97.0,
+          "drift_applied": -98.13,
+          "whisper_chars": 1504,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 843.8,
+          "end": 1029.4,
+          "drift_applied": -98.13,
+          "whisper_chars": 3035,
+          "pc_chars": 2634,
+          "similarity": 0.014,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1656.22,
+          "end": 1717.812,
+          "drift_applied": -98.13,
+          "whisper_chars": 839,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -98.13,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.385,
+          "offset": 22.87
+        },
+        {
+          "time": 429.5,
+          "similarity": 0.681,
+          "offset": -98.13
+        },
+        {
+          "time": 858.9,
+          "similarity": 0.053,
+          "offset": 146.17
+        },
+        {
+          "time": 1288.4,
+          "similarity": 0.052,
+          "offset": -146.83
+        },
+        {
+          "time": 1627.8,
+          "similarity": 0.378,
+          "offset": -295.6
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8072478245582172,
+        "duration_delta": 331.11199999999985,
+        "max_duration_delta": 51.53436000000004,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 3,
+      "ads_missing_from_pc_drift_corrected": 3,
+      "max_drift_offset": 295.6,
+      "min_drift_similarity": 0.052
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "96632373ea8c",
+      "title": "Halo: Campaign Evolved\u2019s Biggest Competition Might Be Halo",
+      "podcast_title": "Game Mess Mornings",
+      "status": "no_pc_vtt",
+      "audio_duration": 3817.92551,
+      "whisper_segments": 1526,
+      "ad_count": 4,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "f68ba582-76be-4f65-8cdc-4b136d8ef43e"
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "04d945eb0fae",
+      "title": "Twitch is Using Streamers' Content to Train Gen AI",
+      "podcast_title": "Game Mess Mornings",
+      "status": "no_pc_vtt",
+      "audio_duration": 3344.026667,
+      "whisper_segments": 1291,
+      "ad_count": 3,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "b4d06dfc-f85d-4d86-a2fe-4fadc2aae5ac"
+    },
+    {
+      "slug": "hyperfixed",
+      "episode_id": "2040189d1ed8",
+      "title": "ReTell All",
+      "podcast_title": "Hyperfixed",
+      "status": "ok",
+      "audio_duration": 2164.296,
+      "whisper_segments": 827,
+      "ad_count": 4,
+      "podcast_uuid": "37ab1040-3d4d-013d-0376-0affdaeeef4b",
+      "episode_uuid": "6265768d-427d-4d2f-bde0-a680cc73be05",
+      "pc_cue_count": 421,
+      "vtt_duration": 1873.32,
+      "coverage": 0.8656,
+      "duration_delta": 290.98,
+      "max_duration_delta": 64.93,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 168.66,
+          "drift_applied": 0.0,
+          "whisper_chars": 2468,
+          "pc_chars": 2695,
+          "similarity": 0.377,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1001.0,
+          "end": 1205.24,
+          "drift_applied": 0.0,
+          "whisper_chars": 3027,
+          "pc_chars": 3435,
+          "similarity": 0.008,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2100.3,
+          "end": 2160.9,
+          "drift_applied": 0.0,
+          "whisper_chars": 713,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2160.88,
+          "end": 2164.296,
+          "drift_applied": 0.0,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 168.66,
+          "drift_applied": -96.67,
+          "whisper_chars": 2468,
+          "pc_chars": 1079,
+          "similarity": 0.549,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 1001.0,
+          "end": 1205.24,
+          "drift_applied": -96.67,
+          "whisper_chars": 3027,
+          "pc_chars": 3120,
+          "similarity": 0.014,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2100.3,
+          "end": 2160.9,
+          "drift_applied": -96.67,
+          "whisper_chars": 713,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2160.88,
+          "end": 2164.296,
+          "drift_applied": -96.67,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "estimated_drift": -96.67,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.06,
+          "offset": 70.72
+        },
+        {
+          "time": 541.1,
+          "similarity": 1.0,
+          "offset": -96.67
+        },
+        {
+          "time": 1082.1,
+          "similarity": 0.403,
+          "offset": 78.42
+        },
+        {
+          "time": 1623.2,
+          "similarity": 0.087,
+          "offset": 14.19
+        },
+        {
+          "time": 2074.3,
+          "similarity": 0.913,
+          "offset": -274.1
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8655562825047961,
+        "duration_delta": 290.9759999999999,
+        "max_duration_delta": 64.92888000000005,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 1,
+      "ads_missing_from_pc": 4,
+      "ads_missing_from_pc_drift_corrected": 3,
+      "max_drift_offset": 274.1,
+      "min_drift_similarity": 0.06
+    },
+    {
+      "slug": "the-jeff-gerstmann-show-a-podcast-about-video-games",
+      "episode_id": "16f1c6368f74",
+      "title": "218: Six Hours Early on Netflix",
+      "podcast_title": "The Jeff Gerstmann Show - A Podcast About Video Games",
+      "status": "ok",
+      "audio_duration": 10767.647256,
+      "whisper_segments": 4113,
+      "ad_count": 3,
+      "podcast_uuid": "160f23f0-c8a7-013a-d953-0acc26574db2",
+      "episode_uuid": "cc407a24-2146-4eda-bec6-03c8f2e09794",
+      "pc_cue_count": 3373,
+      "vtt_duration": 10647.458,
+      "coverage": 0.9888,
+      "duration_delta": 120.19,
+      "max_duration_delta": 323.03,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 90.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 825,
+          "pc_chars": 926,
+          "similarity": 0.009,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 771.0,
+          "end": 922.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 2362,
+          "pc_chars": 2116,
+          "similarity": 0.449,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 10678.0,
+          "end": 10767.647256,
+          "drift_applied": 0.0,
+          "whisper_chars": 1164,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 90.0,
+          "drift_applied": -50.29,
+          "whisper_chars": 825,
+          "pc_chars": 440,
+          "similarity": 0.011,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 771.0,
+          "end": 922.0,
+          "drift_applied": -50.29,
+          "whisper_chars": 2362,
+          "pc_chars": 2248,
+          "similarity": 0.5,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 10678.0,
+          "end": 10767.647256,
+          "drift_applied": -50.29,
+          "whisper_chars": 1164,
+          "pc_chars": 15,
+          "similarity": 0.022,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -50.29,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.82,
+          "offset": -39.45
+        },
+        {
+          "time": 2691.9,
+          "similarity": 0.895,
+          "offset": -51.27
+        },
+        {
+          "time": 5383.8,
+          "similarity": 1.0,
+          "offset": -50.65
+        },
+        {
+          "time": 8075.7,
+          "similarity": 0.989,
+          "offset": -50.29
+        },
+        {
+          "time": 10677.6,
+          "similarity": 0.332,
+          "offset": -174.23
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9888379278088788,
+        "duration_delta": 120.18925599999966,
+        "max_duration_delta": 323.0294176800003,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.82,
+            "offset": -39.45,
+            "matched_time": 50.55
+          },
+          {
+            "time": 2691.911814,
+            "similarity": 0.895,
+            "offset": -51.27,
+            "matched_time": 2640.64
+          },
+          {
+            "time": 5383.823628,
+            "similarity": 1.0,
+            "offset": -50.65,
+            "matched_time": 5333.17
+          },
+          {
+            "time": 8075.735442,
+            "similarity": 0.989,
+            "offset": -50.29,
+            "matched_time": 8025.44
+          },
+          {
+            "time": 10677.647256,
+            "similarity": 0.332,
+            "offset": -174.23,
+            "matched_time": 10503.42
+          }
+        ],
+        "max_offset": 174.23,
+        "min_similarity": 0.332,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -39.5s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 1,
+      "ads_present_in_pc_drift_corrected": 1,
+      "ads_missing_from_pc": 2,
+      "ads_missing_from_pc_drift_corrected": 2,
+      "max_drift_offset": 174.23,
+      "min_drift_similarity": 0.332
+    },
+    {
+      "slug": "the-filmcast",
+      "episode_id": "9cfa1f7a112f",
+      "title": "Ep. 887 - One Night Only",
+      "podcast_title": "The Filmcast",
+      "status": "ok",
+      "audio_duration": 6455.727125,
+      "whisper_segments": 2615,
+      "ad_count": 5,
+      "podcast_uuid": "9879f2c0-0cf8-012e-fb78-00163e1b201c",
+      "episode_uuid": "a98c59f5-dea1-4540-a21c-2d30d61e2f80",
+      "pc_cue_count": 1651,
+      "vtt_duration": 6369.98,
+      "coverage": 0.9867,
+      "duration_delta": 85.75,
+      "max_duration_delta": 193.67,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 58.24,
+          "drift_applied": 0.0,
+          "whisper_chars": 1083,
+          "pc_chars": 568,
+          "similarity": 0.027,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1188.2,
+          "end": 1319.5,
+          "drift_applied": 0.0,
+          "whisper_chars": 1760,
+          "pc_chars": 1953,
+          "similarity": 0.666,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 2457.0,
+          "end": 2630.5,
+          "drift_applied": 0.0,
+          "whisper_chars": 2533,
+          "pc_chars": 2657,
+          "similarity": 0.757,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 3865.7,
+          "end": 3932.2,
+          "drift_applied": 0.0,
+          "whisper_chars": 1223,
+          "pc_chars": 837,
+          "similarity": 0.013,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6397.4,
+          "end": 6455.727125,
+          "drift_applied": 0.0,
+          "whisper_chars": 603,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 58.24,
+          "drift_applied": -31.58,
+          "whisper_chars": 1083,
+          "pc_chars": 315,
+          "similarity": 0.024,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1188.2,
+          "end": 1319.5,
+          "drift_applied": -31.58,
+          "whisper_chars": 1760,
+          "pc_chars": 1864,
+          "similarity": 0.817,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 2457.0,
+          "end": 2630.5,
+          "drift_applied": -31.58,
+          "whisper_chars": 2533,
+          "pc_chars": 2524,
+          "similarity": 0.796,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 3865.7,
+          "end": 3932.2,
+          "drift_applied": -31.58,
+          "whisper_chars": 1223,
+          "pc_chars": 801,
+          "similarity": 0.01,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6397.4,
+          "end": 6455.727125,
+          "drift_applied": -31.58,
+          "whisper_chars": 603,
+          "pc_chars": 47,
+          "similarity": 0.092,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -31.58,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.796,
+          "offset": -29.53
+        },
+        {
+          "time": 1613.9,
+          "similarity": 0.945,
+          "offset": -29.98
+        },
+        {
+          "time": 3227.9,
+          "similarity": 0.968,
+          "offset": -31.58
+        },
+        {
+          "time": 4841.8,
+          "similarity": 0.963,
+          "offset": -76.35
+        },
+        {
+          "time": 6365.7,
+          "similarity": 0.991,
+          "offset": -75.69
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9867176658276118,
+        "duration_delta": 85.74712500000078,
+        "max_duration_delta": 193.67181375000018,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.796,
+            "offset": -29.53,
+            "matched_time": 60.47
+          },
+          {
+            "time": 1613.93178125,
+            "similarity": 0.945,
+            "offset": -29.98,
+            "matched_time": 1583.95
+          },
+          {
+            "time": 3227.8635625,
+            "similarity": 0.968,
+            "offset": -31.58,
+            "matched_time": 3196.29
+          },
+          {
+            "time": 4841.79534375,
+            "similarity": 0.963,
+            "offset": -76.35,
+            "matched_time": 4765.45
+          },
+          {
+            "time": 6365.727125,
+            "similarity": 0.991,
+            "offset": -75.69,
+            "matched_time": 6290.04
+          }
+        ],
+        "max_offset": 76.35,
+        "min_similarity": 0.796,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -29.5s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 2,
+      "ads_present_in_pc_drift_corrected": 2,
+      "ads_missing_from_pc": 3,
+      "ads_missing_from_pc_drift_corrected": 3,
+      "max_drift_offset": 76.35,
+      "min_drift_similarity": 0.796
+    },
+    {
+      "slug": "search-engine",
+      "episode_id": "fd07e17140f6",
+      "title": "A road trip through the data center debate",
+      "podcast_title": "Search Engine",
+      "status": "ok",
+      "audio_duration": 3074.664333,
+      "whisper_segments": 1353,
+      "ad_count": 5,
+      "podcast_uuid": "cb2108e0-8619-013a-d7f7-0acc26574db2",
+      "episode_uuid": "c4d036bb-7939-4042-8ac9-bcf91d41c9dd",
+      "pc_cue_count": 628,
+      "vtt_duration": 2616.947,
+      "coverage": 0.8511,
+      "duration_delta": 457.72,
+      "max_duration_delta": 92.24,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 138.42000000000002,
+          "drift_applied": 0.0,
+          "whisper_chars": 2369,
+          "pc_chars": 1827,
+          "similarity": 0.02,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1528.0,
+          "end": 1816.3400000000001,
+          "drift_applied": 0.0,
+          "whisper_chars": 3907,
+          "pc_chars": 4761,
+          "similarity": 0.3,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2694.86,
+          "end": 2937.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 3254,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2973.3,
+          "end": 3069.8,
+          "drift_applied": 0.0,
+          "whisper_chars": 1415,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3069.76,
+          "end": 3074.664333,
+          "drift_applied": 0.0,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 138.42000000000002,
+          "drift_applied": -144.41,
+          "whisper_chars": 2369,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1528.0,
+          "end": 1816.3400000000001,
+          "drift_applied": -144.41,
+          "whisper_chars": 3907,
+          "pc_chars": 4212,
+          "similarity": 0.658,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 2694.86,
+          "end": 2937.4,
+          "drift_applied": -144.41,
+          "whisper_chars": 3254,
+          "pc_chars": 773,
+          "similarity": 0.005,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2973.3,
+          "end": 3069.8,
+          "drift_applied": -144.41,
+          "whisper_chars": 1415,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3069.76,
+          "end": 3074.664333,
+          "drift_applied": -144.41,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "estimated_drift": -144.41,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.051,
+          "offset": 100.03
+        },
+        {
+          "time": 768.7,
+          "similarity": 0.649,
+          "offset": -144.41
+        },
+        {
+          "time": 1537.3,
+          "similarity": 1.0,
+          "offset": -140.11
+        },
+        {
+          "time": 2306.0,
+          "similarity": 0.057,
+          "offset": -135.64
+        },
+        {
+          "time": 2984.7,
+          "similarity": 0.643,
+          "offset": -396.08
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8511325844296643,
+        "duration_delta": 457.71733300000005,
+        "max_duration_delta": 92.23992999000009,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 1,
+      "ads_missing_from_pc": 5,
+      "ads_missing_from_pc_drift_corrected": 4,
+      "max_drift_offset": 396.08,
+      "min_drift_similarity": 0.051
+    },
+    {
+      "slug": "decoding-tv",
+      "episode_id": "eddccbb48d1f",
+      "title": "Ep. 123 - What Makes 'Furious' a Compelling Cat-and-Mouse Show? (Plus: 'Dark Matter' S1E08 Is Audacious and Shocking)",
+      "podcast_title": "Decoding TV",
+      "status": "ok",
+      "audio_duration": 4619.73075,
+      "whisper_segments": 1761,
+      "ad_count": 4,
+      "podcast_uuid": "77794610-6f22-0134-787d-4ffec63d9550",
+      "episode_uuid": "cd6d5455-7c5c-4f60-ba2f-0eb301cf7667",
+      "pc_cue_count": 1013,
+      "vtt_duration": 4223.22,
+      "coverage": 0.9142,
+      "duration_delta": 396.51,
+      "max_duration_delta": 138.59,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 108.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 1642,
+          "pc_chars": 1661,
+          "similarity": 0.012,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1400.62,
+          "end": 1513.08,
+          "drift_applied": 0.0,
+          "whisper_chars": 1597,
+          "pc_chars": 1794,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2818.7,
+          "end": 2888.8,
+          "drift_applied": 0.0,
+          "whisper_chars": 1160,
+          "pc_chars": 854,
+          "similarity": 0.011,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4507.3,
+          "end": 4619.73075,
+          "drift_applied": 0.0,
+          "whisper_chars": 1594,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 108.4,
+          "drift_applied": -112.07,
+          "whisper_chars": 1642,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1400.62,
+          "end": 1513.08,
+          "drift_applied": -112.07,
+          "whisper_chars": 1597,
+          "pc_chars": 1691,
+          "similarity": 0.21,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2818.7,
+          "end": 2888.8,
+          "drift_applied": -112.07,
+          "whisper_chars": 1160,
+          "pc_chars": 1209,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4507.3,
+          "end": 4619.73075,
+          "drift_applied": -112.07,
+          "whisper_chars": 1594,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -112.07,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.361,
+          "offset": -45.24
+        },
+        {
+          "time": 1154.9,
+          "similarity": 0.965,
+          "offset": -112.07
+        },
+        {
+          "time": 2309.9,
+          "similarity": 0.099,
+          "offset": 64.92
+        },
+        {
+          "time": 3464.8,
+          "similarity": 0.052,
+          "offset": -24.4
+        },
+        {
+          "time": 4529.7,
+          "similarity": 0.082,
+          "offset": -4202.77
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9141701602414817,
+        "duration_delta": 396.51074999999946,
+        "max_duration_delta": 138.59192250000012,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 4,
+      "ads_missing_from_pc_drift_corrected": 4,
+      "max_drift_offset": 4202.77,
+      "min_drift_similarity": 0.052
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "f1ba5f18d497",
+      "title": "Blizzard Is Reportedly Xbox's \"Top-Performing\" Studio Thanks to Overwatch and Diablo",
+      "podcast_title": "Game Mess Mornings",
+      "status": "no_pc_vtt",
+      "audio_duration": 3751.269388,
+      "whisper_segments": 1528,
+      "ad_count": 4,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "3eb9edf2-ec4c-43e0-b0d6-4dad8e94bfd7"
+    },
+    {
+      "slug": "conan-obrien-needs-a-friend",
+      "episode_id": "4230c59790f1",
+      "title": "Greta Lee",
+      "podcast_title": "Conan O\u2019Brien Needs A Friend",
+      "status": "ok",
+      "audio_duration": 4426.840438,
+      "whisper_segments": 2102,
+      "ad_count": 4,
+      "podcast_uuid": "7c388990-aa35-0136-7b93-27f978dac4db",
+      "episode_uuid": "34026c1d-44a7-408f-bede-1c15fd6ee8cc",
+      "pc_cue_count": 1484,
+      "vtt_duration": 3956.92,
+      "coverage": 0.8938,
+      "duration_delta": 469.92,
+      "max_duration_delta": 132.81,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 69.5,
+          "drift_applied": 0.0,
+          "whisper_chars": 1040,
+          "pc_chars": 636,
+          "similarity": 0.002,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1169.5,
+          "end": 1323.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 2052,
+          "pc_chars": 2229,
+          "similarity": 0.021,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3389.84,
+          "end": 3593.08,
+          "drift_applied": 0.0,
+          "whisper_chars": 3065,
+          "pc_chars": 3689,
+          "similarity": 0.01,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4225.0,
+          "end": 4426.840438,
+          "drift_applied": 0.0,
+          "whisper_chars": 107,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 69.5,
+          "drift_applied": -70.53,
+          "whisper_chars": 1040,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1169.5,
+          "end": 1323.0,
+          "drift_applied": -70.53,
+          "whisper_chars": 2052,
+          "pc_chars": 2262,
+          "similarity": 0.013,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3389.84,
+          "end": 3593.08,
+          "drift_applied": -70.53,
+          "whisper_chars": 3065,
+          "pc_chars": 3563,
+          "similarity": 0.006,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4225.0,
+          "end": 4426.840438,
+          "drift_applied": -70.53,
+          "whisper_chars": 107,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -70.53,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.618,
+          "offset": -77.0
+        },
+        {
+          "time": 1106.7,
+          "similarity": 0.861,
+          "offset": -70.53
+        },
+        {
+          "time": 2213.4,
+          "similarity": 0.071,
+          "offset": 30.53
+        },
+        {
+          "time": 3320.1,
+          "similarity": 0.07,
+          "offset": -50.91
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8938474416276216,
+        "duration_delta": 469.9204380000001,
+        "max_duration_delta": 132.80521314000012,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 4,
+      "ads_missing_from_pc_drift_corrected": 4,
+      "max_drift_offset": 77.0,
+      "min_drift_similarity": 0.07
+    },
+    {
+      "slug": "dlc",
+      "episode_id": "7a6b28225acd",
+      "title": "664: Veerender Singh Jubbal: Marvel Tokon Fighting Souls, Big Walk, Gears of War E-Day Beta, Truck-kun is Supporting Me From Another World, Quake The Dawn of the Machine, Dave Bautista in God of War? Nintendo's physical media sales, GTA VI trailer on Netflix",
+      "podcast_title": "DLC",
+      "status": "ok",
+      "audio_duration": 6974.48,
+      "whisper_segments": 2573,
+      "ad_count": 5,
+      "podcast_uuid": "fa554850-5aed-0131-8cf2-723c91aeae46",
+      "episode_uuid": "70de04b6-25a2-489c-a4f3-84f6fa19fbcf",
+      "pc_cue_count": 1549,
+      "vtt_duration": 6777.48,
+      "coverage": 0.9718,
+      "duration_delta": 197.0,
+      "max_duration_delta": 209.23,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 53.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 492,
+          "pc_chars": 595,
+          "similarity": 0.013,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1949.9,
+          "end": 2006.38,
+          "drift_applied": 0.0,
+          "whisper_chars": 649,
+          "pc_chars": 713,
+          "similarity": 0.019,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3115.0,
+          "end": 3183.77,
+          "drift_applied": 0.0,
+          "whisper_chars": 1029,
+          "pc_chars": 937,
+          "similarity": 0.01,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4760.6,
+          "end": 4827.56,
+          "drift_applied": 0.0,
+          "whisper_chars": 1100,
+          "pc_chars": 1131,
+          "similarity": 0.021,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6884.5,
+          "end": 6974.48,
+          "drift_applied": 0.0,
+          "whisper_chars": 1335,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 53.0,
+          "drift_applied": -25.27,
+          "whisper_chars": 492,
+          "pc_chars": 191,
+          "similarity": 0.184,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1949.9,
+          "end": 2006.38,
+          "drift_applied": -25.27,
+          "whisper_chars": 649,
+          "pc_chars": 711,
+          "similarity": 0.184,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3115.0,
+          "end": 3183.77,
+          "drift_applied": -25.27,
+          "whisper_chars": 1029,
+          "pc_chars": 998,
+          "similarity": 0.012,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4760.6,
+          "end": 4827.56,
+          "drift_applied": -25.27,
+          "whisper_chars": 1100,
+          "pc_chars": 1128,
+          "similarity": 0.01,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6884.5,
+          "end": 6974.48,
+          "drift_applied": -25.27,
+          "whisper_chars": 1335,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -25.27,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.899,
+          "offset": -23.76
+        },
+        {
+          "time": 1743.6,
+          "similarity": 0.834,
+          "offset": -25.27
+        },
+        {
+          "time": 3487.2,
+          "similarity": 0.608,
+          "offset": -89.93
+        },
+        {
+          "time": 5230.9,
+          "similarity": 0.992,
+          "offset": -127.81
+        },
+        {
+          "time": 6884.5,
+          "similarity": 0.04,
+          "offset": -151.02
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9717541666188734,
+        "duration_delta": 197.0,
+        "max_duration_delta": 209.23440000000016,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.899,
+            "offset": -23.76,
+            "matched_time": 66.24
+          },
+          {
+            "time": 1743.62,
+            "similarity": 0.834,
+            "offset": -25.27,
+            "matched_time": 1718.35
+          },
+          {
+            "time": 3487.24,
+            "similarity": 0.608,
+            "offset": -89.93,
+            "matched_time": 3397.31
+          },
+          {
+            "time": 5230.86,
+            "similarity": 0.992,
+            "offset": -127.81,
+            "matched_time": 5103.05
+          },
+          {
+            "time": 6884.48,
+            "similarity": 0.04,
+            "offset": -151.02,
+            "matched_time": 6733.46
+          }
+        ],
+        "max_offset": 151.02,
+        "min_similarity": 0.04,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -23.8s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 5,
+      "ads_missing_from_pc_drift_corrected": 5,
+      "max_drift_offset": 151.02,
+      "min_drift_similarity": 0.04
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "ac027a984f54",
+      "title": "Marvel T\u014dkon Launches with Mixed Reviews on PC",
+      "podcast_title": "Game Mess Mornings",
+      "status": "ok",
+      "audio_duration": 3988.522667,
+      "whisper_segments": 1745,
+      "ad_count": 3,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "fd345bd7-368a-4cd1-bf46-f303a7746b87",
+      "pc_cue_count": 1120,
+      "vtt_duration": 3710.8,
+      "coverage": 0.9304,
+      "duration_delta": 277.72,
+      "max_duration_delta": 119.66,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 84.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 1489,
+          "pc_chars": 1221,
+          "similarity": 0.013,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1400.5,
+          "end": 1536.9,
+          "drift_applied": 0.0,
+          "whisper_chars": 2327,
+          "pc_chars": 2339,
+          "similarity": 0.013,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3909.48,
+          "end": 3988.522667,
+          "drift_applied": 0.0,
+          "whisper_chars": 636,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 84.0,
+          "drift_applied": -88.13,
+          "whisper_chars": 1489,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1400.5,
+          "end": 1536.9,
+          "drift_applied": -88.13,
+          "whisper_chars": 2327,
+          "pc_chars": 2340,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3909.48,
+          "end": 3988.522667,
+          "drift_applied": -88.13,
+          "whisper_chars": 636,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -88.13,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 1.0,
+          "offset": -88.13
+        },
+        {
+          "time": 997.1,
+          "similarity": 0.708,
+          "offset": -85.58
+        },
+        {
+          "time": 1994.3,
+          "similarity": 0.477,
+          "offset": -179.91
+        },
+        {
+          "time": 2991.4,
+          "similarity": 0.09,
+          "offset": -144.28
+        },
+        {
+          "time": 3898.5,
+          "similarity": 0.992,
+          "offset": -198.74
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9303695402566456,
+        "duration_delta": 277.722667,
+        "max_duration_delta": 119.65568001000011,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 3,
+      "ads_missing_from_pc_drift_corrected": 3,
+      "max_drift_offset": 198.74,
+      "min_drift_similarity": 0.09
+    },
+    {
+      "slug": "search-engine",
+      "episode_id": "48b26031f64f",
+      "title": "The machines are learning\u2026 to do crimes?",
+      "podcast_title": "Search Engine",
+      "status": "ok",
+      "audio_duration": 2768.639708,
+      "whisper_segments": 928,
+      "ad_count": 5,
+      "podcast_uuid": "cb2108e0-8619-013a-d7f7-0acc26574db2",
+      "episode_uuid": "9466d400-0d9f-458c-a1d9-ee5e72df599b",
+      "pc_cue_count": 552,
+      "vtt_duration": 2301.78,
+      "coverage": 0.8314,
+      "duration_delta": 466.86,
+      "max_duration_delta": 83.06,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 92.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 2168,
+          "pc_chars": 1041,
+          "similarity": 0.004,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 775.0,
+          "end": 969.76,
+          "drift_applied": 0.0,
+          "whisper_chars": 2131,
+          "pc_chars": 2788,
+          "similarity": 0.009,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2430.0,
+          "end": 2641.3,
+          "drift_applied": 0.0,
+          "whisper_chars": 3067,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2668.7,
+          "end": 2765.5,
+          "drift_applied": 0.0,
+          "whisper_chars": 1563,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2765.48,
+          "end": 2768.639708,
+          "drift_applied": 0.0,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 92.0,
+          "drift_applied": -121.54,
+          "whisper_chars": 2168,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 775.0,
+          "end": 969.76,
+          "drift_applied": -121.54,
+          "whisper_chars": 2131,
+          "pc_chars": 2099,
+          "similarity": 0.094,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2430.0,
+          "end": 2641.3,
+          "drift_applied": -121.54,
+          "whisper_chars": 3067,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2668.7,
+          "end": 2765.5,
+          "drift_applied": -121.54,
+          "whisper_chars": 1563,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2765.48,
+          "end": 2768.639708,
+          "drift_applied": -121.54,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "estimated_drift": -121.54,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.48,
+          "offset": 66.63
+        },
+        {
+          "time": 692.2,
+          "similarity": 0.994,
+          "offset": -121.54
+        },
+        {
+          "time": 1384.3,
+          "similarity": 0.074,
+          "offset": 51.16
+        },
+        {
+          "time": 2076.5,
+          "similarity": 0.067,
+          "offset": -124.63
+        },
+        {
+          "time": 2678.6,
+          "similarity": 0.659,
+          "offset": -404.52
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8313757811639391,
+        "duration_delta": 466.85970799999996,
+        "max_duration_delta": 83.05919124000008,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 5,
+      "ads_missing_from_pc_drift_corrected": 5,
+      "max_drift_offset": 404.52,
+      "min_drift_similarity": 0.067
+    },
+    {
+      "slug": "voicemail-dump-truck",
+      "episode_id": "adefc2dc5051",
+      "title": "Dolphin President.mp3 (feat. Bailey Meyers) | Voicemail Dump Truck 217",
+      "podcast_title": "Voicemail Dump Truck",
+      "status": "no_pc_vtt",
+      "audio_duration": 4605.327619,
+      "whisper_segments": 2449,
+      "ad_count": 4,
+      "podcast_uuid": "4d47baa0-ac6d-0135-9e5c-5bb073f92b78",
+      "episode_uuid": "1f88a286-c85c-422e-9e83-6c14b43add12"
+    },
+    {
+      "slug": "the-nextlander-podcast",
+      "episode_id": "559719ef57af",
+      "title": "259: Art Installations by Playskool",
+      "podcast_title": "The Nextlander Podcast",
+      "status": "ok",
+      "audio_duration": 8418.848,
+      "whisper_segments": 3770,
+      "ad_count": 4,
+      "podcast_uuid": "6ee496d0-a9c1-0139-c17b-0acc26574db2",
+      "episode_uuid": "eac36662-2e54-4299-9d1d-53908d3db67a",
+      "pc_cue_count": 2108,
+      "vtt_duration": 8388.06,
+      "coverage": 0.9963,
+      "duration_delta": 30.79,
+      "max_duration_delta": 252.57,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 58.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 700,
+          "pc_chars": 363,
+          "similarity": 0.024,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1875.6,
+          "end": 2131.5,
+          "drift_applied": 0.0,
+          "whisper_chars": 3487,
+          "pc_chars": 3719,
+          "similarity": 0.682,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 8087.8,
+          "end": 8337.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 3696,
+          "pc_chars": 3923,
+          "similarity": 0.37,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 8413.66,
+          "end": 8418.848,
+          "drift_applied": 0.0,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 58.0,
+          "drift_applied": -27.4,
+          "whisper_chars": 700,
+          "pc_chars": 62,
+          "similarity": 0.142,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1875.6,
+          "end": 2131.5,
+          "drift_applied": -27.4,
+          "whisper_chars": 3487,
+          "pc_chars": 3728,
+          "similarity": 0.948,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 8087.8,
+          "end": 8337.0,
+          "drift_applied": -27.4,
+          "whisper_chars": 3696,
+          "pc_chars": 3867,
+          "similarity": 0.626,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 8413.66,
+          "end": 8418.848,
+          "drift_applied": -27.4,
+          "whisper_chars": 0,
+          "pc_chars": 29,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "estimated_drift": -27.4,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.535,
+          "offset": -36.32
+        },
+        {
+          "time": 2104.7,
+          "similarity": 1.0,
+          "offset": -3.37
+        },
+        {
+          "time": 4209.4,
+          "similarity": 0.844,
+          "offset": -27.4
+        },
+        {
+          "time": 6314.1,
+          "similarity": 0.958,
+          "offset": -29.73
+        },
+        {
+          "time": 8328.8,
+          "similarity": 0.216,
+          "offset": -34.22
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9963429675889147,
+        "duration_delta": 30.788000000000466,
+        "max_duration_delta": 252.56544000000022,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.535,
+            "offset": -36.32,
+            "matched_time": 53.68
+          },
+          {
+            "time": 2104.712,
+            "similarity": 1.0,
+            "offset": -3.37,
+            "matched_time": 2101.34
+          },
+          {
+            "time": 4209.424,
+            "similarity": 0.844,
+            "offset": -27.4,
+            "matched_time": 4182.02
+          },
+          {
+            "time": 6314.136,
+            "similarity": 0.958,
+            "offset": -29.73,
+            "matched_time": 6284.41
+          },
+          {
+            "time": 8328.848,
+            "similarity": 0.216,
+            "offset": -34.22,
+            "matched_time": 8294.63
+          }
+        ],
+        "max_offset": 36.32,
+        "min_similarity": 0.216,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (similarity 0.54 < 0.55, offset -36.3s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 1,
+      "ads_present_in_pc_drift_corrected": 2,
+      "ads_missing_from_pc": 3,
+      "ads_missing_from_pc_drift_corrected": 2,
+      "max_drift_offset": 36.32,
+      "min_drift_similarity": 0.216
+    },
+    {
+      "slug": "conan-obrien-needs-a-friend",
+      "episode_id": "3abfe6a660f7",
+      "title": "Summer S\u2019pouses Episode 2: Amanda Lund",
+      "podcast_title": "Conan O\u2019Brien Needs A Friend",
+      "status": "ok",
+      "audio_duration": 2067.278063,
+      "whisper_segments": 1018,
+      "ad_count": 3,
+      "podcast_uuid": "7c388990-aa35-0136-7b93-27f978dac4db",
+      "episode_uuid": "b49e728f-1a28-4f5f-83ae-9b220b7821e7",
+      "pc_cue_count": 608,
+      "vtt_duration": 1714.24,
+      "coverage": 0.8292,
+      "duration_delta": 353.04,
+      "max_duration_delta": 62.02,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 97.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 1505,
+          "pc_chars": 1218,
+          "similarity": 0.015,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 929.4,
+          "end": 1109.3,
+          "drift_applied": 0.0,
+          "whisper_chars": 3060,
+          "pc_chars": 2742,
+          "similarity": 0.01,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1983.74,
+          "end": 2067.278063,
+          "drift_applied": 0.0,
+          "whisper_chars": 1252,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 97.0,
+          "drift_applied": -97.99,
+          "whisper_chars": 1505,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 929.4,
+          "end": 1109.3,
+          "drift_applied": -97.99,
+          "whisper_chars": 3060,
+          "pc_chars": 2802,
+          "similarity": 0.016,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1983.74,
+          "end": 2067.278063,
+          "drift_applied": -97.99,
+          "whisper_chars": 1252,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -97.99,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.343,
+          "offset": 163.16
+        },
+        {
+          "time": 516.8,
+          "similarity": 0.768,
+          "offset": -97.99
+        },
+        {
+          "time": 1033.6,
+          "similarity": 0.061,
+          "offset": 131.99
+        },
+        {
+          "time": 1550.5,
+          "similarity": 0.065,
+          "offset": -33.38
+        },
+        {
+          "time": 1977.3,
+          "similarity": 0.81,
+          "offset": -292.13
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8292256521661739,
+        "duration_delta": 353.0380630000002,
+        "max_duration_delta": 62.01834189000006,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 3,
+      "ads_missing_from_pc_drift_corrected": 3,
+      "max_drift_offset": 292.13,
+      "min_drift_similarity": 0.061
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "8fe96007ec15",
+      "title": "Assassin's Creed Valhalla Director Returns to Ubisoft",
+      "podcast_title": "Game Mess Mornings",
+      "status": "no_pc_vtt",
+      "audio_duration": 4186.714667,
+      "whisper_segments": 1679,
+      "ad_count": 4,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "17f26ee2-bc7f-4335-8b13-efaef3bfb271"
+    },
+    {
+      "slug": "decoding-tv",
+      "episode_id": "2c630b55b753",
+      "title": "Ep. 122 - Can 'Ted Lasso' Season 4 Capture the Magic of Seasons 1-3? (Plus: 'Dark Matter' S1E07 Is When The Show Gets Real Good)",
+      "podcast_title": "Decoding TV",
+      "status": "ok",
+      "audio_duration": 6289.6425,
+      "whisper_segments": 2354,
+      "ad_count": 5,
+      "podcast_uuid": "77794610-6f22-0134-787d-4ffec63d9550",
+      "episode_uuid": "7d9ac156-85dd-42aa-95a0-881f2fbdd29a",
+      "pc_cue_count": 1406,
+      "vtt_duration": 5904.9,
+      "coverage": 0.9388,
+      "duration_delta": 384.74,
+      "max_duration_delta": 188.69,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 121.2,
+          "drift_applied": 0.0,
+          "whisper_chars": 1840,
+          "pc_chars": 1749,
+          "similarity": 0.015,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2101.7,
+          "end": 2162.38,
+          "drift_applied": 0.0,
+          "whisper_chars": 952,
+          "pc_chars": 1310,
+          "similarity": 0.013,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4116.1,
+          "end": 4214.2,
+          "drift_applied": 0.0,
+          "whisper_chars": 1504,
+          "pc_chars": 1576,
+          "similarity": 0.023,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6186.8,
+          "end": 6286.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 1010,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6286.38,
+          "end": 6289.6425,
+          "drift_applied": 0.0,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 121.2,
+          "drift_applied": -120.09,
+          "whisper_chars": 1840,
+          "pc_chars": 68,
+          "similarity": 0.071,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2101.7,
+          "end": 2162.38,
+          "drift_applied": -120.09,
+          "whisper_chars": 952,
+          "pc_chars": 892,
+          "similarity": 0.008,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4116.1,
+          "end": 4214.2,
+          "drift_applied": -120.09,
+          "whisper_chars": 1504,
+          "pc_chars": 1456,
+          "similarity": 0.015,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6186.8,
+          "end": 6286.4,
+          "drift_applied": -120.09,
+          "whisper_chars": 1010,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6286.38,
+          "end": 6289.6425,
+          "drift_applied": -120.09,
+          "whisper_chars": 0,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "estimated_drift": -120.09,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.073,
+          "offset": 84.31
+        },
+        {
+          "time": 1572.4,
+          "similarity": 0.98,
+          "offset": -120.09
+        },
+        {
+          "time": 3144.8,
+          "similarity": 0.827,
+          "offset": -179.9
+        },
+        {
+          "time": 4717.2,
+          "similarity": 0.049,
+          "offset": 56.17
+        },
+        {
+          "time": 6199.6,
+          "similarity": 0.1,
+          "offset": -2173.16
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.93882919418711,
+        "duration_delta": 384.7425000000003,
+        "max_duration_delta": 188.68927500000015,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 5,
+      "ads_missing_from_pc_drift_corrected": 5,
+      "max_drift_offset": 2173.16,
+      "min_drift_similarity": 0.049
+    },
+    {
+      "slug": "giant-bombcast",
+      "episode_id": "4fae980f0c33",
+      "title": "Giant Bombcast 952: Boat Enthusiasm",
+      "podcast_title": "Giant Bombcast",
+      "status": "no_pc_vtt",
+      "audio_duration": 9357.610862,
+      "whisper_segments": 4593,
+      "ad_count": 6,
+      "podcast_uuid": "ea0a6200-c70f-012f-7eeb-723c91aeae46",
+      "episode_uuid": "12dc6470-2141-49f9-993c-c1e149a8125b"
+    },
+    {
+      "slug": "the-jeff-gerstmann-show-a-podcast-about-video-games",
+      "episode_id": "5454a49510da",
+      "title": "217: Virtual Boy Game of the Year 2026",
+      "podcast_title": "The Jeff Gerstmann Show - A Podcast About Video Games",
+      "status": "ok",
+      "audio_duration": 10545.058125,
+      "whisper_segments": 4416,
+      "ad_count": 5,
+      "podcast_uuid": "160f23f0-c8a7-013a-d953-0acc26574db2",
+      "episode_uuid": "57f4ade8-c79c-46d2-abc8-9db8793bd1c0",
+      "pc_cue_count": 3489,
+      "vtt_duration": 10336.5,
+      "coverage": 0.9802,
+      "duration_delta": 208.56,
+      "max_duration_delta": 316.35,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 58.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 975,
+          "pc_chars": 393,
+          "similarity": 0.026,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1088.1,
+          "end": 1252.8,
+          "drift_applied": 0.0,
+          "whisper_chars": 2687,
+          "pc_chars": 2307,
+          "similarity": 0.01,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2850.6,
+          "end": 3114.6,
+          "drift_applied": 0.0,
+          "whisper_chars": 4323,
+          "pc_chars": 3762,
+          "similarity": 0.021,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 5569.8,
+          "end": 5685.6,
+          "drift_applied": 0.0,
+          "whisper_chars": 1792,
+          "pc_chars": 1604,
+          "similarity": 0.009,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 10454.5,
+          "end": 10545.058125,
+          "drift_applied": 0.0,
+          "whisper_chars": 1612,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 58.0,
+          "drift_applied": -105.81,
+          "whisper_chars": 975,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1088.1,
+          "end": 1252.8,
+          "drift_applied": -105.81,
+          "whisper_chars": 2687,
+          "pc_chars": 2507,
+          "similarity": 0.56,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 2850.6,
+          "end": 3114.6,
+          "drift_applied": -105.81,
+          "whisper_chars": 4323,
+          "pc_chars": 3846,
+          "similarity": 0.663,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 5569.8,
+          "end": 5685.6,
+          "drift_applied": -105.81,
+          "whisper_chars": 1792,
+          "pc_chars": 1666,
+          "similarity": 0.575,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 10454.5,
+          "end": 10545.058125,
+          "drift_applied": -105.81,
+          "whisper_chars": 1612,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -105.81,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.83,
+          "offset": -57.95
+        },
+        {
+          "time": 2636.3,
+          "similarity": 0.829,
+          "offset": -105.81
+        },
+        {
+          "time": 5272.5,
+          "similarity": 0.99,
+          "offset": -149.04
+        },
+        {
+          "time": 7908.8,
+          "similarity": 0.975,
+          "offset": -121.03
+        },
+        {
+          "time": 10455.1,
+          "similarity": 0.052,
+          "offset": -154.56
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9802221929431044,
+        "duration_delta": 208.55812499999956,
+        "max_duration_delta": 316.35174375000025,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.83,
+            "offset": -57.95,
+            "matched_time": 32.05
+          },
+          {
+            "time": 2636.26453125,
+            "similarity": 0.829,
+            "offset": -105.81,
+            "matched_time": 2530.45
+          },
+          {
+            "time": 5272.5290625,
+            "similarity": 0.99,
+            "offset": -149.04,
+            "matched_time": 5123.49
+          },
+          {
+            "time": 7908.79359375,
+            "similarity": 0.975,
+            "offset": -121.03,
+            "matched_time": 7787.76
+          },
+          {
+            "time": 10455.058125,
+            "similarity": 0.052,
+            "offset": -154.56,
+            "matched_time": 10300.5
+          }
+        ],
+        "max_offset": 154.56,
+        "min_similarity": 0.052,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -58.0s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 3,
+      "ads_missing_from_pc": 5,
+      "ads_missing_from_pc_drift_corrected": 2,
+      "max_drift_offset": 154.56,
+      "min_drift_similarity": 0.052
+    },
+    {
+      "slug": "the-filmcast",
+      "episode_id": "65f5ecccd0fc",
+      "title": "Ep. 886 - Spider-Man: Brand New Day",
+      "podcast_title": "The Filmcast",
+      "status": "ok",
+      "audio_duration": 6289.561813,
+      "whisper_segments": 2533,
+      "ad_count": 5,
+      "podcast_uuid": "9879f2c0-0cf8-012e-fb78-00163e1b201c",
+      "episode_uuid": "7ad3959f-f491-41d0-9e09-cd689efd8dca",
+      "pc_cue_count": 1701,
+      "vtt_duration": 6073.522,
+      "coverage": 0.9657,
+      "duration_delta": 216.04,
+      "max_duration_delta": 188.69,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 59.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 849,
+          "pc_chars": 528,
+          "similarity": 0.006,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 779.5,
+          "end": 937.25,
+          "drift_applied": 0.0,
+          "whisper_chars": 2196,
+          "pc_chars": 2537,
+          "similarity": 0.027,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1701.8,
+          "end": 1772.2,
+          "drift_applied": 0.0,
+          "whisper_chars": 1017,
+          "pc_chars": 1124,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2815.9,
+          "end": 2884.04,
+          "drift_applied": 0.0,
+          "whisper_chars": 1066,
+          "pc_chars": 1127,
+          "similarity": 0.017,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6185.76,
+          "end": 6289.561813,
+          "drift_applied": 0.0,
+          "whisper_chars": 1145,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 59.0,
+          "drift_applied": -140.8,
+          "whisper_chars": 849,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 779.5,
+          "end": 937.25,
+          "drift_applied": -140.8,
+          "whisper_chars": 2196,
+          "pc_chars": 2573,
+          "similarity": 0.145,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1701.8,
+          "end": 1772.2,
+          "drift_applied": -140.8,
+          "whisper_chars": 1017,
+          "pc_chars": 1271,
+          "similarity": 0.025,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2815.9,
+          "end": 2884.04,
+          "drift_applied": -140.8,
+          "whisper_chars": 1066,
+          "pc_chars": 1081,
+          "similarity": 0.01,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6185.76,
+          "end": 6289.561813,
+          "drift_applied": -140.8,
+          "whisper_chars": 1145,
+          "pc_chars": 44,
+          "similarity": 0.042,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -140.8,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.972,
+          "offset": -44.37
+        },
+        {
+          "time": 1572.4,
+          "similarity": 0.807,
+          "offset": -44.95
+        },
+        {
+          "time": 3144.8,
+          "similarity": 0.829,
+          "offset": -140.8
+        },
+        {
+          "time": 4717.2,
+          "similarity": 0.638,
+          "offset": -152.42
+        },
+        {
+          "time": 6199.6,
+          "similarity": 0.433,
+          "offset": -169.84
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9656510549664264,
+        "duration_delta": 216.03981300000032,
+        "max_duration_delta": 188.68685439000018,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 5,
+      "ads_missing_from_pc_drift_corrected": 5,
+      "max_drift_offset": 169.84,
+      "min_drift_similarity": 0.433
+    },
+    {
+      "slug": "conan-obrien-needs-a-friend",
+      "episode_id": "a5b35ea4a620",
+      "title": "Ice Cube",
+      "podcast_title": "Conan O\u2019Brien Needs A Friend",
+      "status": "ok",
+      "audio_duration": 4208.117125,
+      "whisper_segments": 1990,
+      "ad_count": 6,
+      "podcast_uuid": "7c388990-aa35-0136-7b93-27f978dac4db",
+      "episode_uuid": "b69b2fe9-9d48-40f1-b1fd-1f03f4fb5a22",
+      "pc_cue_count": 1485,
+      "vtt_duration": 3798.64,
+      "coverage": 0.9027,
+      "duration_delta": 409.48,
+      "max_duration_delta": 126.24,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 97.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 1505,
+          "pc_chars": 1319,
+          "similarity": 0.015,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1504.3,
+          "end": 1605.3,
+          "drift_applied": 0.0,
+          "whisper_chars": 1689,
+          "pc_chars": 1361,
+          "similarity": 0.022,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3376.7,
+          "end": 3440.6,
+          "drift_applied": 0.0,
+          "whisper_chars": 1054,
+          "pc_chars": 994,
+          "similarity": 0.012,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3458.81,
+          "end": 3524.5,
+          "drift_applied": 0.0,
+          "whisper_chars": 1073,
+          "pc_chars": 1136,
+          "similarity": 0.014,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4137.6,
+          "end": 4141.1,
+          "drift_applied": 0.0,
+          "whisper_chars": 116,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4147.06,
+          "end": 4208.117125,
+          "drift_applied": 0.0,
+          "whisper_chars": 861,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 97.0,
+          "drift_applied": -97.66,
+          "whisper_chars": 1505,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1504.3,
+          "end": 1605.3,
+          "drift_applied": -97.66,
+          "whisper_chars": 1689,
+          "pc_chars": 1286,
+          "similarity": 0.013,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3376.7,
+          "end": 3440.6,
+          "drift_applied": -97.66,
+          "whisper_chars": 1054,
+          "pc_chars": 1228,
+          "similarity": 0.011,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3458.81,
+          "end": 3524.5,
+          "drift_applied": -97.66,
+          "whisper_chars": 1073,
+          "pc_chars": 929,
+          "similarity": 0.016,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4137.6,
+          "end": 4141.1,
+          "drift_applied": -97.66,
+          "whisper_chars": 116,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 4147.06,
+          "end": 4208.117125,
+          "drift_applied": -97.66,
+          "whisper_chars": 861,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -97.66,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.058,
+          "offset": 49.9
+        },
+        {
+          "time": 1052.0,
+          "similarity": 1.0,
+          "offset": -97.66
+        },
+        {
+          "time": 2104.1,
+          "similarity": 0.086,
+          "offset": -68.14
+        },
+        {
+          "time": 3156.1,
+          "similarity": 0.07,
+          "offset": -1.92
+        },
+        {
+          "time": 4118.1,
+          "similarity": 1.0,
+          "offset": -349.48
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.902693505708922,
+        "duration_delta": 409.4771249999999,
+        "max_duration_delta": 126.2435137500001,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 6,
+      "ads_missing_from_pc_drift_corrected": 6,
+      "max_drift_offset": 349.48,
+      "min_drift_similarity": 0.058
+    },
+    {
+      "slug": "dlc",
+      "episode_id": "754f0c15854e",
+      "title": "663: Zack Zwiezen: Halo: Campaign Evolved, Splatoon Raiders, New Sony statement on physical discs, New Xbox statement on the future, EA's aquisition, Hitman: Absolution, GTA Online, Alice is Missing",
+      "podcast_title": "DLC",
+      "status": "ok",
+      "audio_duration": 6888.272,
+      "whisper_segments": 2663,
+      "ad_count": 6,
+      "podcast_uuid": "fa554850-5aed-0131-8cf2-723c91aeae46",
+      "episode_uuid": "04f1e447-2362-4275-8ce7-e889fa485d0a",
+      "pc_cue_count": 1604,
+      "vtt_duration": 6870.84,
+      "coverage": 0.9975,
+      "duration_delta": 17.43,
+      "max_duration_delta": 206.65,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 59.4,
+          "drift_applied": 0.0,
+          "whisper_chars": 733,
+          "pc_chars": 504,
+          "similarity": 0.029,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 114.8,
+          "end": 180.2,
+          "drift_applied": 0.0,
+          "whisper_chars": 1461,
+          "pc_chars": 1193,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2328.8,
+          "end": 2336.3,
+          "drift_applied": 0.0,
+          "whisper_chars": 111,
+          "pc_chars": 176,
+          "similarity": 0.258,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3240.6,
+          "end": 3244.02,
+          "drift_applied": 0.0,
+          "whisper_chars": 120,
+          "pc_chars": 102,
+          "similarity": 0.432,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 4929.24,
+          "end": 4936.78,
+          "drift_applied": 0.0,
+          "whisper_chars": 206,
+          "pc_chars": 31,
+          "similarity": 0.219,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6841.4,
+          "end": 6888.272,
+          "drift_applied": 0.0,
+          "whisper_chars": 592,
+          "pc_chars": 576,
+          "similarity": 0.015,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 59.4,
+          "drift_applied": -15.42,
+          "whisper_chars": 733,
+          "pc_chars": 504,
+          "similarity": 0.029,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 114.8,
+          "end": 180.2,
+          "drift_applied": -15.42,
+          "whisper_chars": 1461,
+          "pc_chars": 1010,
+          "similarity": 0.017,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2328.8,
+          "end": 2336.3,
+          "drift_applied": -15.42,
+          "whisper_chars": 111,
+          "pc_chars": 111,
+          "similarity": 1.0,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 3240.6,
+          "end": 3244.02,
+          "drift_applied": -15.42,
+          "whisper_chars": 120,
+          "pc_chars": 79,
+          "similarity": 0.653,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 4929.24,
+          "end": 4936.78,
+          "drift_applied": -15.42,
+          "whisper_chars": 206,
+          "pc_chars": 214,
+          "similarity": 0.81,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 6841.4,
+          "end": 6888.272,
+          "drift_applied": -15.42,
+          "whisper_chars": 592,
+          "pc_chars": 736,
+          "similarity": 0.014,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -15.42,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.833,
+          "offset": -15.42
+        },
+        {
+          "time": 1722.1,
+          "similarity": 0.988,
+          "offset": -19.58
+        },
+        {
+          "time": 3444.1,
+          "similarity": 0.972,
+          "offset": -16.55
+        },
+        {
+          "time": 5166.2,
+          "similarity": 0.736,
+          "offset": -14.45
+        },
+        {
+          "time": 6798.3,
+          "similarity": 0.962,
+          "offset": -13.07
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.997469321768943,
+        "duration_delta": 17.43199999999979,
+        "max_duration_delta": 206.6481600000002,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.833,
+            "offset": -15.42,
+            "matched_time": 74.58
+          },
+          {
+            "time": 1722.068,
+            "similarity": 0.988,
+            "offset": -19.58,
+            "matched_time": 1702.49
+          },
+          {
+            "time": 3444.136,
+            "similarity": 0.972,
+            "offset": -16.55,
+            "matched_time": 3427.59
+          },
+          {
+            "time": 5166.204,
+            "similarity": 0.736,
+            "offset": -14.45,
+            "matched_time": 5151.75
+          },
+          {
+            "time": 6798.272,
+            "similarity": 0.962,
+            "offset": -13.07,
+            "matched_time": 6785.21
+          }
+        ],
+        "max_offset": 19.58,
+        "min_similarity": 0.736,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -15.4s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 1,
+      "ads_present_in_pc_drift_corrected": 3,
+      "ads_missing_from_pc": 5,
+      "ads_missing_from_pc_drift_corrected": 3,
+      "max_drift_offset": 19.58,
+      "min_drift_similarity": 0.736
+    },
+    {
+      "slug": "giant-bomb-presents",
+      "episode_id": "f062222ee0eb",
+      "title": "Discord Townhall 7/30/26",
+      "podcast_title": "Giant Bomb Presents",
+      "status": "no_pc_vtt",
+      "audio_duration": 4385.506667,
+      "whisper_segments": 2518,
+      "ad_count": 2,
+      "podcast_uuid": "0835e4c0-6373-0130-f26b-723c91aeae46",
+      "episode_uuid": "544dd553-67f2-442a-b348-f167f8bbde52"
+    },
+    {
+      "slug": "fire-escape-cast",
+      "episode_id": "e063d3b6cd6c",
+      "title": "Fire Escape Cast #138",
+      "podcast_title": "Fire Escape Cast",
+      "status": "no_pc_vtt",
+      "audio_duration": 6983.069333,
+      "whisper_segments": 3379,
+      "ad_count": 5,
+      "podcast_uuid": "c7dfffc0-7d8f-0139-349a-0acc26574db2",
+      "episode_uuid": "6d758d57-9efb-4fc9-8c70-bcb03d6fa36f"
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "210aeef1d2ea",
+      "title": "Chances of a Pragmata Sequel are High",
+      "podcast_title": "Game Mess Mornings",
+      "status": "no_pc_vtt",
+      "audio_duration": 3643.810667,
+      "whisper_segments": 1420,
+      "ad_count": 4,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "429e916e-7d83-47b4-b1c9-4fd9d4bbc23e"
+    },
+    {
+      "slug": "voicemail-dump-truck",
+      "episode_id": "dd1b457cc38c",
+      "title": "Early Access Friend.mp3 (feat. Mary Kish) | Voicemail Dump Truck 216",
+      "podcast_title": "Voicemail Dump Truck",
+      "status": "no_pc_vtt",
+      "audio_duration": 3820.816735,
+      "whisper_segments": 1962,
+      "ad_count": 3,
+      "podcast_uuid": "4d47baa0-ac6d-0135-9e5c-5bb073f92b78",
+      "episode_uuid": "de71f288-f17f-4722-a8fb-839afcc11cf0"
+    },
+    {
+      "slug": "game-mess-mornings",
+      "episode_id": "8ce094675c22",
+      "title": "Splatoon Raiders Hitting BIG with Audiences",
+      "podcast_title": "Game Mess Mornings",
+      "status": "no_pc_vtt",
+      "audio_duration": 3177.682667,
+      "whisper_segments": 1285,
+      "ad_count": 3,
+      "podcast_uuid": "39f13d60-8679-013a-d7fe-0acc26574db2",
+      "episode_uuid": "15619ad1-4a11-4eed-aab4-ec8302f9263f"
+    },
+    {
+      "slug": "the-nextlander-podcast",
+      "episode_id": "96e05c88c5ff",
+      "title": "258: 258: Sgt. Kabukiman in 4K",
+      "podcast_title": "The Nextlander Podcast",
+      "status": "ok",
+      "audio_duration": 6651.968,
+      "whisper_segments": 3112,
+      "ad_count": 4,
+      "podcast_uuid": "6ee496d0-a9c1-0139-c17b-0acc26574db2",
+      "episode_uuid": "145f9265-7a66-4ae0-9de5-9c7c57685032",
+      "pc_cue_count": 1642,
+      "vtt_duration": 6523.46,
+      "coverage": 0.9807,
+      "duration_delta": 128.51,
+      "max_duration_delta": 199.56,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 46.84,
+          "drift_applied": 0.0,
+          "whisper_chars": 487,
+          "pc_chars": 787,
+          "similarity": 0.099,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1820.6,
+          "end": 1971.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 1820,
+          "pc_chars": 1961,
+          "similarity": 0.231,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3652.7,
+          "end": 3697.6,
+          "drift_applied": 0.0,
+          "whisper_chars": 179,
+          "pc_chars": 832,
+          "similarity": 0.012,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6620.46,
+          "end": 6651.968,
+          "drift_applied": 0.0,
+          "whisper_chars": 432,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 46.84,
+          "drift_applied": -61.31,
+          "whisper_chars": 487,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1820.6,
+          "end": 1971.0,
+          "drift_applied": -61.31,
+          "whisper_chars": 1820,
+          "pc_chars": 2207,
+          "similarity": 0.645,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 3652.7,
+          "end": 3697.6,
+          "drift_applied": -61.31,
+          "whisper_chars": 179,
+          "pc_chars": 659,
+          "similarity": 0.234,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6620.46,
+          "end": 6651.968,
+          "drift_applied": -61.31,
+          "whisper_chars": 432,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -61.31,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 1.0,
+          "offset": -30.17
+        },
+        {
+          "time": 1663.0,
+          "similarity": 1.0,
+          "offset": -30.38
+        },
+        {
+          "time": 3326.0,
+          "similarity": 0.988,
+          "offset": -61.31
+        },
+        {
+          "time": 4989.0,
+          "similarity": 0.998,
+          "offset": -93.75
+        },
+        {
+          "time": 6562.0,
+          "similarity": 0.952,
+          "offset": -95.69
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9806812059228187,
+        "duration_delta": 128.5079999999998,
+        "max_duration_delta": 199.55904000000018,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 1.0,
+            "offset": -30.17,
+            "matched_time": 59.83
+          },
+          {
+            "time": 1662.992,
+            "similarity": 1.0,
+            "offset": -30.38,
+            "matched_time": 1632.61
+          },
+          {
+            "time": 3325.984,
+            "similarity": 0.988,
+            "offset": -61.31,
+            "matched_time": 3264.67
+          },
+          {
+            "time": 4988.976,
+            "similarity": 0.998,
+            "offset": -93.75,
+            "matched_time": 4895.22
+          },
+          {
+            "time": 6561.968,
+            "similarity": 0.952,
+            "offset": -95.69,
+            "matched_time": 6466.28
+          }
+        ],
+        "max_offset": 95.69,
+        "min_similarity": 0.952,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "5/5 probes failed (max 1): 90.0s (offset -30.2s > 3.0s)",
+        "probes_passed": 0,
+        "probes_failed": 5,
+        "median_abs_offset": 0.0
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 1,
+      "ads_missing_from_pc": 4,
+      "ads_missing_from_pc_drift_corrected": 3,
+      "max_drift_offset": 95.69,
+      "min_drift_similarity": 0.952
+    },
+    {
+      "slug": "conan-obrien-needs-a-friend",
+      "episode_id": "d108c8f71c9d",
+      "title": "Summer S\u2019pouses Episode 1",
+      "podcast_title": "Conan O\u2019Brien Needs A Friend",
+      "status": "ok",
+      "audio_duration": 1623.510063,
+      "whisper_segments": 864,
+      "ad_count": 6,
+      "podcast_uuid": "7c388990-aa35-0136-7b93-27f978dac4db",
+      "episode_uuid": "65822057-22d3-4326-b0d3-1f7c2862afc8",
+      "pc_cue_count": 613,
+      "vtt_duration": 1331.618,
+      "coverage": 0.8202,
+      "duration_delta": 291.89,
+      "max_duration_delta": 48.71,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 78.68,
+          "drift_applied": 0.0,
+          "whisper_chars": 1021,
+          "pc_chars": 998,
+          "similarity": 0.015,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 746.6,
+          "end": 796.5,
+          "drift_applied": 0.0,
+          "whisper_chars": 607,
+          "pc_chars": 776,
+          "similarity": 0.029,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 814.5,
+          "end": 894.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 1364,
+          "pc_chars": 1167,
+          "similarity": 0.013,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 923.0799999999999,
+          "end": 974.8799999999999,
+          "drift_applied": 0.0,
+          "whisper_chars": 741,
+          "pc_chars": 1042,
+          "similarity": 0.015,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 924.2,
+          "end": 965.9,
+          "drift_applied": 0.0,
+          "whisper_chars": 696,
+          "pc_chars": 775,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1592.8,
+          "end": 1623.510063,
+          "drift_applied": 0.0,
+          "whisper_chars": 442,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 78.68,
+          "drift_applied": -72.27,
+          "whisper_chars": 1021,
+          "pc_chars": 89,
+          "similarity": 0.088,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 746.6,
+          "end": 796.5,
+          "drift_applied": -72.27,
+          "whisper_chars": 607,
+          "pc_chars": 840,
+          "similarity": 0.015,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 814.5,
+          "end": 894.0,
+          "drift_applied": -72.27,
+          "whisper_chars": 1364,
+          "pc_chars": 1456,
+          "similarity": 0.016,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 923.0799999999999,
+          "end": 974.8799999999999,
+          "drift_applied": -72.27,
+          "whisper_chars": 741,
+          "pc_chars": 636,
+          "similarity": 0.016,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 924.2,
+          "end": 965.9,
+          "drift_applied": -72.27,
+          "whisper_chars": 696,
+          "pc_chars": 544,
+          "similarity": 0.018,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1592.8,
+          "end": 1623.510063,
+          "drift_applied": -72.27,
+          "whisper_chars": 442,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -72.27,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.972,
+          "offset": -70.8
+        },
+        {
+          "time": 405.9,
+          "similarity": 1.0,
+          "offset": -72.27
+        },
+        {
+          "time": 811.8,
+          "similarity": 0.348,
+          "offset": 169.89
+        },
+        {
+          "time": 1217.6,
+          "similarity": 0.064,
+          "offset": -125.65
+        },
+        {
+          "time": 1533.5,
+          "similarity": 0.548,
+          "offset": -297.47
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8202092677758782,
+        "duration_delta": 291.892063,
+        "max_duration_delta": 48.705301890000044,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 6,
+      "ads_missing_from_pc_drift_corrected": 6,
+      "max_drift_offset": 297.47,
+      "min_drift_similarity": 0.064
+    },
+    {
+      "slug": "hyperfixed",
+      "episode_id": "0c5e51280e24",
+      "title": "The Master of Mazes vs The Big Green Monster",
+      "podcast_title": "Hyperfixed",
+      "status": "ok",
+      "audio_duration": 2288.616,
+      "whisper_segments": 838,
+      "ad_count": 3,
+      "podcast_uuid": "37ab1040-3d4d-013d-0376-0affdaeeef4b",
+      "episode_uuid": "6ee9892a-ed67-4ee3-aed7-cbfecf4871dd",
+      "pc_cue_count": 423,
+      "vtt_duration": 1955.5,
+      "coverage": 0.8544,
+      "duration_delta": 333.12,
+      "max_duration_delta": 68.66,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 291.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 4518,
+          "pc_chars": 4562,
+          "similarity": 0.194,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1569.7,
+          "end": 1771.97,
+          "drift_applied": 0.0,
+          "whisper_chars": 2219,
+          "pc_chars": 3181,
+          "similarity": 0.017,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2229.6,
+          "end": 2288.616,
+          "drift_applied": 0.0,
+          "whisper_chars": 593,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 291.0,
+          "drift_applied": -312.36,
+          "whisper_chars": 4518,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1569.7,
+          "end": 1771.97,
+          "drift_applied": -312.36,
+          "whisper_chars": 2219,
+          "pc_chars": 2937,
+          "similarity": 0.02,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 2229.6,
+          "end": 2288.616,
+          "drift_applied": -312.36,
+          "whisper_chars": 593,
+          "pc_chars": 411,
+          "similarity": 0.783,
+          "ad_present_in_pc": true
+        }
+      ],
+      "estimated_drift": -312.36,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.06,
+          "offset": 41.94
+        },
+        {
+          "time": 572.2,
+          "similarity": 0.071,
+          "offset": 59.92
+        },
+        {
+          "time": 1144.3,
+          "similarity": 0.078,
+          "offset": 14.83
+        },
+        {
+          "time": 1716.5,
+          "similarity": 0.052,
+          "offset": -73.6
+        },
+        {
+          "time": 2198.6,
+          "similarity": 0.982,
+          "offset": -312.36
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.8544465301299999,
+        "duration_delta": 333.116,
+        "max_duration_delta": 68.65848000000005,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 1,
+      "ads_missing_from_pc": 3,
+      "ads_missing_from_pc_drift_corrected": 2,
+      "max_drift_offset": 312.36,
+      "min_drift_similarity": 0.052
+    },
+    {
+      "slug": "the-filmcast",
+      "episode_id": "1675eb95553d",
+      "title": "Ep. 885 - Avatar Aang: The Last Airbender",
+      "podcast_title": "The Filmcast",
+      "status": "ok",
+      "audio_duration": 6750.074938,
+      "whisper_segments": 3166,
+      "ad_count": 6,
+      "podcast_uuid": "9879f2c0-0cf8-012e-fb78-00163e1b201c",
+      "episode_uuid": "05782450-3d77-4d40-907c-478dbf28ac0d",
+      "pc_cue_count": 1878,
+      "vtt_duration": 6771.92,
+      "coverage": 1.0032,
+      "duration_delta": 21.85,
+      "max_duration_delta": 202.5,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 59.7,
+          "drift_applied": 0.0,
+          "whisper_chars": 611,
+          "pc_chars": 453,
+          "similarity": 0.004,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1530.5,
+          "end": 1665.47,
+          "drift_applied": 0.0,
+          "whisper_chars": 1765,
+          "pc_chars": 1933,
+          "similarity": 0.687,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 2449.0,
+          "end": 2452.76,
+          "drift_applied": 0.0,
+          "whisper_chars": 185,
+          "pc_chars": 267,
+          "similarity": 0.027,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3230.7,
+          "end": 3237.78,
+          "drift_applied": 0.0,
+          "whisper_chars": 159,
+          "pc_chars": 197,
+          "similarity": 0.455,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 4380.0,
+          "end": 4445.1,
+          "drift_applied": 0.0,
+          "whisper_chars": 966,
+          "pc_chars": 993,
+          "similarity": 0.305,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6722.56,
+          "end": 6750.074938,
+          "drift_applied": 0.0,
+          "whisper_chars": 0,
+          "pc_chars": 117,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 59.7,
+          "drift_applied": 2.16,
+          "whisper_chars": 611,
+          "pc_chars": 458,
+          "similarity": 0.004,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1530.5,
+          "end": 1665.47,
+          "drift_applied": 2.16,
+          "whisper_chars": 1765,
+          "pc_chars": 2040,
+          "similarity": 0.668,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 2449.0,
+          "end": 2452.76,
+          "drift_applied": 2.16,
+          "whisper_chars": 185,
+          "pc_chars": 93,
+          "similarity": 0.259,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3230.7,
+          "end": 3237.78,
+          "drift_applied": 2.16,
+          "whisper_chars": 159,
+          "pc_chars": 197,
+          "similarity": 0.455,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 4380.0,
+          "end": 4445.1,
+          "drift_applied": 2.16,
+          "whisper_chars": 966,
+          "pc_chars": 960,
+          "similarity": 0.31,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 6722.56,
+          "end": 6750.074938,
+          "drift_applied": 2.16,
+          "whisper_chars": 0,
+          "pc_chars": 73,
+          "similarity": 0.0,
+          "ad_present_in_pc": null
+        }
+      ],
+      "estimated_drift": 2.16,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.979,
+          "offset": -40.52
+        },
+        {
+          "time": 1687.5,
+          "similarity": 0.842,
+          "offset": -43.67
+        },
+        {
+          "time": 3375.0,
+          "similarity": 0.951,
+          "offset": 2.16
+        },
+        {
+          "time": 5062.6,
+          "similarity": 0.872,
+          "offset": 2.34
+        },
+        {
+          "time": 6660.1,
+          "similarity": 0.968,
+          "offset": 2.89
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 1.0032362695526567,
+        "duration_delta": 21.845062000000325,
+        "max_duration_delta": 202.50224814000018,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.979,
+            "offset": -40.52,
+            "matched_time": 49.48
+          },
+          {
+            "time": 1687.5187345,
+            "similarity": 0.842,
+            "offset": -43.67,
+            "matched_time": 1643.85
+          },
+          {
+            "time": 3375.037469,
+            "similarity": 0.951,
+            "offset": 2.16,
+            "matched_time": 3377.2
+          },
+          {
+            "time": 5062.5562035,
+            "similarity": 0.872,
+            "offset": 2.34,
+            "matched_time": 5064.89
+          },
+          {
+            "time": 6660.074938,
+            "similarity": 0.968,
+            "offset": 2.89,
+            "matched_time": 6662.96
+          }
+        ],
+        "max_offset": 43.67,
+        "min_similarity": 0.842,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "2/5 probes failed (max 1): 90.0s (offset -40.5s > 3.0s)",
+        "probes_passed": 3,
+        "probes_failed": 2,
+        "median_abs_offset": 2.34
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 2,
+      "ads_present_in_pc_drift_corrected": 2,
+      "ads_missing_from_pc": 4,
+      "ads_missing_from_pc_drift_corrected": 4,
+      "max_drift_offset": 43.67,
+      "min_drift_similarity": 0.842
+    },
+    {
+      "slug": "giant-bombcast",
+      "episode_id": "ecee026866d4",
+      "title": "Giant Bombcast 951: NOICE",
+      "podcast_title": "Giant Bombcast",
+      "status": "no_pc_vtt",
+      "audio_duration": 8516.027007,
+      "whisper_segments": 4179,
+      "ad_count": 6,
+      "podcast_uuid": "ea0a6200-c70f-012f-7eeb-723c91aeae46",
+      "episode_uuid": "87423967-d250-481a-b72f-bfa764df85c3"
+    },
+    {
+      "slug": "decoding-tv",
+      "episode_id": "f6fb5f9df2e6",
+      "title": "Ep. 121 - Is Will Ferrell Still a Relevant Comedic Force in 'The Hawk'? (Plus: 'Dark Matter' S1E06 Is About How Power Corrupts)",
+      "podcast_title": "Decoding TV",
+      "status": "ok",
+      "audio_duration": 5977.289125,
+      "whisper_segments": 2292,
+      "ad_count": 4,
+      "podcast_uuid": "77794610-6f22-0134-787d-4ffec63d9550",
+      "episode_uuid": "fb0eed22-d112-44c1-94c0-4674db7af290",
+      "pc_cue_count": 1448,
+      "vtt_duration": 5608.3,
+      "coverage": 0.9383,
+      "duration_delta": 368.99,
+      "max_duration_delta": 179.32,
+      "coverage_pass": false,
+      "duration_pass": false,
+      "ad_comparisons": [
+        {
+          "start": 0.0,
+          "end": 112.05,
+          "drift_applied": 0.0,
+          "whisper_chars": 1649,
+          "pc_chars": 1874,
+          "similarity": 0.016,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1982.92,
+          "end": 2041.76,
+          "drift_applied": 0.0,
+          "whisper_chars": 453,
+          "pc_chars": 1043,
+          "similarity": 0.008,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3991.1,
+          "end": 4129.11,
+          "drift_applied": 0.0,
+          "whisper_chars": 2151,
+          "pc_chars": 2619,
+          "similarity": 0.017,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 5859.469999999999,
+          "end": 5977.289125,
+          "drift_applied": 0.0,
+          "whisper_chars": 1580,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 0.0,
+          "end": 112.05,
+          "drift_applied": -116.5,
+          "whisper_chars": 1649,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 1982.92,
+          "end": 2041.76,
+          "drift_applied": -116.5,
+          "whisper_chars": 453,
+          "pc_chars": 1080,
+          "similarity": 0.027,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 3991.1,
+          "end": 4129.11,
+          "drift_applied": -116.5,
+          "whisper_chars": 2151,
+          "pc_chars": 2143,
+          "similarity": 0.026,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 5859.469999999999,
+          "end": 5977.289125,
+          "drift_applied": -116.5,
+          "whisper_chars": 1580,
+          "pc_chars": 0,
+          "similarity": 0.0,
+          "ad_present_in_pc": false
+        }
+      ],
+      "estimated_drift": -116.5,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.259,
+          "offset": 162.52
+        },
+        {
+          "time": 1494.3,
+          "similarity": 0.962,
+          "offset": -116.5
+        },
+        {
+          "time": 2988.6,
+          "similarity": 0.692,
+          "offset": -174.53
+        },
+        {
+          "time": 4483.0,
+          "similarity": 0.067,
+          "offset": -143.16
+        },
+        {
+          "time": 5887.3,
+          "similarity": 0.377,
+          "offset": -1465.86
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.938268148439281,
+        "duration_delta": 368.98912500000006,
+        "max_duration_delta": 179.31867375000016,
+        "coverage_pass": false,
+        "duration_pass": false,
+        "probes": [],
+        "max_offset": 0.0,
+        "min_similarity": 1.0,
+        "gate_pass_simulated": false,
+        "gate_failure_reason": "coverage"
+      },
+      "gate_pass_simulated": false,
+      "ads_present_in_pc": 0,
+      "ads_present_in_pc_drift_corrected": 0,
+      "ads_missing_from_pc": 4,
+      "ads_missing_from_pc_drift_corrected": 4,
+      "max_drift_offset": 1465.86,
+      "min_drift_similarity": 0.067
+    },
+    {
+      "slug": "the-flop-house",
+      "episode_id": "387d5d658511",
+      "title": "Mercy",
+      "podcast_title": "The Flop House",
+      "status": "ok",
+      "audio_duration": 5025.0,
+      "whisper_segments": 2488,
+      "ad_count": 3,
+      "podcast_uuid": "6b7afbb0-62de-012e-2871-00163e1b201c",
+      "episode_uuid": "eee274c4-2ed7-4b62-b756-748a9ed0f43f",
+      "pc_cue_count": 2113,
+      "vtt_duration": 5024.7,
+      "coverage": 0.9999,
+      "duration_delta": 0.3,
+      "max_duration_delta": 150.75,
+      "coverage_pass": true,
+      "duration_pass": true,
+      "ad_comparisons": [
+        {
+          "start": 3370.64,
+          "end": 3600.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 2803,
+          "pc_chars": 2974,
+          "similarity": 0.735,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 4846.0,
+          "end": 4976.0,
+          "drift_applied": 0.0,
+          "whisper_chars": 1845,
+          "pc_chars": 1846,
+          "similarity": 0.309,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 5017.0,
+          "end": 5025.253875,
+          "drift_applied": 0.0,
+          "whisper_chars": 81,
+          "pc_chars": 81,
+          "similarity": 1.0,
+          "ad_present_in_pc": true
+        }
+      ],
+      "ad_comparisons_drift_corrected": [
+        {
+          "start": 3370.64,
+          "end": 3600.0,
+          "drift_applied": -1.27,
+          "whisper_chars": 2803,
+          "pc_chars": 3047,
+          "similarity": 0.726,
+          "ad_present_in_pc": true
+        },
+        {
+          "start": 4846.0,
+          "end": 4976.0,
+          "drift_applied": -1.27,
+          "whisper_chars": 1845,
+          "pc_chars": 1888,
+          "similarity": 0.281,
+          "ad_present_in_pc": false
+        },
+        {
+          "start": 5017.0,
+          "end": 5025.253875,
+          "drift_applied": -1.27,
+          "whisper_chars": 81,
+          "pc_chars": 93,
+          "similarity": 0.851,
+          "ad_present_in_pc": true
+        }
+      ],
+      "estimated_drift": -1.27,
+      "drift_probes": [
+        {
+          "time": 90.0,
+          "similarity": 0.979,
+          "offset": -1.24
+        },
+        {
+          "time": 1256.2,
+          "similarity": 0.774,
+          "offset": -1.6
+        },
+        {
+          "time": 2512.5,
+          "similarity": 0.568,
+          "offset": -1.27
+        },
+        {
+          "time": 3768.8,
+          "similarity": 0.974,
+          "offset": -1.74
+        },
+        {
+          "time": 4935.0,
+          "similarity": 0.86,
+          "offset": 0.18
+        }
+      ],
+      "gate_simulation": {
+        "coverage": 0.9999402985074627,
+        "duration_delta": 0.3000000000001819,
+        "max_duration_delta": 150.75000000000014,
+        "coverage_pass": true,
+        "duration_pass": true,
+        "probes": [
+          {
+            "time": 90.0,
+            "similarity": 0.979,
+            "offset": -1.24,
+            "matched_time": 88.76
+          },
+          {
+            "time": 1256.25,
+            "similarity": 0.774,
+            "offset": -1.6,
+            "matched_time": 1254.65
+          },
+          {
+            "time": 2512.5,
+            "similarity": 0.568,
+            "offset": -1.27,
+            "matched_time": 2511.23
+          },
+          {
+            "time": 3768.75,
+            "similarity": 0.974,
+            "offset": -1.74,
+            "matched_time": 3767.01
+          },
+          {
+            "time": 4935.0,
+            "similarity": 0.86,
+            "offset": 0.18,
+            "matched_time": 4935.18
+          }
+        ],
+        "max_offset": 1.74,
+        "min_similarity": 0.568,
+        "gate_pass_simulated": true,
+        "gate_failure_reason": "",
+        "probes_passed": 5,
+        "probes_failed": 0,
+        "median_abs_offset": 1.27
+      },
+      "gate_pass_simulated": true,
+      "ads_present_in_pc": 2,
+      "ads_present_in_pc_drift_corrected": 2,
+      "ads_missing_from_pc": 1,
+      "ads_missing_from_pc_drift_corrected": 1,
+      "max_drift_offset": 1.74,
+      "min_drift_similarity": 0.568
+    }
+  ]
+}
