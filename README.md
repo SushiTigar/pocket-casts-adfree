@@ -245,7 +245,9 @@ Required everywhere:
 | Platform | Transcription backend | Notes |
 |----------|-----------------------|-------|
 | macOS (Apple Silicon) | `whisper.cpp` native with `-DWHISPER_METAL=ON` | Fastest path; `scripts/setup_whisper.sh` handles it. |
-| macOS (Intel) / Linux | `whisper.cpp` native (CPU or CUDA) | Same script; set `WHISPER_CUDA=1` before running if you have an NVIDIA GPU. |
+| macOS (Intel) | `whisper.cpp` native (CPU) | `scripts/setup_whisper.sh` builds CPU-only on Intel. |
+| Linux (NVIDIA GPU) | `whisper.cpp` native with `-DGGML_CUDA=ON` | Set `WHISPER_CUDA=1` before running setup. |
+| Linux (no GPU) | `whisper.cpp` native (CPU) | Default if `WHISPER_CUDA` is not set. |
 | Windows / other | Docker image | Use the whisper.cpp server Docker container. The Services panel warns when Docker is in use because it's much slower on ARM/Apple. |
 
 Install the toolchain (macOS example — substitute your OS's package manager):
@@ -1003,6 +1005,17 @@ resolve manually and regenerate.
 | Mid-roll ads still in episode | Full-transcript detection (`LARGE_WINDOW_SECONDS=3600`) often catches only pre/post-roll in one LLM call. Confirm **`SKIP_VERIFICATION_UNDER_SECONDS=0`** (default in quick setup), restart MinusPod, reset processed, and re-queue. Check `/tmp/minuspod.log` for `pass2` / verification lines. Set `86400` only if you accept cheaper runs that may miss mid-rolls. Also check the house-ad filter: `Rejecting suspected content: ... no sponsor identified in reason` in the log indicates a self-promo ad was dropped. |
 | **Verification pass** | On by default in quick setup | `SKIP_VERIFICATION_UNDER_SECONDS=0` runs verification on every episode (~2× LLM cost; catches mid-rolls). Set `86400` to skip verification on episodes under 24 h (cheaper, may miss mid-rolls). |
 
+## Legal / disclaimer
+
+This project is **unaffiliated with Pocket Casts**. The Pocket Casts API
+client used here is reverse-engineered from public iOS client traffic; it
+is unofficial, may break at any time, and may violate Pocket Casts' Terms
+of Service. Use at your own risk.
+
+A Pocket Casts Plus subscription is required to use this pipeline.
+Advertising revenue supports podcast creators — consider keeping ads
+enabled for shows you want to support directly.
+
 ## License & credits
 
 [MIT](LICENSE) — see [NOTICE](NOTICE) for fork attribution.
@@ -1014,6 +1027,3 @@ Built on top of:
   Metal-accelerated transcription.
 - [Ollama](https://ollama.com/) — optional local LLM inference (when
   `LLM_PROVIDER=ollama`).
-
-The unofficial Pocket Casts API client is reverse-engineered from public iOS
-client traffic; use accordingly.
