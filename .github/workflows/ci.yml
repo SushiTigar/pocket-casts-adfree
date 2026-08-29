@@ -15,10 +15,10 @@ jobs:
       fail-fast: false
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4.2.2
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.5.0
         with:
           python-version: ${{ matrix.python-version }}
 

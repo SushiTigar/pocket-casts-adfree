@@ -1974,11 +1974,16 @@ def create_app(email=None, password=None):
             if stop_event.is_set():
                 job["status"] = "stopped"
             else:
-                job["status"] = "completed"
                 total = job["uploaded"]
                 if total == 0:
-                    _job_log(job_id, "warn", "All done! 0 episodes uploaded — nothing to process.")
+                    if job.get("total_episodes", 0) > 0:
+                        job["status"] = "failed"
+                        _job_log(job_id, "error", "All done! 0 episodes uploaded — every podcast errored.")
+                    else:
+                        job["status"] = "completed"
+                        _job_log(job_id, "warn", "All done! 0 episodes uploaded — nothing to process.")
                 else:
+                    job["status"] = "completed"
                     _job_log(job_id, "success", f"All done! {total} episode(s) uploaded to Pocket Casts.")
 
             _job_log(job_id, "info", "Unloading models to free memory...")
