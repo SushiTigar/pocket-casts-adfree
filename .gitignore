@@ -41,6 +41,9 @@ env/
 *.swo
 *~
 
+# GitHub modernize tooling (local editor config)
+.github/modernize/
+
 # Build / dist artefacts -------------------------------------------------
 build/
 dist/
