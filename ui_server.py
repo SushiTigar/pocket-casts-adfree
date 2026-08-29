@@ -1698,8 +1698,9 @@ def create_app(email=None, password=None):
 
                     existing_feeds = mp.list_feeds()
                     feed_slug = None
+                    normalized_rss = normalize_feed_url(rss_url)
                     for f in existing_feeds:
-                        if f.get("sourceUrl") == rss_url:
+                        if normalize_feed_url(f.get("sourceUrl", "")) == normalized_rss:
                             feed_slug = f["slug"]
                             break
 
@@ -1975,7 +1976,10 @@ def create_app(email=None, password=None):
             else:
                 job["status"] = "completed"
                 total = job["uploaded"]
-                _job_log(job_id, "success", f"All done! {total} episode(s) uploaded to Pocket Casts.")
+                if total == 0:
+                    _job_log(job_id, "warn", "All done! 0 episodes uploaded — nothing to process.")
+                else:
+                    _job_log(job_id, "success", f"All done! {total} episode(s) uploaded to Pocket Casts.")
 
             _job_log(job_id, "info", "Unloading models to free memory...")
             unload_ollama_models()

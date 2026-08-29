@@ -2417,6 +2417,7 @@ class TestServicesManager(unittest.TestCase):
     def test_read_log_tail_missing_file_returns_empty(self):
         self.assertEqual(self.sm._read_log_tail(Path("/nonexistent/x.log")), "")
 
+    @unittest.skipUnless(sys.platform == "darwin", "macOS-only memory pressure check")
     def test_get_memory_pressure_warns_on_low_free(self):
         """Preflight must surface a warning when free RAM is dangerously
         low. The threshold (8 GB) is what we've found to be the difference
@@ -2453,6 +2454,7 @@ class TestServicesManager(unittest.TestCase):
         self.assertIsNotNone(result["warning"])
         self.assertIn("free", result["warning"].lower())
 
+    @unittest.skipUnless(sys.platform == "darwin", "macOS-only memory pressure check")
     def test_get_memory_pressure_no_warning_when_plenty_free(self):
         page = 4096
         free_pages = int(16 * 1024**3) // page  # 16 GB free
@@ -2519,6 +2521,10 @@ class TestServicesManager(unittest.TestCase):
         finally:
             os.unlink(tmp)
 
+    @unittest.skipUnless(
+        (ROOT / "MinusPod" / "src" / "config.py").exists(),
+        "MinusPod not vendored",
+    )
     def test_start_minuspod_passes_cost_tunables(self):
         """start_minuspod must include LARGE_WINDOW_SECONDS etc. in the spawned
         subprocess env so get_stage_tunable can resolve them. Without this,
