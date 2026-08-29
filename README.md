@@ -1005,7 +1005,7 @@ resolve manually and regenerate.
 
 ## License & credits
 
-[MIT](LICENSE).
+[MIT](LICENSE) — see [NOTICE](NOTICE) for fork attribution.
 
 Built on top of:
 - [MinusPod](https://github.com/ttlequals0/MinusPod) by ttlequals0 — ad

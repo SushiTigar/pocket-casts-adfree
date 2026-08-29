@@ -1,0 +1,9 @@
+Pocket Casts Ad-Free Pipeline
+=============================
+
+This project is a fork of MinusPod (https://github.com/ttlequals0/MinusPod),
+which is also MIT-licensed. The patches/ directory contains the local
+modifications applied to upstream MinusPod and whisper.cpp.
+
+Original MinusPod copyright:
+Copyright (c) 2024 MinusPod contributors
