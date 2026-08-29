@@ -54,6 +54,7 @@ MINUSPOD_PATCH = ROOT / "patches" / "minuspod-local.patch"
 MINUSPOD_ADDITIONAL_PATCHES = [
     ROOT / "patches" / "llm-cost-optimizations.patch",
     ROOT / "patches" / "house-ad-detection.patch",
+    ROOT / "patches" / "chapter-granularity.patch",
 ]
 
 _KEYCHAIN_ENV_MAP = {
@@ -492,8 +493,13 @@ def stop_ollama() -> dict:
 
 
 def start_ollama() -> dict:
-    if _pid_listening(11434):
+    # Require both a listening PID AND a healthy HTTP response, like start_whisper().
+    if _pid_listening(11434) and _http_ok("http://localhost:11434/api/tags"):
         return {"ok": True, "note": "already running"}
+    # If port is bound but unhealthy, treat as stopped.
+    if _pid_listening(11434):
+        log.info("Port 11434 bound but Ollama unhealthy; stopping before restart")
+        stop_ollama()
     if shutil.which("brew"):
         try:
             subprocess.run(
@@ -674,6 +680,10 @@ def stop_minuspod() -> dict:
     stop it. Concretely: PPID is reparented to launchd (1) and the process
     group leader has exited, so SIGTERM is silently absorbed.
     Escalate to SIGKILL after a short grace period.
+
+    Hardened: verify the port is genuinely free (no listener at all) rather
+    than that the original listener pid went away, so a surviving child
+    can't impersonate a running service on the next start.
     """
     pid = _pid_listening(8000)
     if not pid:
@@ -686,7 +696,7 @@ def stop_minuspod() -> dict:
     except Exception:
         pass
 
-    # Give Flask up to 5s to exit cleanly.
+    # Give Flask up to 5s to exit cleanly. Check PORT is free, not just pid.
     if _wait_until(lambda: _pid_listening(8000) is None, timeout=5):
         return {"ok": True}
 
@@ -697,6 +707,7 @@ def stop_minuspod() -> dict:
     except Exception:
         pass
 
+    # Verify port is genuinely free after kill.
     ok = _wait_until(lambda: _pid_listening(8000) is None, timeout=10)
     return {"ok": ok, "note": "killed (SIGTERM ignored)"} if ok else {"ok": False}
 
@@ -803,8 +814,15 @@ def update_minuspod() -> dict:
 
 
 def start_minuspod() -> dict:
-    if _pid_listening(8000):
+    # Require both a listening PID AND a healthy HTTP response, like start_whisper().
+    # A lingering worker holding the inherited socket after os.killpg would
+    # satisfy the pid check but not serve requests.
+    if _pid_listening(8000) and _http_ok("http://localhost:8000/api/v1/health", expect_substr="healthy"):
         return {"ok": True, "note": "already running"}
+    # If port is bound but unhealthy, treat as stopped: stop first, then start clean.
+    if _pid_listening(8000):
+        log.info("Port 8000 bound but MinusPod unhealthy; stopping before restart")
+        stop_minuspod()
     # Auto-update before starting so we always run the latest upstream + local patches.
     # BUT: skip the pull if the local MinusPod already has our local patches
     # applied (the patches include symbols that upstream doesn't, like
@@ -880,9 +898,10 @@ def start_minuspod() -> dict:
         "API_CHUNK_DURATION_SECONDS": env.get("API_CHUNK_DURATION_SECONDS", "300"),
         "BASE_URL": "http://localhost:8000",
         "HF_HOME": str(MINUSPOD_DIR / "data" / ".cache"),
-        "SKIP_VERIFICATION": "true",
-        "WINDOW_SIZE_SECONDS": "600",
-        "WINDOW_OVERLAP_SECONDS": "120",
+        # Window geometry — read from env so users can override the MinusPod defaults.
+        # These flow through MinusPod's get_stage_tunable() as env > DB > default.
+        "WINDOW_SIZE_SECONDS": env.get("WINDOW_SIZE_SECONDS", ""),
+        "WINDOW_OVERLAP_SECONDS": env.get("WINDOW_OVERLAP_SECONDS", ""),
         # Default to 8192 so a single-window ad list (10 hr episode on
         # LARGE_WINDOW_SECONDS=36000) fits in one response. The upstream
         # default of 4096 risks truncating long-form shows. Override via
@@ -926,6 +945,27 @@ def start_minuspod() -> dict:
         env.get("WINDOW_SIZE_SECONDS"),
         env.get("WINDOW_OVERLAP_SECONDS"),
     )
+
+    # Config reconciliation: log effective values and their sources
+    # (env / DB / default) after MinusPod is healthy.
+    def _log_config_reconciliation() -> None:
+        try:
+            settings = get_minuspod_settings()
+            if not settings:
+                return
+            stage_tunables = settings.get("stageTunables", {})
+            stage_defaults = settings.get("stageTunableDefaults", {})
+            env_overrides = settings.get("stageTunableEnvOverrides", {})
+            for key, default_val in stage_defaults.items():
+                effective = stage_tunables.get(key, default_val)
+                source = "env" if env_overrides.get(key) else "default"
+                if key in stage_tunables and not env_overrides.get(key):
+                    source = "DB"
+                log.info(f"  Config: {key}={effective} (source: {source})")
+        except Exception:
+            pass
+
+    _log_config_reconciliation()
     log_fd = open(MINUSPOD_LOG, "ab")
     subprocess.Popen(
         [
@@ -945,6 +985,10 @@ def start_minuspod() -> dict:
     if ok:
         try:
             sync_minuspod_model_from_env()
+        except Exception:
+            pass
+        try:
+            sync_chapters_enabled_from_env()
         except Exception:
             pass
     return {"ok": ok}
@@ -1010,6 +1054,28 @@ def sync_minuspod_model_from_env() -> dict:
         "model": model,
         "previous": current,
     }
+
+
+def sync_chapters_enabled_from_env() -> dict:
+    """Push ``CHAPTERS_ENABLED`` from the environment into MinusPod's settings DB.
+
+    MinusPod persists chapters_enabled in SQLite. The env var is documented
+    in README but was never wired. This makes .env the single source of truth.
+    """
+    chapters_env = os.environ.get("CHAPTERS_ENABLED", "").strip().lower()
+    if chapters_env not in ("true", "false"):
+        return {"ok": True, "skipped": True, "reason": "CHAPTERS_ENABLED not set or invalid"}
+    try:
+        r = httpx.put(
+            "http://localhost:8000/api/v1/settings/ad-detection",
+            json={"chaptersEnabled": chapters_env == "true"},
+            timeout=10,
+        )
+        if r.status_code < 400:
+            return {"ok": True, "chapters_enabled": chapters_env}
+        return {"ok": False, "status_code": r.status_code, "error": r.text}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 def set_minuspod_model(model: str) -> dict:
@@ -1359,6 +1425,36 @@ def get_memory_pressure() -> dict:
         "warning": warning,
         "recommended_model": recommended_model,
     }
+
+
+def _main():
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python -m services_manager <command>", file=sys.stderr)
+        sys.exit(1)
+    cmd = sys.argv[1]
+    if cmd == "start_minuspod":
+        import json
+        result = start_minuspod()
+        print(json.dumps(result))
+        sys.exit(0 if result.get("ok") else 1)
+    elif cmd == "start_whisper":
+        import json
+        result = start_whisper()
+        print(json.dumps(result))
+        sys.exit(0 if result.get("ok") else 1)
+    elif cmd == "start_ollama":
+        import json
+        result = start_ollama()
+        print(json.dumps(result))
+        sys.exit(0 if result.get("ok") else 1)
+    else:
+        print(f"Unknown command: {cmd}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    _main()
 
 
 import re as _re  # noqa: E402  -- keep regex local to this helper

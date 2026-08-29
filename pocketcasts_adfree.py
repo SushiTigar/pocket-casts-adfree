@@ -1217,32 +1217,48 @@ def _retry_up_next(fn, *args, attempts: int = 3, base_delay: float = 1.0, **kwar
     raise last_exc
 
 
+class MinusPodUnavailable(Exception):
+    """Raised when MinusPod is not reachable."""
+    pass
+
+
 class MinusPodClient:
     """Client for the local MinusPod API."""
 
     def __init__(self, base_url: str = MINUSPOD_API):
         self.base_url = base_url.rstrip("/")
-        self.client = httpx.Client(timeout=httpx.Timeout(60.0, read=300.0))
+        # Retry connection establishment (not requests that already reached server)
+        transport = httpx.HTTPTransport(retries=3)
+        self.client = httpx.Client(
+            transport=transport,
+            timeout=httpx.Timeout(60.0, read=300.0),
+        )
+
+    def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+        """Make a request with centralized error handling."""
+        url = f"{self.base_url}{path}"
+        try:
+            resp = self.client.request(method, url, **kwargs)
+            resp.raise_for_status()
+            return resp
+        except httpx.ConnectError as e:
+            raise MinusPodUnavailable(
+                "MinusPod is not reachable — start it from the Services panel"
+            ) from e
 
     def health(self) -> dict:
-        resp = self.client.get(f"{self.base_url}/api/v1/health")
-        resp.raise_for_status()
+        resp = self._request("GET", "/api/v1/health")
         return resp.json()
 
     def list_feeds(self) -> list[dict]:
-        resp = self.client.get(f"{self.base_url}/api/v1/feeds")
-        resp.raise_for_status()
+        resp = self._request("GET", "/api/v1/feeds")
         return resp.json().get("feeds", [])
 
     def add_feed(self, rss_url: str, slug: str = None, max_episodes: int = 5) -> dict:
         body = {"sourceUrl": rss_url, "maxEpisodes": max_episodes}
         if slug:
             body["slug"] = slug
-        resp = self.client.post(
-            f"{self.base_url}/api/v1/feeds",
-            json=body,
-            timeout=60,
-        )
+        resp = self._request("POST", "/api/v1/feeds", json=body, timeout=60)
         if resp.status_code == 409:
             log.info(f"  Feed already exists (409): {rss_url}")
             error_msg = ""
@@ -1266,13 +1282,11 @@ class MinusPodClient:
                 if normalize_feed_url(f.get("sourceUrl", "")) == target:
                     return f
             return {"slug": None, "sourceUrl": rss_url, "already_exists": True}
-        resp.raise_for_status()
         return resp.json()
 
     def delete_feed(self, slug: str) -> bool:
         """Delete a feed from MinusPod. Used to reset failed episodes."""
-        resp = self.client.delete(f"{self.base_url}/api/v1/feeds/{slug}")
-        resp.raise_for_status()
+        self._request("DELETE", f"/api/v1/feeds/{slug}")
         log.info(f"  Deleted MinusPod feed: {slug}")
         return True
 
@@ -1283,24 +1297,20 @@ class MinusPodClient:
         older than MinusPod's default 25-item page, and title-based matching
         only works if we actually have those rows loaded.
         """
-        resp = self.client.get(
-            f"{self.base_url}/api/v1/feeds/{slug}/episodes?limit={limit}"
-        )
-        resp.raise_for_status()
+        resp = self._request("GET", f"/api/v1/feeds/{slug}/episodes?limit={limit}")
         return resp.json().get("episodes", [])
 
     def process_episodes_bulk(self, slug: str, episode_ids: list[str]) -> dict:
-        resp = self.client.post(
-            f"{self.base_url}/api/v1/feeds/{slug}/episodes/bulk",
+        resp = self._request(
+            "POST",
+            f"/api/v1/feeds/{slug}/episodes/bulk",
             json={"action": "process", "episodeIds": episode_ids},
             timeout=30,
         )
-        resp.raise_for_status()
         return resp.json()
 
     def get_status(self) -> dict:
-        resp = self.client.get(f"{self.base_url}/api/v1/status")
-        resp.raise_for_status()
+        resp = self._request("GET", "/api/v1/status")
         return resp.json()
 
     def wait_for_processing(
@@ -1322,6 +1332,8 @@ class MinusPodClient:
                     if progress_callback:
                         progress_callback(msg)
                     last_stage = stage
+            except MinusPodUnavailable:
+                raise
             except Exception:
                 pass
 
@@ -1336,6 +1348,8 @@ class MinusPodClient:
                             return ep
                         elif ep.get("status") in ("failed", "permanently_failed"):
                             raise RuntimeError(f"Processing failed: {ep.get('error')}")
+            except MinusPodUnavailable:
+                raise
             except RuntimeError:
                 raise
             except Exception:
@@ -1350,8 +1364,9 @@ class MinusPodClient:
         MinusPod responds 409 (the episode is still being worked on internally).
         In that case the caller should keep polling rather than counting a retry.
         """
-        resp = self.client.post(
-            f"{self.base_url}/api/v1/feeds/{slug}/episodes/{episode_id}/reprocess",
+        resp = self._request(
+            "POST",
+            f"/api/v1/feeds/{slug}/episodes/{episode_id}/reprocess",
             json={"mode": mode},
             timeout=30,
         )
@@ -1363,7 +1378,6 @@ class MinusPodClient:
                 "MinusPod is still processing, keeping poll loop alive."
             )
             return {"already_processing": True}
-        resp.raise_for_status()
         log.info(f"  Triggered reprocess for {slug}:{episode_id}")
         return resp.json()
 
@@ -1375,16 +1389,16 @@ class MinusPodClient:
         instead of spinning forever on a job that will never complete.
         """
         try:
-            resp = self.client.get(
-                f"{self.base_url}/api/v1/feeds/{slug}/episodes/{episode_id}",
+            resp = self._request(
+                "GET",
+                f"/api/v1/feeds/{slug}/episodes/{episode_id}",
                 timeout=15,
             )
-            if resp.status_code == 404:
-                return None
-            resp.raise_for_status()
             return resp.json()
-        except Exception:
-            return None
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
 
     def download_processed_audio(
         self, slug: str, episode_id: str, output_dir: Path,
@@ -1824,12 +1838,15 @@ class MinusPodClient:
         )
 
         try:
-            self.client.put(
-                f"{self.base_url}/api/v1/settings/ad-detection",
+            self._request(
+                "PUT",
+                "/api/v1/settings/ad-detection",
                 json={"systemPrompt": fast_prompt},
                 headers={"Content-Type": "application/json"},
             )
             log.info("Set improved system prompt (~800 tokens)")
+        except MinusPodUnavailable:
+            raise
         except Exception as e:
             log.warning(f"Could not update system prompt: {e}")
 
@@ -1847,14 +1864,15 @@ class MinusPodClient:
             log.warning("LLM_PROVIDER=%s but OPENAI_MODEL is not set", provider)
             return
         try:
-            resp = self.client.get(f"{self.base_url}/api/v1/settings", timeout=5)
+            resp = self._request("GET", "/api/v1/settings", timeout=5)
             if resp.status_code == 200:
                 cm = resp.json().get("claudeModel")
                 current = cm.get("value") if isinstance(cm, dict) else cm
                 if current == model:
                     return
-            self.client.put(
-                f"{self.base_url}/api/v1/settings/ad-detection",
+            self._request(
+                "PUT",
+                "/api/v1/settings/ad-detection",
                 json={
                     "claudeModel": model,
                     "verificationModel": model,
@@ -1863,30 +1881,38 @@ class MinusPodClient:
                 timeout=10,
             )
             log.info(f"Synced MinusPod ad-detection model from .env: {model}")
+        except MinusPodUnavailable:
+            raise
         except Exception as e:
             log.warning(f"Could not sync MinusPod model from .env: {e}")
 
     def lower_confidence_threshold(self):
         """Lower the minimum cut confidence to catch more borderline ads."""
         try:
-            self.client.put(
-                f"{self.base_url}/api/v1/settings/ad-detection",
+            self._request(
+                "PUT",
+                "/api/v1/settings/ad-detection",
                 json={"minCutConfidence": 0.65},
                 headers={"Content-Type": "application/json"},
             )
             log.info("Lowered min cut confidence to 0.65")
+        except MinusPodUnavailable:
+            raise
         except Exception as e:
             log.warning(f"Could not update confidence: {e}")
 
     def disable_auto_process(self):
         """Disable background auto-processing to prevent CPU usage when idle."""
         try:
-            self.client.put(
-                f"{self.base_url}/api/v1/settings/ad-detection",
+            self._request(
+                "PUT",
+                "/api/v1/settings/ad-detection",
                 json={"autoProcessEnabled": False},
                 headers={"Content-Type": "application/json"},
             )
             log.info("Disabled MinusPod auto-processing")
+        except MinusPodUnavailable:
+            raise
         except Exception as e:
             log.warning(f"Could not disable auto-process: {e}")
 
@@ -1938,44 +1964,59 @@ class MinusPodClient:
             return False
 
     def get_episode_detail(self, slug: str, episode_id: str) -> dict:
-        resp = self.client.get(
-            f"{self.base_url}/api/v1/feeds/{slug}/episodes/{episode_id}",
+        resp = self._request(
+            "GET",
+            f"/api/v1/feeds/{slug}/episodes/{episode_id}",
             timeout=30,
         )
-        resp.raise_for_status()
         return resp.json()
 
     def get_chapters(self, slug: str, episode_id: str) -> list[dict] | None:
         try:
-            resp = self.client.get(
-                f"{self.base_url}/episodes/{slug}/{episode_id}/chapters.json",
+            resp = self._request(
+                "GET",
+                f"/episodes/{slug}/{episode_id}/chapters.json",
                 timeout=15,
             )
             if resp.status_code == 200:
                 data = resp.json()
                 return data.get("chapters", [])
-        except Exception:
-            pass
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                log.warning(
+                    f"MinusPod returned no chapters for {slug}/{episode_id} — "
+                    f"chapters_enabled may be off."
+                )
+            else:
+                log.warning(
+                    f"MinusPod chapters request failed for {slug}/{episode_id}: "
+                    f"HTTP {e.response.status_code}"
+                )
+        except MinusPodUnavailable:
+            raise
+        except Exception as e:
+            log.warning(f"Error fetching chapters for {slug}/{episode_id}: {e}")
         return None
 
     def get_artwork(self, slug: str) -> bytes | None:
         try:
-            resp = self.client.get(
-                f"{self.base_url}/api/v1/feeds/{slug}/artwork",
-                timeout=30,
-            )
+            resp = self._request("GET", f"/api/v1/feeds/{slug}/artwork", timeout=30)
             if resp.status_code == 200 and resp.content:
                 return resp.content
+        except MinusPodUnavailable:
+            raise
         except Exception:
             pass
         return None
 
     def get_feed_info(self, slug: str) -> dict | None:
         try:
-            resp = self.client.get(f"{self.base_url}/api/v1/feeds")
+            resp = self._request("GET", "/api/v1/feeds")
             for f in resp.json().get("feeds", []):
                 if f["slug"] == slug:
                     return f
+        except MinusPodUnavailable:
+            raise
         except Exception:
             pass
         return None
@@ -2085,11 +2126,10 @@ def embed_metadata(
 
     # Chapters (ID3 CHAP + CTOC frames)
     chapters = mp_client.get_chapters(feed_slug, episode_id)
+    # Always clear existing chapter frames so trimmed files never carry stale markers
+    tags.delall("CHAP")
+    tags.delall("CTOC")
     if chapters:
-        # Clear existing chapter frames
-        tags.delall("CHAP")
-        tags.delall("CTOC")
-
         chap_ids = []
         for i, ch in enumerate(chapters):
             start_ms = int(ch["startTime"] * 1000)
@@ -2114,6 +2154,8 @@ def embed_metadata(
             sub_frames=[TIT2(encoding=3, text=["Table of Contents"])],
         ))
         log.info(f"  Embedded {len(chapters)} chapters")
+    else:
+        log.info("  No chapters to embed (chapters_enabled may be off in MinusPod)")
 
     # Transcript as synchronized lyrics (SYLT) and unsynchronized (USLT)
     if transcript:
@@ -2137,6 +2179,24 @@ def embed_metadata(
     try:
         audio.save()
         log.info(f"  Metadata embedded successfully")
+
+        # Post-embed asset manifest: verify what was actually written
+        audio = MP3(str(mp3_path))
+        tags = audio.tags
+        chap_count = len(tags.getall("CHAP")) if tags else 0
+        has_ctoc = bool(tags.getall("CTOC")) if tags else False
+        has_artwork = bool(tags.getall("APIC")) if tags else False
+        has_transcript = bool(tags.getall("SYLT")) or bool(tags.getall("USLT")) if tags else False
+        has_desc = bool(tags.getall("COMM")) or bool(tags.getall("TDES")) if tags else False
+        artwork_kb = 0
+        if has_artwork:
+            apic_frames = tags.getall("APIC")
+            if apic_frames:
+                artwork_kb = len(apic_frames[0].data) // 1024
+        log.info(
+            f"  Asset manifest: chapters={chap_count}, transcript={'yes' if has_transcript else 'no'}, "
+            f"artwork={artwork_kb}KB, description={'yes' if has_desc else 'no'}"
+        )
     except Exception as e:
         log.warning(f"  Failed to save metadata: {e}")
 

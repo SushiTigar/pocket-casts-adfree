@@ -51,6 +51,50 @@ job_queue: deque = deque()
 queue_lock = threading.Lock()
 active_job_id: str | None = None
 
+# Idle lease for background services — keeps services warm between jobs.
+# A job acquires a lease on entry and releases it in finally.
+# A background timer stops services only after the lease refcount has been
+# zero for IDLE_GRACE_SECONDS (default 5 minutes).
+_active_leases = 0
+_leases_lock = threading.Lock()
+_idle_timer: threading.Timer | None = None
+_idle_timer_lock = threading.Lock()
+IDLE_GRACE_SECONDS = int(os.environ.get("SERVICES_IDLE_GRACE_SECONDS", "300"))  # 5 min
+
+def _acquire_lease() -> None:
+    global _idle_timer
+    with _leases_lock:
+        global _active_leases
+        _active_leases += 1
+        if _idle_timer:
+            _idle_timer.cancel()
+            _idle_timer = None
+
+def _release_lease() -> None:
+    global _idle_timer
+    with _leases_lock:
+        global _active_leases
+        _active_leases = max(0, _active_leases - 1)
+        if _active_leases == 0 and _idle_timer is None:
+            _idle_timer = threading.Timer(IDLE_GRACE_SECONDS, _idle_timeout)
+            _idle_timer.daemon = True
+            _idle_timer.start()
+
+def _idle_timeout() -> None:
+    global _idle_timer
+    with _leases_lock:
+        if _active_leases == 0:
+            log.info("Idle lease expired (%ds). Stopping all background services...", IDLE_GRACE_SECONDS)
+            try:
+                services_manager.stop_all_services()
+                log.info("All background services stopped.")
+            except Exception as e:
+                log.error("Failed to stop services on idle timeout: %s", e)
+            _idle_timer = None
+        else:
+            # A new job arrived during the grace period; reset timer.
+            _idle_timer = None
+
 # ---------------------------------------------------------------------------
 # Process-level shutdown hooks — registered once at import time so that
 # multiple calls to create_app() (e.g. in tests) don't stack up duplicates.
@@ -1458,6 +1502,7 @@ def create_app(email=None, password=None):
                 services_manager.start_all_services()
             else:
                 services_manager.sync_minuspod_model_from_env()
+                services_manager.sync_chapters_enabled_from_env()
         except Exception:
             pass
         job["pause_event"].clear()
@@ -1915,12 +1960,14 @@ def create_app(email=None, password=None):
                     if pause_event.is_set() and not stop_event.is_set():
                         job["paused"] = True
                         _job_log(job_id, "info", "Current episode done. Pausing and freeing resources...")
+                        _release_lease()  # let services idle-stop while paused
                         _cleanup_for_pause()  # unload Ollama + stop Whisper
                         while pause_event.is_set():
                             if stop_event.is_set():
                                 break
                             pause_event.wait(timeout=1)
                         if not stop_event.is_set():
+                            _acquire_lease()  # re-acquire on resume
                             _job_log(job_id, "info", "Job resumed. Services restarting...")
 
             if stop_event.is_set():
@@ -1941,17 +1988,10 @@ def create_app(email=None, password=None):
             with queue_lock:
                 if active_job_id == job_id:
                     active_job_id = None
-            # Check if there are no other queued or running jobs, then stop services.
-            # We check if active_job_id is None and the job_queue is empty.
-            with queue_lock:
-                has_next = len(job_queue) > 0
-            if not has_next and not active_job_id:
-                _job_log(job_id, "info", "No more jobs in queue. Stopping all background services...")
-                try:
-                    services_manager.stop_all_services()
-                    _job_log(job_id, "info", "All background services stopped.")
-                except Exception as e:
-                    _job_log(job_id, "error", f"Failed to stop services: {e}")
+            # Release idle lease — services will stop after IDLE_GRACE_SECONDS
+            # if no new job arrives. This avoids the check-then-act race where
+            # a job queued during teardown would start into a cold MinusPod.
+            _release_lease()
             _maybe_start_next_job()
 
     # Log the registered artwork endpoint at startup so the user can grep

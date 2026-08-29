@@ -184,55 +184,12 @@ if curl -s "http://localhost:$MINUSPOD_PORT/api/v1/health" | grep -q "healthy" 2
     echo "  Already running (skipping update check while running)"
 else
     _update_minuspod "$MINUSPOD_DIR"
-    (
-        cd "$MINUSPOD_DIR/src"
-        source ../venv/bin/activate
-        DATA_DIR="$MINUSPOD_DIR/data" \
-        LLM_PROVIDER="$LLM_PROVIDER" \
-        OPENAI_BASE_URL="$OPENAI_BASE_URL" \
-        OPENAI_API_KEY="${OPENAI_API_KEY:-not-needed}" \
-        OPENROUTER_API_KEY="${OPENROUTER_API_KEY:-}" \
-        OPENROUTER_PROVIDER_ORDER="${OPENROUTER_PROVIDER_ORDER:-}" \
-        OPENROUTER_ALLOW_FALLBACKS="${OPENROUTER_ALLOW_FALLBACKS:-}" \
-        OPENROUTER_PROVIDER_SORT="${OPENROUTER_PROVIDER_SORT:-}" \
-        OPENROUTER_PROVIDER_ONLY="${OPENROUTER_PROVIDER_ONLY:-}" \
-        OPENROUTER_PROVIDER_IGNORE="${OPENROUTER_PROVIDER_IGNORE:-}" \
-        ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
-        OPENAI_MODEL="$LLM_MODEL" \
-        WHISPER_BACKEND=openai-api \
-        WHISPER_API_BASE_URL="http://localhost:$WHISPER_PORT/v1" \
-        WHISPER_DEVICE=cpu \
-        WHISPER_SKIP_PREPROCESS=1 \
-        HTTP_TIMEOUT_WHISPER="${HTTP_TIMEOUT_WHISPER:-1800}" \
-        API_CHUNK_DURATION_SECONDS="${API_CHUNK_DURATION_SECONDS:-300}" \
-        BASE_URL="http://localhost:$MINUSPOD_PORT" \
-        HF_HOME="$MINUSPOD_DIR/data/.cache" \
-        SKIP_VERIFICATION=true \
-        WINDOW_SIZE_SECONDS=600 \
-        WINDOW_OVERLAP_SECONDS=120 \
-        AD_DETECTION_MAX_TOKENS=4096 \
-        OLLAMA_NUM_PARALLEL="${OLLAMA_NUM_PARALLEL:-1}" \
-        OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-1}" \
-        OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:-30s}" \
-        LLM_TIMEOUT_LOCAL="${LLM_TIMEOUT_LOCAL:-1200}" \
-        PYTHONPATH=. python -m flask --app main_app:app run --host 0.0.0.0 --port "$MINUSPOD_PORT" \
-            > /tmp/minuspod.log 2>&1 &
-    )
-    echo "  PID: $!"
-    # MinusPod blocks on LLM json_format probe (~30s) + RSS refresh before binding.
-    MINUSPOD_OK=false
-    for i in $(seq 1 24); do
-        if curl -s "http://localhost:$MINUSPOD_PORT/api/v1/health" | grep -q "healthy" 2>/dev/null; then
-            MINUSPOD_OK=true
-            break
-        fi
-        sleep 5
-    done
-    if [ "$MINUSPOD_OK" = true ]; then
-        echo "  OK"
-    else
-        echo "  WARNING: MinusPod may still be starting. Check /tmp/minuspod.log"
-    fi
+    # Delegate to services_manager.start_minuspod() which handles env passthrough,
+    # health checks, config reconciliation, and schema sync in one place.
+    cd "$SCRIPT_DIR"
+    source venv/bin/activate 2>/dev/null || true
+    python3 -m services_manager start_minuspod
+    echo "  MinusPod start delegated to services_manager (see /tmp/minuspod.log)"
 
     # 4. Run sponsor audit to keep known_sponsors current
     echo "[4/4] Running sponsor audit..."
@@ -243,12 +200,6 @@ else
     else
         echo "  Skipping: audit script not found"
     fi
-
-    # Ensure the model is set correctly and disable auto-processing
-    sleep 2
-    curl -s -X PUT "http://localhost:$MINUSPOD_PORT/api/v1/settings/ad-detection" \
-        -H "Content-Type: application/json" \
-        -d "{\"claudeModel\": \"$LLM_MODEL\", \"verificationModel\": \"$LLM_MODEL\", \"chaptersModel\": \"$LLM_MODEL\", \"autoProcessEnabled\": false}" > /dev/null 2>&1
 fi
 
 echo ""

@@ -1,0 +1,22 @@
+--- a/src/config.py
++++ b/src/config.py
+@@ -841,7 +841,7 @@ STAGE_TUNABLE_DEFAULTS = {
+     'chapter_boundary_temperature': 0.1,
+-    'chapter_boundary_max_tokens': 300,
++    'chapter_boundary_max_tokens': 1000,
+     'chapter_boundary_reasoning_budget': None,
+     'chapter_boundary_reasoning_level': None,
+ 
+--- a/src/chapters_generator.py
++++ b/src/chapters_generator.py
+@@ -548,7 +548,10 @@ class ChaptersGenerator:
+                 if transcript_text and len(transcript_text) > 500:
+-                    num_splits = min(int(episode_duration / 600), 6)
++                    # Scale num_splits with duration: ~1 split per 10 minutes,
++                    # minimum 3 for substantial episodes, capped at 12.
++                    num_splits = min(max(int(episode_duration / 600), 3), 12)
+ 
+                     logger.info(
+                         f"Requesting {num_splits} topic boundaries from AI for "
+                         f"{episode_duration:.0f}s episode"
+                     )
