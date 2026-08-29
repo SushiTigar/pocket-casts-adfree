@@ -16,6 +16,9 @@ secrets.ps1
 podcast_artwork_cache.json
 *.log
 .cache/
+data/pc_transcript_validation.json
+data/*_validation.json
+data/local/
 
 # Python -----------------------------------------------------------------
 __pycache__/

@@ -47,7 +47,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger("validate-pc-transcripts")
 
 MINUSPOD_DB = ROOT / "MinusPod" / "data" / "podcast.db"
-DEFAULT_OUTPUT = ROOT / "data" / "pc_transcript_validation.json"
+DEFAULT_OUTPUT = ROOT / "data" / "local" / "pc_transcript_validation.json"
 
 
 def _load_episodes(
