@@ -1704,6 +1704,18 @@ def create_app(email=None, password=None):
                             feed_slug = f["slug"]
                             break
 
+                    # Fallback: try matching by podcast title if URL match fails
+                    if not feed_slug:
+                        pod_title = pod.get("title", "")
+                        if pod_title:
+                            pod_title_norm = _normalize_title(pod_title)
+                            for f in existing_feeds:
+                                f_title = f.get("title", "")
+                                if _normalize_title(f_title) == pod_title_norm:
+                                    feed_slug = f["slug"]
+                                    _job_log(job_id, "info", f"  Matched feed by title: {pod_title} → {feed_slug}")
+                                    break
+
                     if not feed_slug:
                         try:
                             result = mp.add_feed(rss_url, max_episodes=10)

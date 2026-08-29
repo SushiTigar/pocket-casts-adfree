@@ -1236,10 +1236,12 @@ class MinusPodClient:
 
     def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
         """Make a request with centralized error handling."""
+        allowed_status = kwargs.pop("allowed_status", ())
         url = f"{self.base_url}{path}"
         try:
             resp = self.client.request(method, url, **kwargs)
-            resp.raise_for_status()
+            if resp.status_code not in allowed_status:
+                resp.raise_for_status()
             return resp
         except httpx.ConnectError as e:
             raise MinusPodUnavailable(
@@ -1258,7 +1260,7 @@ class MinusPodClient:
         body = {"sourceUrl": rss_url, "maxEpisodes": max_episodes}
         if slug:
             body["slug"] = slug
-        resp = self._request("POST", "/api/v1/feeds", json=body, timeout=60)
+        resp = self._request("POST", "/api/v1/feeds", json=body, timeout=60, allowed_status=(409,))
         if resp.status_code == 409:
             log.info(f"  Feed already exists (409): {rss_url}")
             error_msg = ""
