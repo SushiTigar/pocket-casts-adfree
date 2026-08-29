@@ -1,9 +1,12 @@
 # MinusPod patch baseline
-
-The patches in this directory apply on top of:
-
-    Repo:   https://github.com/ttlequals0/MinusPod.git
-    Commit: 61eb125a1e73ffdff6450b2d29d6e75772f5d00a
-
-Run `./scripts/setup_minuspod.sh` to clone the repo at this revision and apply
-the patches automatically.
+#
+# The patches in this directory apply on top of:
+#
+#     Repo:   https://github.com/ttlequals0/MinusPod.git
+#     Commit: d900bdd0622b89089247bafe6a5f9db87876233a
+#
+# Note: The scripts/setup_minuspod.sh and services_manager.py update_minuspod()
+# functions are the authoritative source for the pin. This file is for reference.
+#
+# Run `./scripts/setup_minuspod.sh` to clone the repo at this revision and apply
+# the patches automatically.

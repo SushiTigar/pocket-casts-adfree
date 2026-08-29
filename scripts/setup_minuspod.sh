@@ -16,6 +16,7 @@ PATCH="${ROOT}/patches/minuspod-local.patch"
 ADDITIONAL_PATCHES=(
   "${ROOT}/patches/llm-cost-optimizations.patch"
   "${ROOT}/patches/house-ad-detection.patch"
+  "${ROOT}/patches/chapter-granularity.patch"
 )
 
 if [[ ! -d "${TARGET}/.git" ]]; then
