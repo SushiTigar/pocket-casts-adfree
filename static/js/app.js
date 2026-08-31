@@ -17,6 +17,122 @@ let podcasts = [];
     let serviceHealth = { minuspod: false, pocketcasts: false };
     let currentView = 'dashboard';
     let historyEntries = null;
+    let logForceOpen = false;
+    let logUnreadCount = 0;
+
+    function el(id) { return document.getElementById(id); }
+
+    function toast(message, type = 'info', duration = 4000) {
+      const container = el('toast-container');
+      if (!container) return;
+      const node = document.createElement('div');
+      node.className = 'toast ' + type;
+      node.textContent = message;
+      container.appendChild(node);
+      setTimeout(() => {
+        node.style.opacity = '0';
+        node.style.transition = 'opacity 0.2s';
+        setTimeout(() => node.remove(), 200);
+      }, duration);
+    }
+
+    function confirmDialog(opts) {
+      return new Promise(resolve => {
+        const dlg = document.createElement('dialog');
+        dlg.className = 'dialog';
+        const fieldsHtml = (opts.fields || []).map(f => {
+          if (f.type === 'checkbox') {
+            return `<label class="tunable-row"><input type="checkbox" id="dlg-${f.id}" ${f.checked ? 'checked' : ''}><span>${esc(f.label)}</span></label>`;
+          }
+          return '';
+        }).join('');
+        dlg.innerHTML = `<div class="dialog-card">
+          <div class="dialog-header">
+            <div><div class="dialog-title">${esc(opts.title || 'Confirm')}</div>
+            ${opts.message ? `<div class="dialog-subtitle">${opts.message}</div>` : ''}</div>
+            <div class="dialog-actions">
+              <button class="btn sm" type="button" data-action="cancel">${esc(opts.cancelLabel || 'Cancel')}</button>
+              <button class="btn sm ${opts.danger ? 'danger' : 'primary'}" type="button" data-action="confirm">${esc(opts.confirmLabel || 'Confirm')}</button>
+            </div>
+          </div>
+          ${fieldsHtml ? `<div class="dialog-body">${fieldsHtml}</div>` : ''}
+        </div>`;
+        const close = (confirmed) => {
+          const values = {};
+          (opts.fields || []).forEach(f => {
+            const input = dlg.querySelector('#dlg-' + f.id);
+            if (input) values[f.id] = input.type === 'checkbox' ? input.checked : input.value;
+          });
+          dlg.close();
+          dlg.remove();
+          resolve({ confirmed, values });
+        };
+        dlg.querySelector('[data-action="cancel"]').onclick = () => close(false);
+        dlg.querySelector('[data-action="confirm"]').onclick = () => close(true);
+        dlg.addEventListener('cancel', e => { e.preventDefault(); close(false); });
+        document.body.appendChild(dlg);
+        dlg.showModal();
+      });
+    }
+
+    function showShutdownScreen() {
+      document.body.innerHTML = `<div class="shutdown-screen"><h1>UI server shut down</h1><p>All background services have been stopped. You can close this tab now.</p></div>`;
+    }
+
+    function toggleSettingsMenu(e) {
+      e.stopPropagation();
+      const menu = el('settings-menu');
+      const trigger = el('menu-trigger');
+      const isHidden = menu.classList.toggle('hidden');
+      trigger.setAttribute('aria-expanded', isHidden ? 'false' : 'true');
+    }
+
+    function closeSettingsMenu() {
+      const menu = el('settings-menu');
+      const trigger = el('menu-trigger');
+      if (menu) menu.classList.add('hidden');
+      if (trigger) trigger.setAttribute('aria-expanded', 'false');
+    }
+
+    document.addEventListener('click', () => closeSettingsMenu());
+
+    function clearSelection() {
+      selectedEpisodes = {};
+      const selectAll = el('select-all');
+      if (selectAll) selectAll.checked = false;
+      renderPodcasts();
+    }
+
+    function updateSegmentCounts(d) {
+      const set = (id, val) => { const n = el(id); if (n) n.textContent = val ?? '-'; };
+      set('count-all', d.total);
+      set('count-eligible', d.eligible);
+      set('count-patreon', d.patreon);
+      set('count-processed', d.processed_count);
+      document.querySelectorAll('.segment').forEach(s => s.classList.remove('active'));
+      const activeId = statFilter ? 'filter-' + statFilter : 'filter-all';
+      const active = el(activeId);
+      if (active) active.classList.add('active');
+    }
+
+    function updateStatusChip(services, memory, llmProvider) {
+      const chip = el('status-chip');
+      const text = el('status-chip-text');
+      const dot = el('status-dot');
+      if (!chip || !text) return;
+      const relevant = (services || []).filter(s => s.id !== 'ui' && !(s.id === 'ollama' && llmProvider !== 'ollama'));
+      const running = relevant.filter(s => s.healthy).length;
+      const anyRunning = relevant.some(s => s.running);
+      chip.classList.remove('all-up', 'partial', 'down');
+      if (running === relevant.length && relevant.length > 0) chip.classList.add('all-up');
+      else if (anyRunning) chip.classList.add('partial');
+      else chip.classList.add('down');
+      let ramPart = '';
+      if (memory && typeof memory.available_gb !== 'undefined') {
+        ramPart = ` · ${memory.available_gb.toFixed(1)} GB free`;
+      }
+      text.textContent = `${running}/${relevant.length} services${ramPart}`;
+    }
 
     function toggleTheme() {
       const isLight = document.documentElement.classList.toggle('light');
@@ -39,6 +155,7 @@ let podcasts = [];
       panel.classList.toggle('collapsed');
       if (!panel.classList.contains('collapsed')) {
         el('log-unread').classList.remove('has-new');
+        logUnreadCount = 0;
         el('log-body').scrollTop = el('log-body').scrollHeight;
       }
     }
@@ -93,26 +210,22 @@ let podcasts = [];
     }
 
     function renderAuthBanner(err) {
-      // Inject (or update) a single dismissable banner at the top of the
-      // dashboard. Repeated calls just refresh the message in place.
       let banner = document.getElementById('pc-auth-banner');
       if (!banner) {
         banner = document.createElement('div');
         banner.id = 'pc-auth-banner';
-        banner.style.cssText =
-          'background:#5b1d1d;color:#ffd9d9;padding:12px 16px;margin:8px 0;' +
-          'border:1px solid #a23a3a;border-radius:6px;font-size:14px;line-height:1.45;';
-        const list = el('podcast-list');
-        if (list && list.parentNode) {
-          list.parentNode.insertBefore(banner, list);
+        banner.className = 'banner error';
+        const controls = document.querySelector('.dashboard-controls');
+        if (controls && controls.parentNode) {
+          controls.parentNode.insertBefore(banner, controls);
         }
       }
       const hint = (err.body && err.body.hint) || '';
       const msg = (err.body && err.body.message) || err.message || 'Pocket Casts auth failed.';
       banner.innerHTML =
-        '<strong>Pocket Casts authentication failed.</strong><br>' +
-        '<span style="opacity:0.85">' + escapeHtml(msg) + '</span>' +
-        (hint ? ('<br><em style="opacity:0.85">' + escapeHtml(hint) + '</em>') : '');
+        '<strong>Pocket Casts authentication failed</strong>' +
+        '<div>' + escapeHtml(msg) + '</div>' +
+        (hint ? ('<div><em>' + escapeHtml(hint) + '</em></div>') : '');
     }
 
     function clearAuthBanner() {
@@ -148,69 +261,18 @@ let podcasts = [];
         }
       } catch { }
 
-      // Update the services quick bar status
+      // Update status chip in app bar
       try {
         const svcData = await api('/services');
         const services = svcData.services || [];
         const memory = svcData.memory || {};
         const llmProvider = svcData.llm_provider || 'ollama';
-
-        // Show/hide Ollama quick-bar dot based on LLM provider
-        const ollamaDot = el('sq-svc-ollama');
-        if (ollamaDot) {
-          ollamaDot.style.display = llmProvider === 'ollama' ? '' : 'none';
-        }
-
-        // 1. Update RAM Status
-        if (memory && typeof memory.available_gb !== 'undefined') {
-          const avail = memory.available_gb;
-          const total = memory.total_gb;
-          const pct = Math.min(100, Math.round(((total - avail) / total) * 100));
-          const valEl = el('sq-ram-value');
-          if (valEl) {
-            valEl.textContent = `${avail.toFixed(1)} GB free of ${total.toFixed(0)} GB`;
-          }
-          const barEl = el('sq-ram-bar-fill');
-          if (barEl) {
-            barEl.style.width = pct + '%';
-            barEl.classList.toggle('warning', pct >= 80 && pct < 90);
-            barEl.classList.toggle('danger', pct >= 90);
-          }
-        }
-
-        // 2. Update Service Dots
-        const updateDot = (serviceId, elId) => {
-          const service = services.find(s => s.id === serviceId);
-          const svcEl = el(elId);
-          if (svcEl && service) {
-            svcEl.classList.remove('up', 'warn');
-            // Check starting class
-            svcEl.classList.remove('starting');
-            
-            // Clean up any existing status label
-            const labelNode = svcEl.childNodes[1];
-            if (labelNode) {
-              const baseName = serviceId === 'ollama' ? 'Ollama' : (serviceId === 'whisper' ? 'Whisper' : 'MinusPod');
-              let statusLabel = baseName;
-              
-              if (service.healthy) {
-                svcEl.classList.add('up');
-              } else if (service.running) {
-                // If it is running but not healthy yet, it is starting!
-                svcEl.classList.add('warn');
-                statusLabel = `${baseName} (starting)`;
-              } else {
-                statusLabel = `${baseName} (offline)`;
-              }
-              labelNode.nodeValue = ' ' + statusLabel;
-            }
-          }
-        };
-        updateDot('ollama', 'sq-svc-ollama');
-        updateDot('whisper', 'sq-svc-whisper');
-        updateDot('minuspod', 'sq-svc-minuspod');
+        servicesState.services = services;
+        servicesState.memory = memory;
+        servicesState.llm_provider = llmProvider;
+        updateStatusChip(services, memory, llmProvider);
       } catch (e) {
-        console.error('Failed to update quick bar services status:', e);
+        console.error('Failed to update status chip:', e);
       }
     }
 
@@ -275,29 +337,38 @@ let podcasts = [];
     }
 
     async function shutdownUI() {
-      if (!confirm('Are you sure you want to stop all backend services AND shut down this Web UI server? You will need to restart it from the terminal to access it again.')) return;
-      
+      const { confirmed } = await confirmDialog({
+        title: 'Shut down UI server',
+        message: 'Stop all backend services and shut down this web UI? You will need to restart it from the terminal to access it again.',
+        confirmLabel: 'Shut down',
+        danger: true,
+      });
+      if (!confirmed) return;
+
       const btn = el('btn-shutdown-ui');
-      if (btn) { btn.disabled = true; btn.textContent = 'Shutting Down...'; }
-      addLog('warn', 'Shutting down UI and all backend services...');
+      if (btn) { btn.disabled = true; btn.textContent = 'Shutting down...'; }
+      addLog('warn', 'Shutting down UI and all backend services...', { forceOpen: true });
       try {
         const res = await api('/shutdown', { method: 'POST' });
         if (res.ok) {
           addLog('success', 'UI and all services are shutting down. You can close this tab now.');
-          alert('UI and all backend services are shutting down. You can now close this tab.');
-          document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0d1117;color:#e6edf3;font-family:sans-serif;"><h1>UI Server Shut Down</h1><p style="color:#8b949e;margin-top:12px;">All background services have been stopped. You can close this tab now.</p></div>';
+          toast('Shutting down. You can close this tab.', 'info', 8000);
+          showShutdownScreen();
         } else {
           addLog('error', 'Failed to shut down UI: ' + (res.error || 'unknown error'));
         }
       } catch (e) {
         addLog('success', 'Shutdown request sent. Web server is stopping.');
-        document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#0d1117;color:#e6edf3;font-family:sans-serif;"><h1>UI Server Shut Down</h1><p style="color:#8b949e;margin-top:12px;">All background services have been stopped. You can close this tab now.</p></div>';
+        showShutdownScreen();
       }
     }
 
     window.startAllServices = startAllServices;
     window.stopAllServices = stopAllServices;
     window.shutdownUI = shutdownUI;
+    window.clearSelection = clearSelection;
+    window.toggleSettingsMenu = toggleSettingsMenu;
+    window.closeSettingsMenu = closeSettingsMenu;
 
 
 
@@ -371,10 +442,7 @@ let podcasts = [];
         pcEpisodeStatus = d.episode_status || {};
         processedPodcastUuids = new Set(d.processed_podcast_uuids || []);
         uploadedFiles = filesResp.files || [];
-        el('stat-total').textContent = d.total || 0;
-        el('stat-eligible').textContent = d.eligible || 0;
-        el('stat-patreon').textContent = d.patreon || 0;
-        el('stat-processed').textContent = d.processed_count || 0;
+        updateSegmentCounts(d);
         clearAuthBanner();
         renderPodcasts();
         fetchMissingArtworks();
@@ -398,15 +466,15 @@ let podcasts = [];
     }
 
     function setStatFilter(filter) {
-      if (statFilter === filter) {
+      if (statFilter === filter || (filter === 'all' && !statFilter)) {
         statFilter = null;
       } else {
-        statFilter = filter;
+        statFilter = filter === 'all' ? null : filter;
       }
-      document.querySelectorAll('.stat-card').forEach(c => c.classList.remove('active'));
-      if (statFilter) {
-        el('stat-card-' + statFilter).classList.add('active');
-      }
+      document.querySelectorAll('.segment').forEach(s => s.classList.remove('active'));
+      const activeId = statFilter ? 'filter-' + statFilter : 'filter-all';
+      const active = el(activeId);
+      if (active) active.classList.add('active');
       renderPodcasts();
     }
 
@@ -508,19 +576,19 @@ let podcasts = [];
             // to a synthesized object so thumbHTML() still renders the title
             // initial.
             const thumbObj = podData || { uuid: puuid, title: podTitle, thumbnail: '' };
-            html += `<div class="${cls}" data-uuid="${esc(puuid)}" style="margin-bottom:4px;">
-              <div class="podcast-header" onclick="togglePodcast('upnext-${puuid}', '${puuid}')" style="padding:10px 14px;">
-                <span class="up-next-badge">Up Next</span>
+            html += `<div class="${cls} compact" data-uuid="${esc(puuid)}">
+              <div class="podcast-header" onclick="togglePodcast('upnext-${puuid}', '${puuid}')" aria-expanded="${isExp}">
+                <span class="badge up-next-badge">Up next</span>
                 <div class="podcast-thumb" aria-hidden="true">${thumbHTML(thumbObj)}</div>
-                <div class="podcast-info" style="flex:1;min-width:0">
+                <div class="podcast-info">
                   <div class="podcast-title">${esc(podTitle)}</div>
-                  <div class="podcast-author" style="font-size:11px;color:var(--text-muted)">${eps.length} episode${eps.length > 1 ? 's' : ''} in queue</div>
+                  <div class="podcast-author">${eps.length} episode${eps.length > 1 ? 's' : ''} in queue</div>
                 </div>
                 <span class="section-count">${eps.length}</span>
                 ${!allAdFree ? '<span class="expand-icon">&#9654;</span>' : ''}
               </div>`;
             if (isExp && !allAdFree) {
-              html += `<div class="episode-list" style="padding:4px 10px;">`;
+              html += `<div class="episode-list compact">`;
               // Kick off MinusPod episode lookup in the background so that if
               // the user later selects a row it can be matched to its MinusPod
               // episode id (needed to queue ad-detection). Not required for
@@ -550,18 +618,18 @@ let podcasts = [];
             const isExp = expandedPodcasts.has('custom-files-all');
             const adFreeCount = filesFiltered.filter(f => f.ad_free).length;
             const playedCount = filesFiltered.filter(f => f.playing_status === 3).length;
-            html += `<div class="podcast-card ${isExp ? 'expanded' : ''}" style="margin-bottom:4px;">
-              <div class="podcast-header" onclick="toggleCustomFiles()" style="padding:10px 14px;">
-                <span class="up-next-badge files-badge">Custom Files</span>
-                <div class="podcast-info" style="flex:1;min-width:0">
+            html += `<div class="podcast-card compact ${isExp ? 'expanded' : ''}">
+              <div class="podcast-header" onclick="toggleCustomFiles()" aria-expanded="${isExp}">
+                <span class="badge custom-files-badge">Custom files</span>
+                <div class="podcast-info">
                   <div class="podcast-title">Uploaded files</div>
-                  <div class="podcast-author" style="font-size:11px;color:var(--text-muted)">${filesFiltered.length} file${filesFiltered.length === 1 ? '' : 's'}${adFreeCount ? ` &middot; ${adFreeCount} ad-free` : ''}${playedCount ? ` &middot; ${playedCount} played` : ''}</div>
+                  <div class="podcast-author">${filesFiltered.length} file${filesFiltered.length === 1 ? '' : 's'}${adFreeCount ? ` · ${adFreeCount} ad-free` : ''}${playedCount ? ` · ${playedCount} played` : ''}</div>
                 </div>
                 <span class="section-count">${filesFiltered.length}</span>
                 <span class="expand-icon">&#9654;</span>
               </div>`;
             if (isExp) {
-              html += `<div class="episode-list" style="padding:4px 10px;">`;
+              html += `<div class="episode-list compact">`;
               for (const f of filesFiltered) html += renderFileRow(f);
               html += `</div>`;
             }
@@ -578,8 +646,8 @@ let podcasts = [];
       }
 
       if (filtered.length > 0) {
-        html += `<div class="section-header" style="margin-top:16px">
-          <span>All Podcasts</span>
+        html += `<div class="section-header section-header-spaced">
+          <span>All podcasts</span>
           <span class="section-count">${filtered.length}</span>
         </div>`;
         html += renderPodcastGroup(filtered);
@@ -624,10 +692,10 @@ let podcasts = [];
           </div>
         </div>
         <div class="file-actions">
-          <button onclick="event.stopPropagation(); renameFile('${f.uuid}')" title="Rename">Rename</button>
-          <button onclick="event.stopPropagation(); toggleFilePlayed('${f.uuid}', ${f.playing_status !== 3})" title="${markLabel}">${markLabel}</button>
-          <button onclick="event.stopPropagation(); removeFileFromUpNext('${f.uuid}')" title="Remove from Up Next">Un-queue</button>
-          <button class="danger" onclick="event.stopPropagation(); deleteFile('${f.uuid}', '${esc(f.title).replace(/'/g, '&#39;')}')" title="Delete">Delete</button>
+          <button class="btn ghost sm" type="button" onclick="event.stopPropagation(); renameFile('${f.uuid}')" title="Rename">Rename</button>
+          <button class="btn ghost sm" type="button" onclick="event.stopPropagation(); toggleFilePlayed('${f.uuid}', ${f.playing_status !== 3})" title="${markLabel}">${markLabel}</button>
+          <button class="btn ghost sm" type="button" onclick="event.stopPropagation(); removeFileFromUpNext('${f.uuid}')" title="Remove from Up Next">Un-queue</button>
+          <button class="btn ghost sm danger" type="button" onclick="event.stopPropagation(); deleteFile('${f.uuid}', '${esc(f.title).replace(/'/g, '&#39;')}')" title="Delete">Delete</button>
         </div>
       </div>`;
     }
@@ -676,8 +744,8 @@ let podcasts = [];
           </div>
         </div>
         <div class="file-actions">
-          <button onclick="event.stopPropagation(); toggleEpisodePlayed('${podcastUuid}','${esc(ep.uuid)}',${markPlayed})" title="${markLabel}">${markLabel}</button>
-          <button onclick="event.stopPropagation(); removeEpisodeFromUpNext('${esc(ep.uuid)}')" title="Remove from Up Next">Un-queue</button>
+          <button class="btn ghost sm" type="button" onclick="event.stopPropagation(); toggleEpisodePlayed('${podcastUuid}','${esc(ep.uuid)}',${markPlayed})" title="${markLabel}">${markLabel}</button>
+          <button class="btn ghost sm" type="button" onclick="event.stopPropagation(); removeEpisodeFromUpNext('${esc(ep.uuid)}')" title="Remove from Up Next">Un-queue</button>
         </div>
       </div>`;
     }
@@ -691,15 +759,34 @@ let podcasts = [];
     async function renameFile(uuid) {
       const f = uploadedFiles.find(x => x.uuid === uuid);
       if (!f) return;
-      const newTitle = prompt('New title:', f.title);
-      if (newTitle === null || newTitle.trim() === f.title) return;
-      addLog('info', `Renaming to: ${newTitle}`);
-      const r = await api(`/files/${uuid}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ title: newTitle.trim() }),
+      const row = document.querySelector(`.file-row[data-uuid="${uuid}"] .file-title`);
+      if (!row) return;
+      const input = document.createElement('input');
+      input.className = 'inline-rename-input';
+      input.value = f.title;
+      row.replaceWith(input);
+      input.focus();
+      input.select();
+      const finish = async (save) => {
+        if (save) {
+          const newTitle = input.value.trim();
+          if (newTitle && newTitle !== f.title) {
+            addLog('info', `Renaming to: ${newTitle}`);
+            const r = await api(`/files/${uuid}`, {
+              method: 'PATCH',
+              body: JSON.stringify({ title: newTitle }),
+            });
+            if (r.ok) { addLog('success', 'Renamed'); await loadUploadedFiles(); }
+            else addLog('error', 'Rename failed');
+          }
+        }
+        renderPodcasts();
+      };
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+        if (e.key === 'Escape') { e.preventDefault(); finish(false); }
       });
-      if (r.ok) { addLog('success', 'Renamed'); await loadUploadedFiles(); renderPodcasts(); }
-      else addLog('error', 'Rename failed');
+      input.addEventListener('blur', () => finish(true));
     }
 
     async function toggleFilePlayed(uuid, played) {
@@ -718,7 +805,13 @@ let podcasts = [];
     }
 
     async function deleteFile(uuid, title) {
-      if (!confirm(`Delete from Pocket Casts cloud?\n\n${title}\n\nThis permanently removes the uploaded file and clears its processed marker so it can be re-processed.`)) return;
+      const { confirmed } = await confirmDialog({
+        title: 'Delete uploaded file',
+        message: `Delete "${title}" from Pocket Casts cloud? This permanently removes the file and clears its processed marker.`,
+        confirmLabel: 'Delete',
+        danger: true,
+      });
+      if (!confirmed) return;
       addLog('warn', `Deleting: ${title}`);
       const r = await api(`/files/${uuid}`, { method: 'DELETE' });
       if (r.ok) { addLog('success', 'Deleted'); await loadSubscriptions(); }
@@ -726,14 +819,15 @@ let podcasts = [];
     }
 
     async function cleanupPlayedFiles() {
-      const includeInProgress = confirm(
-        'Clean up PLAYED (Ad-Free) uploaded files?\n\n' +
-        'OK  = only fully played files\n' +
-        'Cancel = abort\n\n' +
-        '(After confirming, you can also include files that are 90%+ complete.)'
-      );
-      if (!includeInProgress) return;
-      const also90 = confirm('Also delete in-progress files that are 90%+ complete?');
+      const { confirmed, values } = await confirmDialog({
+        title: 'Clean up played files',
+        message: 'Remove played ad-free uploaded files from Pocket Casts cloud?',
+        confirmLabel: 'Clean up',
+        danger: true,
+        fields: [{ type: 'checkbox', id: 'include90', label: 'Also include in-progress files that are 90%+ complete' }],
+      });
+      if (!confirmed) return;
+      const also90 = values.include90;
       addLog('warn', 'Cleaning up played Ad-Free files...');
       const r = await api('/files/cleanup_played', {
         method: 'POST',
@@ -759,7 +853,7 @@ let podcasts = [];
 
     function closeServicesPanel() {
       const m = document.getElementById('services-modal');
-      if (m) m.remove();
+      if (m) { m.close(); m.remove(); }
       if (servicesPollTimer) { clearInterval(servicesPollTimer); servicesPollTimer = null; }
     }
 
@@ -770,47 +864,54 @@ let podcasts = [];
         servicesState.memory = d.memory || null;
         servicesState.llm_provider = d.llm_provider || 'ollama';
         if (document.getElementById('services-modal')) renderServicesModal();
+        updateStatusChip(servicesState.services, servicesState.memory, servicesState.llm_provider);
       } catch (e) {
         addLog('error', 'Failed to refresh services: ' + e.message);
       }
     }
 
     function renderServicesModal() {
-      const existing = document.getElementById('services-modal');
+      let modal = document.getElementById('services-modal');
       const wasOpenLogs = new Set(servicesState.expandedLogs);
-      if (existing) existing.remove();
-      const modal = document.createElement('div');
-      modal.id = 'services-modal';
-      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px;';
-      const card = document.createElement('div');
-      card.style.cssText = 'background:var(--card);border:1px solid var(--border);border-radius:10px;max-width:920px;width:100%;max-height:88vh;overflow:hidden;display:flex;flex-direction:column;';
+      if (!modal) {
+        modal = document.createElement('dialog');
+        modal.id = 'services-modal';
+        modal.className = 'dialog';
+        document.body.appendChild(modal);
+      }
 
-      const header = `<div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)">
-        <div>
-          <div style="font-weight:600">Services</div>
-          <div style="font-size:11px;color:var(--text-muted)">Status auto-refreshes every 5 seconds.</div>
-        </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn small" onclick="refreshServices()">Refresh</button>
-          <button class="btn small danger" onclick="shutdownUI()" style="border:1px dashed var(--danger);" title="Stop all services and shut down this Web UI server.">Shutdown UI</button>
-          <button class="btn small" onclick="closeServicesPanel()">Close</button>
-        </div>
-      </div>`;
-
-      let body = '<div style="overflow:auto;flex:1">';
+      let body = '<div class="services-panel-actions">';
+      body += '<span class="svc-reminder">Stop services before leaving to free system RAM.</span>';
+      body += '<button class="btn sm primary" type="button" onclick="startAllServices()">Start all</button>';
+      body += '<button class="btn sm" type="button" onclick="stopAllServices()">Stop all</button>';
+      body += '<button class="btn sm danger" type="button" onclick="shutdownUI()">Shut down UI</button>';
+      body += '</div>';
+      body += '<div class="dialog-body dialog-body-flush">';
       for (const s of servicesState.services) {
-        // Hide Ollama entirely when using a cloud LLM provider
         if (s.id === 'ollama' && servicesState.llm_provider !== 'ollama') continue;
         body += renderServiceRow(s, wasOpenLogs.has(s.id));
       }
       body += '</div>';
-      // Whisper backend toggle / Ollama model picker live in a footer bar
       body += renderServicesFooter();
 
-      card.innerHTML = header + body;
-      modal.appendChild(card);
-      modal.addEventListener('click', e => { if (e.target === modal) closeServicesPanel(); });
-      document.body.appendChild(modal);
+      modal.innerHTML = `<div class="dialog-card">
+        <div class="dialog-header">
+          <div>
+            <div class="dialog-title">Services</div>
+            <div class="dialog-subtitle">Status auto-refreshes every 5 seconds.</div>
+          </div>
+          <div class="dialog-actions">
+            <button class="btn sm" type="button" onclick="refreshServices()">Refresh</button>
+            <button class="btn sm" type="button" onclick="closeServicesPanel()">Close</button>
+          </div>
+        </div>
+        ${body}
+      </div>`;
+
+      if (!modal.open) {
+        modal.addEventListener('cancel', e => { e.preventDefault(); closeServicesPanel(); });
+        modal.showModal();
+      }
     }
 
     const SERVICE_HELP = {
@@ -919,9 +1020,9 @@ let podcasts = [];
       const recommendedModel = (servicesState.memory && servicesState.memory.recommended_model) || 'qwen3:14b';
 
       const availableOptions = [
-        { value: 'qwen3.5-addetect', label: `qwen3.5-addetect (Default, lightest)${recommendedModel === 'qwen3.5-addetect' ? ' (⭐ Recommended for your RAM)' : ''}` },
-        { value: 'qwen3:14b', label: `qwen3:14b (Best balance of speed/accuracy)${recommendedModel === 'qwen3:14b' ? ' (⭐ Recommended for your RAM)' : ''}` },
-        { value: 'qwen3.5:35b-a3b', label: `qwen3.5:35b-a3b (High accuracy, heavy)${recommendedModel === 'qwen3.5:35b-a3b' ? ' (⭐ Recommended for your RAM)' : ''}` }
+        { value: 'qwen3.5-addetect', label: `qwen3.5-addetect (default, lightest)${recommendedModel === 'qwen3.5-addetect' ? ' (recommended)' : ''}` },
+        { value: 'qwen3:14b', label: `qwen3:14b (balanced)${recommendedModel === 'qwen3:14b' ? ' (recommended)' : ''}` },
+        { value: 'qwen3.5:35b-a3b', label: `qwen3.5:35b-a3b (high accuracy)${recommendedModel === 'qwen3.5:35b-a3b' ? ' (recommended)' : ''}` }
       ];
 
       // Build options, labeling which ones are installed
@@ -935,31 +1036,26 @@ let podcasts = [];
       let pullStatusHtml = '';
       for (const [model, state] of Object.entries(modelPullingState)) {
         if (state.status === 'downloading') {
-          pullStatusHtml += `<div style="font-size:11px;color:var(--info);margin-top:4px;">Downloading ${model}: ${state.pct}% completed...</div>`;
+          pullStatusHtml += `<div class="svc-pull-status info">Downloading ${esc(model)}: ${state.pct}%</div>`;
         } else if (state.status === 'success') {
-          pullStatusHtml += `<div style="font-size:11px;color:var(--accent2);margin-top:4px;">Successfully downloaded ${model}!</div>`;
+          pullStatusHtml += `<div class="svc-pull-status success">Downloaded ${esc(model)}</div>`;
         } else if (state.status === 'error') {
-          pullStatusHtml += `<div style="font-size:11px;color:var(--danger);margin-top:4px;">Failed downloading ${model}: ${esc(state.error)}</div>`;
+          pullStatusHtml += `<div class="svc-pull-status error">Failed ${esc(model)}: ${esc(state.error)}</div>`;
         }
       }
 
-      return `<div style="padding:14px 16px;border-top:1px solid var(--border);display:flex;flex-direction:column;gap:12px;">
+      return `<div class="dialog-footer">
         ${servicesState.llm_provider !== 'ollama' ? `
-        <div style="display:flex;gap:8px;align-items:center;font-size:12px;color:var(--text-muted)">
-          <span>🤖</span>
-          <span>LLM Provider: <strong style="color:var(--accent)">${esc(servicesState.llm_provider)}</strong> — Ollama is not needed and has been hidden.</span>
+        <div class="svc-footer-note">
+          LLM provider: <strong>${esc(servicesState.llm_provider)}</strong>. Ollama is not needed and has been hidden.
         </div>
         ` : `
-        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
-          <div style="font-weight:600;font-size:12px">Model Selection:</div>
-          <select id="ollama-model-sel" style="font-size:12px;padding:4px 10px;flex:1;min-width:200px;">${opts}</select>
-          <button class="btn small primary" onclick="applyModelSelection()">Apply</button>
-          <div style="font-size:11px;color:var(--text-muted)">Current MinusPod Model: <strong>${esc(current || 'unknown')}</strong></div>
+        <div class="svc-footer-row">
+          <span class="svc-footer-note">Model</span>
+          <select id="ollama-model-sel">${opts}</select>
+          <button class="btn sm primary" type="button" onclick="applyModelSelection()">Apply</button>
         </div>
-        <div style="font-size:11px;color:var(--text-muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
-          <span>Ollama Model Path: <code>~/.ollama/models</code></span>
-          <span>Recommended Model for your hardware: <code>${esc(recommendedModel)}</code></span>
-        </div>
+        <div class="svc-footer-note">Current: <strong>${esc(current || 'unknown')}</strong> · Recommended: <code>${esc(recommendedModel)}</code></div>
         ${pullStatusHtml}
         `}
       </div>`;
@@ -1114,38 +1210,42 @@ let podcasts = [];
     }
 
     async function openAdTunablesPanel() {
-      const modal = document.createElement('div');
-      modal.id = 'ad-tunables-modal';
-      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:500;display:flex;align-items:center;justify-content:center;padding:20px;';
-      modal.innerHTML = `<div style="background:var(--card);border:1px solid var(--border);border-radius:10px;max-width:640px;width:100%;max-height:88vh;overflow:hidden;display:flex;flex-direction:column;">
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border)">
-          <div>
-            <div style="font-weight:600">Ad detection — LLM cost optimisations</div>
-            <div style="font-size:11px;color:var(--text-muted)">Stored in MinusPod's settings DB. Takes effect on the next episode.</div>
+      let modal = document.getElementById('ad-tunables-modal');
+      if (!modal) {
+        modal = document.createElement('dialog');
+        modal.id = 'ad-tunables-modal';
+        modal.className = 'dialog';
+        modal.innerHTML = `<div class="dialog-card">
+          <div class="dialog-header">
+            <div>
+              <div class="dialog-title">Ad detection settings</div>
+              <div class="dialog-subtitle">Stored in MinusPod settings. Takes effect on the next episode.</div>
+            </div>
+            <div class="dialog-actions">
+              <button class="btn sm" type="button" id="ad-tunables-refresh">Refresh</button>
+              <button class="btn sm" type="button" id="ad-tunables-close">Close</button>
+            </div>
           </div>
-          <div style="display:flex;gap:8px">
-            <button class="btn small" id="ad-tunables-refresh">Refresh</button>
-            <button class="btn small" id="ad-tunables-close">Close</button>
-          </div>
-        </div>
-        <div id="ad-tunables-body" style="overflow:auto;flex:1;padding:16px"></div>
-      </div>`;
-      modal.addEventListener('click', e => { if (e.target === modal) closeAdTunablesPanel(); });
-      document.body.appendChild(modal);
-      modal.querySelector('#ad-tunables-close').onclick = closeAdTunablesPanel;
-      modal.querySelector('#ad-tunables-refresh').onclick = () => loadAdTunables();
+          <div class="dialog-body" id="ad-tunables-body"></div>
+        </div>`;
+        modal.addEventListener('cancel', e => { e.preventDefault(); closeAdTunablesPanel(); });
+        document.body.appendChild(modal);
+        modal.querySelector('#ad-tunables-close').onclick = closeAdTunablesPanel;
+        modal.querySelector('#ad-tunables-refresh').onclick = () => loadAdTunables();
+      }
+      modal.showModal();
       await loadAdTunables();
     }
 
     function closeAdTunablesPanel() {
       const m = document.getElementById('ad-tunables-modal');
-      if (m) m.remove();
+      if (m) { m.close(); m.remove(); }
     }
 
     async function loadAdTunables() {
       const body = document.getElementById('ad-tunables-body');
       if (!body) return;
-      body.innerHTML = '<div style="color:var(--text-muted);font-size:12px">Loading…</div>';
+      body.innerHTML = '<div class="episodes-loading">Loading...</div>';
       try {
         const data = await api('/minuspod/settings');
         adTunablesState = data;
@@ -1188,8 +1288,8 @@ let podcasts = [];
       };
 
       const longContextHint = triggersLongContext
-        ? `<div class="tunable-hint ok">Current model <code>${esc(modelText)}</code> matches a 1M-context pattern — the large-window override is active for long episodes.</div>`
-        : `<div class="tunable-hint muted">Current model <code>${esc(modelText)}</code> does <em>not</em> match a 1M-context pattern (deepseek-v4, gemini-flash, qwen-long, llama-4, llama-3.1-405b). The large-window override will be a no-op until you switch models.</div>`;
+        ? `<div class="tunable-hint ok">Current model <code>${esc(modelText)}</code> matches a 1M-context pattern. The large-window override is active for long episodes.</div>`
+        : `<div class="tunable-hint muted">Current model <code>${esc(modelText)}</code> does not match a 1M-context pattern. The large-window override will be a no-op until you switch models.</div>`;
 
       body.innerHTML = `
         <div class="tunable-section">
@@ -1207,7 +1307,7 @@ let podcasts = [];
 
         <div class="tunable-section">
           <div class="tunable-title">Skip verification pass on short episodes</div>
-          <div class="tunable-desc">Pass 2 doubles LLM cost per episode for near-zero yield on short ones — the pre/mid/post-roll coverage in pass 1 is sized to catch them. Set to 0 to disable the skip.</div>
+          <div class="tunable-desc">Pass 2 doubles LLM cost per episode for near-zero yield on short ones. Set to 0 to disable the skip.</div>
           <label class="tunable-row">
             <span>Skip pass 2 under (seconds)</span>
             <input type="number" id="t-skip" min="0" max="86400" step="60"
@@ -1228,10 +1328,10 @@ let podcasts = [];
           <div class="tunable-hint muted">Default: enabled. Disable if your provider rejects the <code>cache_control</code> field.</div>
         </div>
 
-        <div id="ad-tunables-status" class="tunable-hint muted" style="margin-top:8px"></div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:12px">
-          <button class="btn small" onclick="closeAdTunablesPanel()">Cancel</button>
-          <button class="btn small primary" id="ad-tunables-save" onclick="saveAdTunables()">Save</button>
+        <div id="ad-tunables-status" class="tunable-hint muted tunable-status"></div>
+        <div class="tunable-footer">
+          <button class="btn sm" type="button" onclick="closeAdTunablesPanel()">Cancel</button>
+          <button class="btn sm primary" type="button" id="ad-tunables-save" onclick="saveAdTunables()">Save</button>
         </div>
       `;
     }
@@ -1250,8 +1350,8 @@ let podcasts = [];
         enablePromptCaching: cache,
       };
       saveBtn.disabled = true;
-      status.textContent = 'Saving…';
-      status.style.color = 'var(--text-muted)';
+      status.textContent = 'Saving...';
+      status.className = 'tunable-hint muted tunable-status';
       try {
         const r = await fetch('/api/minuspod/stage-tunables', {
           method: 'PUT',
@@ -1261,16 +1361,16 @@ let podcasts = [];
         const j = await r.json();
         if (r.ok && j.ok) {
           status.textContent = `Saved (${j.updated.join(', ')}). Next episode will use the new values.`;
-          status.style.color = 'var(--accent2)';
+          status.className = 'tunable-hint ok tunable-status';
           addLog('success', 'Ad detection tunables saved');
         } else {
           status.textContent = `Save failed: ${j.error || ('HTTP ' + r.status_code)}`;
-          status.style.color = 'var(--danger)';
+          status.className = 'tunable-hint danger tunable-status';
           addLog('error', 'Ad detection tunables save failed: ' + (j.error || ('HTTP ' + r.status_code)));
         }
       } catch (e) {
         status.textContent = 'Save failed: ' + e.message;
-        status.style.color = 'var(--danger)';
+        status.className = 'tunable-hint danger tunable-status';
         addLog('error', 'Ad detection tunables save failed: ' + e.message);
       } finally {
         saveBtn.disabled = false;
@@ -1299,7 +1399,7 @@ let podcasts = [];
         const willSelectAll = checkState !== 'all';
 
         let html = `<div class="${cls}" data-uuid="${p.uuid}">
-          <div class="podcast-header" onclick="togglePodcast('${p.uuid}')">
+          <div class="podcast-header" onclick="togglePodcast('${p.uuid}')" aria-expanded="${isExp}">
             <div class="${cbCls}" role="checkbox" aria-checked="${ariaChecked}"
                  aria-label="Select all eligible episodes" tabindex="0"
                  onclick="event.stopPropagation(); selectAllEpsInPodcast('${p.uuid}', ${willSelectAll})"
@@ -1364,7 +1464,7 @@ let podcasts = [];
       const eps = podcastEpisodes[uuid];
       if (loadEpisodesErrors.has(uuid)) {
         const errMsg = loadEpisodesErrorMsg.get(uuid) || 'Failed to load episodes.';
-        return `<div class="episode-list"><div class="episodes-loading" style="color:#f85149">${escapeHtml(errMsg)} <button class="btn small" onclick="event.stopPropagation(); loadEpisodes('${uuid}')">Retry</button></div></div>`;
+        return `<div class="episode-list"><div class="episodes-loading error">${escapeHtml(errMsg)} <button class="btn sm" type="button" onclick="event.stopPropagation(); loadEpisodes('${uuid}')">Retry</button></div></div>`;
       }
       if (!eps) {
         if (!loadingEpisodes.has(uuid)) loadEpisodes(uuid);
@@ -1472,7 +1572,12 @@ let podcasts = [];
     }
 
     async function resetProcessedForPodcast(uuid) {
-      if (!confirm('Reset processed markers for this podcast?\n\nEpisodes will become eligible for processing again. Files already uploaded to Pocket Casts are not deleted.')) return;
+      const { confirmed } = await confirmDialog({
+        title: 'Reset processed markers',
+        message: 'Episodes will become eligible for processing again. Files already uploaded to Pocket Casts are not deleted.',
+        confirmLabel: 'Reset',
+      });
+      if (!confirmed) return;
       const r = await api('/processed/podcast/' + encodeURIComponent(uuid), { method: 'DELETE' });
       if (r.error) { addLog('error', 'Reset failed: ' + r.error); return; }
       addLog('info', `Reset ${r.cleared} processed marker${r.cleared === 1 ? '' : 's'} for this podcast`);
@@ -1591,12 +1696,20 @@ let podcasts = [];
 
     function updateProcessBtn() {
       const count = getSelectedCount();
+      const bar = el('selection-bar');
+      const text = el('selection-text');
       const btn = el('btn-process');
-      btn.disabled = count === 0;
-      if (activeJobId) {
-        btn.textContent = count ? `Queue ${count} More` : 'Queue More';
-      } else {
-        btn.textContent = count ? `Process ${count} Episode${count > 1 ? 's' : ''}` : 'Process Selected';
+      if (bar) bar.classList.toggle('visible', count > 0);
+      if (text) {
+        text.textContent = count === 1 ? '1 episode selected' : `${count} episodes selected`;
+      }
+      if (btn) {
+        btn.disabled = count === 0;
+        if (activeJobId) {
+          btn.textContent = count ? `Queue ${count} more` : 'Queue more';
+        } else {
+          btn.textContent = count === 1 ? 'Process 1 episode' : `Process ${count} episodes`;
+        }
       }
     }
 
@@ -1703,23 +1816,23 @@ let podcasts = [];
     }
 
     function applyActiveJobProgress(active, queuedEps) {
-      const gp = el('global-progress');
+      const jp = el('job-progress');
+      const jpf = el('job-progress-fill');
+      const stageEl = el('log-stage-text');
       if (!active) {
-        gp.classList.remove('active');
+        if (jp) jp.classList.remove('active');
+        if (stageEl) stageEl.textContent = '';
         return;
       }
-      gp.classList.add('active');
+      if (jp) jp.classList.add('active');
       const epName = active.current_episode || 'Processing...';
-      const epDone = active.current_episode_completed ? '✓ ' : '';
-      const epPaused = active.paused ? ' (Paused)' : '';
-      el('progress-stage').textContent = epDone + epName + epPaused;
+      const epPaused = active.paused ? ' (paused)' : '';
+      const stageText = (active.current_episode_completed ? 'Done: ' : '') + epName + epPaused;
+      if (stageEl) stageEl.textContent = stageText;
       const totalAll = active.total_episodes + (queuedEps || 0);
-      const pct = totalAll > 0
-        ? Math.round((active.processed / totalAll) * 100) : 0;
-      el('progress-bar').style.width = pct + '%';
-      let label = `${active.processed}/${totalAll} episodes`;
-      if (active.paused) label += ' — Paused';
-      el('progress-label').textContent = label;
+      const pct = totalAll > 0 ? Math.round((active.processed / totalAll) * 100) : 0;
+      if (jpf) jpf.style.width = pct + '%';
+      if (jp) jp.setAttribute('aria-valuenow', String(pct));
     }
 
     /** Re-attach to a server-side job after reload or iOS tab sleep. */
@@ -1822,7 +1935,9 @@ let podcasts = [];
               addLog('info', `Starting next queued job (${activeJobId.slice(0,8)})`);
             } else if (!d.active_job) {
               clearInterval(pollTimer); pollTimer = null;
-              el('global-progress').classList.remove('active');
+              el('job-progress').classList.remove('active');
+              const stageEl = el('log-stage-text');
+              if (stageEl) stageEl.textContent = '';
               loadSubscriptions();
               showJobControls(false);
               activeJobId = null;
@@ -1834,36 +1949,44 @@ let podcasts = [];
     }
 
     function updateGlobalProgress() {
-      el('global-progress').classList.add('active');
-      el('progress-stage').textContent = 'Starting...';
-      el('progress-bar').style.width = '0%';
+      const jp = el('job-progress');
+      const jpf = el('job-progress-fill');
+      if (jp) jp.classList.add('active');
+      if (jpf) jpf.style.width = '0%';
+      const stageEl = el('log-stage-text');
+      if (stageEl) stageEl.textContent = 'Starting...';
+      logForceOpen = true;
+      const panel = el('log-panel');
+      if (panel) panel.classList.remove('collapsed');
     }
 
-    function addLog(level, msg) {
+    function addLog(level, msg, opts = {}) {
       const body = el('log-body');
       const ts = new Date().toLocaleTimeString();
-      const icons = {
-        success: '\u2705', error: '\u274c', warn: '\u26a0\ufe0f', info: '\u2139\ufe0f',
-        stage: '\u2699\ufe0f', download: '\u2b07\ufe0f', upload: '\u2b06\ufe0f'
-      };
       let cls = level;
-      let icon = icons[level] || '';
       const m = esc(msg);
-      if (m.includes('Downloading') || m.includes('Downloaded')) { cls = 'download'; icon = icons.download; }
-      else if (m.includes('Upload') || m.includes('Syncing')) { cls = 'upload'; icon = icons.upload; }
-      else if (m.includes('Processing:') || m.includes('Starting:')) { cls = 'stage'; icon = icons.stage; }
-      else if (m.includes('transcript') || m.includes('Whisper')) { cls = 'info'; icon = '\ud83d\udcdd'; }
-      else if (m.includes('artwork') || m.includes('image')) { cls = 'info'; icon = '\ud83c\udfa8'; }
-      else if (m.includes('Unloading') || m.includes('memory')) { cls = 'info'; icon = '\ud83e\uddf9'; }
-      else if (m.includes('RSS')) { cls = 'info'; icon = '\ud83d\udce1'; }
-      body.innerHTML += `<div class="log-line ${cls}"><span class="log-ts">${ts}</span><span class="log-icon">${icon}</span>${m}</div>`;
+      if (m.includes('Downloading') || m.includes('Downloaded')) cls = 'download';
+      else if (m.includes('Upload') || m.includes('Syncing')) cls = 'upload';
+      else if (m.includes('Processing:') || m.includes('Starting:')) cls = 'stage';
+
+      const line = document.createElement('div');
+      line.className = 'log-line ' + cls;
+      line.innerHTML = `<span class="log-ts">${ts}</span>${m}`;
+      body.appendChild(line);
       body.scrollTop = body.scrollHeight;
-      // New log entries always open the panel so the user sees progress,
-      // errors, and Whisper/LLM messages without hunting for the toggle.
+
       const panel = el('log-panel');
-      if (panel.classList.contains('collapsed')) {
+      const isCollapsed = panel.classList.contains('collapsed');
+      const shouldOpen = opts.forceOpen || level === 'error' || level === 'warn' || logForceOpen;
+
+      if (shouldOpen && isCollapsed) {
         panel.classList.remove('collapsed');
         el('log-unread').classList.remove('has-new');
+        logUnreadCount = 0;
+        if (level !== 'error' && level !== 'warn') logForceOpen = false;
+      } else if (isCollapsed) {
+        logUnreadCount++;
+        el('log-unread').classList.add('has-new');
       }
     }
     function clearLog() { el('log-body').innerHTML = ''; }
@@ -1873,7 +1996,6 @@ let podcasts = [];
       return m >= 60 ? `${Math.floor(m/60)}h${m%60}m` : `${m}m`;
     }
 
-    function el(id) { return document.getElementById(id); }
     function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
     function showView(name) {
@@ -1933,7 +2055,7 @@ let podcasts = [];
         const suspect = r.deleted || (r.ads_removed == null && r.time_saved_secs == null);
         const actionCls = suspect ? 'btn small warning' : 'btn small';
         const actionTitle = suspect
-          ? 'MinusPod state may be stuck — reset so the episode can be reprocessed.'
+          ? 'MinusPod state may be stuck. Reset so the episode can be reprocessed.'
           : 'Reset MinusPod state and re-queue for processing.';
         return `<tr class="${suspect ? 'history-row-suspect' : ''}">
           <td>${dateStr}</td>
@@ -1954,14 +2076,12 @@ let podcasts = [];
         addLog('error', 'Reset failed: missing slug or episode id.');
         return;
       }
-      const ok = confirm(
-        `Reset MinusPod state for "${title || episodeId}"?\n\n` +
-        `This clears any stuck 'processing' / 'failed' / 'permanently_failed' ` +
-        `status in MinusPod's database and asks MinusPod to reprocess the ` +
-        `episode. Your local 'processed' marker in Pocket Casts Ad-Free is ` +
-        `not touched.\n\nContinue?`
-      );
-      if (!ok) return;
+      const ok = await confirmDialog({
+        title: 'Reset MinusPod state',
+        message: `Reset state for "${title || episodeId}"? This clears stuck processing status and asks MinusPod to reprocess. Your local processed marker is not touched.`,
+        confirmLabel: 'Reset',
+      });
+      if (!ok.confirmed) return;
       addLog('info', `Resetting MinusPod state: ${slug}/${episodeId}…`);
       try {
         const r = await api(`/episodes/${encodeURIComponent(slug)}/${encodeURIComponent(episodeId)}/reset`, {
@@ -1969,7 +2089,7 @@ let podcasts = [];
         });
         if (r.db_reset) {
           let msg = `Reset ${slug}/${episodeId} (was '${r.previous_status}').`;
-          if (r.reprocess_triggered) msg += ' Reprocess queued — watch the log.';
+          if (r.reprocess_triggered) msg += ' Reprocess queued. Watch the log.';
           else if (r.already_processing) msg += ' MinusPod is already reprocessing it.';
           else if (r.reprocess_error) msg += ` Reprocess request failed: ${r.reprocess_error}`;
           addLog('success', msg);

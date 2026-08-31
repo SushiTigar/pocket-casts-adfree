@@ -7,142 +7,142 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
 </head>
 <body>
-  <div class="global-progress" id="global-progress">
-    <span class="progress-stage" id="progress-stage">Idle</span>
-    <div class="progress-bar-wrap">
-      <div class="progress-bar-fill" id="progress-bar" style="width: 0%"></div>
-    </div>
-    <span class="progress-label" id="progress-label"></span>
-    <span class="queue-badge hidden" id="queue-badge">0 queued</span>
+  <!-- Legacy progress (JS compat) -->
+  <div class="global-progress hidden" id="global-progress" aria-hidden="true">
+    <span id="progress-stage"></span>
+    <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progress-bar"></div></div>
+    <span id="progress-label"></span>
+    <span class="queue-badge hidden" id="queue-badge"></span>
   </div>
 
-  <div class="header">
-    <h1>Pocket Casts <span>Ad-Free</span></h1>
-    <div class="header-actions">
-      <a class="header-link" href="#" onclick="event.preventDefault(); showView('dashboard')" id="nav-dashboard">Dashboard</a>
-      <a class="header-link" href="#" onclick="event.preventDefault(); showView('history')" id="nav-history">History</a>
-      <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme" id="theme-btn">&#9790;</button>
+  <header class="app-bar">
+    <div class="app-bar-left">
+      <h1 class="app-title">Pocket Casts <span>Ad-Free</span></h1>
+      <nav class="app-nav" aria-label="Main">
+        <a class="nav-link" href="#" onclick="event.preventDefault(); showView('dashboard')" id="nav-dashboard">Dashboard</a>
+        <a class="nav-link" href="#" onclick="event.preventDefault(); showView('history')" id="nav-history">History</a>
+      </nav>
     </div>
-  </div>
+    <div class="app-bar-right">
+      <button class="status-chip" id="status-chip" onclick="openServicesPanel()" title="View services" type="button">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-chip-text">Checking services...</span>
+      </button>
+      <div class="menu-wrap">
+        <button class="menu-trigger" id="menu-trigger" onclick="toggleSettingsMenu(event)" title="More actions" type="button" aria-haspopup="true" aria-expanded="false">&#8942;</button>
+        <div class="menu-dropdown hidden" id="settings-menu" role="menu">
+          <button type="button" role="menuitem" onclick="closeSettingsMenu(); openServicesPanel()">Services</button>
+          <button type="button" role="menuitem" onclick="closeSettingsMenu(); openAdTunablesPanel()">Ad detection</button>
+          <div class="menu-divider"></div>
+          <button type="button" role="menuitem" class="danger" onclick="closeSettingsMenu(); cleanupPlayedFiles()">Clean up played files</button>
+        </div>
+      </div>
+      <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme" id="theme-btn" type="button">&#9790;</button>
+    </div>
+  </header>
 
-  <div class="services-quick-bar" id="services-quick-bar">
-    <div class="sq-left">
-      <div class="sq-ram-status" id="sq-ram-status">
-        <span class="sq-label">RAM:</span>
-        <span class="sq-value" id="sq-ram-value">Checking...</span>
-        <div class="sq-ram-bar-wrap"><div class="sq-ram-bar-fill" id="sq-ram-bar-fill" style="width: 0%"></div></div>
-      </div>
-      <div class="sq-services-status" id="sq-services-status">
-        <span class="sq-label">Services:</span>
-        <span class="sq-service" id="sq-svc-ollama"><span class="sq-dot"></span> Ollama</span>
-        <span class="sq-service" id="sq-svc-whisper"><span class="sq-dot"></span> Whisper</span>
-        <span class="sq-service" id="sq-svc-minuspod"><span class="sq-dot"></span> MinusPod</span>
-      </div>
-    </div>
-    <div class="sq-actions" id="sq-actions">
-      <span class="sq-reminder-text">Shut down services before leaving</span>
-      <button class="btn small primary" id="btn-start-all" onclick="startAllServices()">Start All</button>
-      <button class="btn small danger" id="btn-stop-all" onclick="stopAllServices()">Stop All</button>
-      <button class="btn small danger" id="btn-shutdown-ui" onclick="shutdownUI()" title="Stop all services and shut down this Web UI server.">Shutdown UI</button>
-    </div>
-    <button class="sq-toggle" id="sq-toggle" onclick="toggleServicesBar()" title="Show/hide controls" aria-label="Toggle controls">&#9662;</button>
+  <div class="job-progress" id="job-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-live="polite">
+    <div class="job-progress-fill" id="job-progress-fill"></div>
   </div>
 
   <div class="container">
-   <div id="view-dashboard">
-    <div class="stats-bar">
-      <div class="stat-card" onclick="setStatFilter('all')" id="stat-card-all">
-        <div class="stat-label">Subscriptions</div>
-        <div class="stat-value accent" id="stat-total">-</div>
+    <div id="view-dashboard">
+      <div class="dashboard-controls">
+        <div class="segmented-filter" role="group" aria-label="Filter podcasts">
+          <button class="segment active" type="button" onclick="setStatFilter('all')" id="filter-all">
+            All <span class="segment-count" id="count-all">-</span>
+          </button>
+          <button class="segment" type="button" onclick="setStatFilter('eligible')" id="filter-eligible">
+            Eligible <span class="segment-count" id="count-eligible">-</span>
+          </button>
+          <button class="segment" type="button" onclick="setStatFilter('patreon')" id="filter-patreon">
+            Patreon <span class="segment-count" id="count-patreon">-</span>
+          </button>
+          <button class="segment" type="button" onclick="setStatFilter('processed')" id="filter-processed">
+            Processed <span class="segment-count" id="count-processed">-</span>
+          </button>
+        </div>
+
+        <div class="toolbar" id="toolbar">
+          <input class="search-input" id="search" placeholder="Search podcasts..." oninput="filterPodcasts()" aria-label="Search podcasts">
+          <label class="select-all-wrap">
+            <input type="checkbox" id="select-all" onchange="toggleSelectAll()">
+            Select all eligible
+          </label>
+        </div>
+
+        <div class="selection-bar" id="selection-bar">
+          <span class="selection-bar-text" id="selection-text">0 episodes selected</span>
+          <div class="selection-bar-actions">
+            <button class="btn ghost sm" type="button" onclick="clearSelection()">Clear</button>
+            <button class="btn primary sm" id="btn-process" type="button" onclick="processSelected()">Process selected</button>
+          </div>
+        </div>
       </div>
-      <div class="stat-card" onclick="setStatFilter('eligible')" id="stat-card-eligible">
-        <div class="stat-label">Eligible</div>
-        <div class="stat-value green" id="stat-eligible">-</div>
-      </div>
-      <div class="stat-card" onclick="setStatFilter('patreon')" id="stat-card-patreon">
-        <div class="stat-label">Patreon (skipped)</div>
-        <div class="stat-value" id="stat-patreon" style="color:var(--warning)">-</div>
-      </div>
-      <div class="stat-card" onclick="setStatFilter('processed')" id="stat-card-processed">
-        <div class="stat-label">Processed Episodes</div>
-        <div class="stat-value blue" id="stat-processed">-</div>
+
+      <div id="podcast-list" class="podcast-list">
+        <div class="empty-state">
+          <h3>Loading subscriptions</h3>
+          <p>Connecting to Pocket Casts</p>
+        </div>
       </div>
     </div>
 
-    <div class="toolbar" id="toolbar">
-      <input class="search-input" id="search" placeholder="Search podcasts..." oninput="filterPodcasts()">
-      <label class="select-all-wrap">
-        <input type="checkbox" id="select-all" onchange="toggleSelectAll()">
-        Select All Eligible
-      </label>
-      <button class="btn primary" id="btn-process" onclick="processSelected()" disabled>
-        Process Selected
-      </button>
-      <button class="btn" onclick="openServicesPanel()">Services</button>
-      <button class="btn" onclick="openAdTunablesPanel()">Ad detection</button>
-      <button class="btn danger" onclick="cleanupPlayedFiles()">Clean up played Ad-Free files</button>
-    </div>
-
-    <div id="podcast-list" class="podcast-list">
-      <div class="empty-state">
-        <h3>Loading subscriptions...</h3>
-        <p>Connecting to Pocket Casts</p>
+    <div id="view-history" class="hidden">
+      <div class="history-header">
+        <h2>Processing history</h2>
+        <div class="history-controls">
+          <input class="search-input" id="history-search" placeholder="Search title or podcast..." oninput="renderHistory()" aria-label="Search history">
+          <select id="history-sort" onchange="renderHistory()" aria-label="Sort history">
+            <option value="processed_desc">Newest first</option>
+            <option value="processed_asc">Oldest first</option>
+            <option value="time_saved_desc">Most time saved</option>
+            <option value="ads_desc">Most ads removed</option>
+          </select>
+          <button class="btn sm" type="button" onclick="loadHistory()">Refresh</button>
+          <button class="btn sm" type="button" onclick="downloadHistoryCsv()">Export CSV</button>
+        </div>
+      </div>
+      <div class="history-summary" id="history-summary"></div>
+      <div class="history-table-wrap">
+        <table class="history-table">
+          <thead>
+            <tr>
+              <th>Processed</th>
+              <th>Episode</th>
+              <th>Podcast</th>
+              <th class="num">Ads</th>
+              <th class="num">Time saved</th>
+              <th class="actions-col">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="history-rows">
+            <tr><td colspan="6" class="empty-state-cell">Loading history...</td></tr>
+          </tbody>
+        </table>
       </div>
     </div>
-   </div>
-
-   <div id="view-history" class="hidden">
-    <div class="history-header">
-      <h2>Processing history</h2>
-      <div class="history-controls">
-        <input class="search-input" id="history-search" placeholder="Search title or podcast..." oninput="renderHistory()">
-        <select id="history-sort" onchange="renderHistory()">
-          <option value="processed_desc">Newest first</option>
-          <option value="processed_asc">Oldest first</option>
-          <option value="time_saved_desc">Most time saved</option>
-          <option value="ads_desc">Most ads removed</option>
-        </select>
-        <button class="btn small" onclick="loadHistory()">Refresh</button>
-        <button class="btn small" onclick="downloadHistoryCsv()">Export CSV</button>
-      </div>
-    </div>
-    <div class="history-summary" id="history-summary"></div>
-    <div class="history-table-wrap">
-      <table class="history-table">
-        <thead>
-          <tr>
-            <th>Processed</th>
-            <th>Episode</th>
-            <th>Podcast</th>
-            <th class="num">Ads</th>
-            <th class="num">Time saved</th>
-            <th class="actions-col">Actions</th>
-          </tr>
-        </thead>
-        <tbody id="history-rows">
-          <tr><td colspan="6" class="empty-state-cell">Loading history...</td></tr>
-        </tbody>
-      </table>
-    </div>
-   </div>
   </div>
 
   <div class="log-panel collapsed" id="log-panel">
     <div class="log-header" onclick="toggleLogPanel()">
       <div class="log-header-left">
-        <span class="log-toggle-icon">&#9660;</span>
-        <span>Processing Log</span>
-        <div class="log-unread" id="log-unread"></div>
+        <span class="log-toggle-icon" aria-hidden="true">&#9660;</span>
+        <span>Processing log</span>
+        <span class="log-stage-text" id="log-stage-text"></span>
+        <div class="log-unread" id="log-unread" aria-hidden="true"></div>
       </div>
       <div class="log-header-actions" onclick="event.stopPropagation()">
-        <button class="btn small danger hidden" id="btn-skip" onclick="skipEpisode()">Skip Episode</button>
-        <button class="btn small warning hidden" id="btn-pause" onclick="togglePause()">Pause</button>
-        <button class="btn small danger hidden" id="btn-stop" onclick="stopJob()">Stop Job</button>
-        <button class="btn small" onclick="clearLog()">Clear</button>
+        <button class="btn sm danger hidden" id="btn-skip" type="button" onclick="skipEpisode()">Skip episode</button>
+        <button class="btn sm warning hidden" id="btn-pause" type="button" onclick="togglePause()">Pause</button>
+        <button class="btn sm danger hidden" id="btn-stop" type="button" onclick="stopJob()">Stop job</button>
+        <button class="btn sm ghost" type="button" onclick="clearLog()">Clear</button>
       </div>
     </div>
-    <div class="log-body" id="log-body"></div>
+    <div class="log-body" id="log-body" role="log" aria-live="polite"></div>
   </div>
+
+  <div class="toast-container" id="toast-container" aria-live="polite" aria-atomic="true"></div>
 
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
