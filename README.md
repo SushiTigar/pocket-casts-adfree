@@ -136,12 +136,25 @@ upstream on each start, and the
 
 This matches the author's cloud setup: **local Whisper** for transcription,
 **OpenRouter** for ad detection with `deepseek/deepseek-v4-flash-0731`, full-
-transcript windows (up to 10 hr episodes in one LLM call), verification pass
-enabled, and cheapest-host routing. No Ollama or GPU required beyond Whisper.
+transcript windows (up to 10 hr episodes in one LLM call), and cheapest-host
+routing. No Ollama or GPU required beyond Whisper.
 
 **You need:** Pocket Casts Plus, an [OpenRouter API key](https://openrouter.ai/keys),
 Python 3.10+, `ffmpeg`, and vendored MinusPod + whisper.cpp (complete
 [First-time setup](#first-time-setup) steps 1, 3, and 4 if you haven't already).
+
+### Cost presets
+
+| Preset | `SKIP_VERIFICATION` | `LARGE_WINDOW` | Chapters | Typical cost | Trade-off |
+|--------|---------------------|----------------|----------|--------------|-----------|
+| **Cheap balanced** (default below) | `86400` | `36000` | off | ~$0.005/ep | 1 LLM call; may miss rare mid-rolls |
+| Balanced + chapters | `86400` | `36000` | on | ~$0.01/ep | +2 LLM calls for coarse chapters |
+| Thorough | `0` | `36000` | on/off | ~$0.02/ep | Pass 2 re-transcribes cut audio + 2nd detection |
+| Maximum | `0` | `3600` | on | ~$0.03+/ep | Many windows × 2 passes |
+
+Voicemail Dump Truck (~$0.03) used **stale MinusPod DB values** (`skip_verification=1200`,
+`verification_max_tokens=4096`) that overrode `.env` — not the presets above. Restart
+MinusPod after changing `.env` so cost tunables sync into the DB (see below).
 
 ### Step 1 — Tunables in `.env`
 
@@ -157,17 +170,14 @@ export LLM_PROVIDER=openrouter
 export OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
 export OPENROUTER_PROVIDER_SORT=price
 
-# Full transcript in one window (up to ~1 hr); 1M context on this model
-export LARGE_WINDOW_SECONDS=3600
-# Output budget for the ad list JSON. 8192 truncates on ad-heavy ~1 hr episodes
-# (log: "hit max_tokens" / "empty completion"); 16384 is the safe default here.
+# Cheap balanced — one full-transcript LLM call, no pass 2 (see Cost presets above)
+export LARGE_WINDOW_SECONDS=36000
 export AD_DETECTION_MAX_TOKENS=16384
 export LARGE_WINDOW_MIN_SECONDS=300
 export LARGE_WINDOW_MAX_SECONDS=36000
-# Always run verification (catches mid-roll ads; ~2× LLM cost).
-# Set 86400 to skip verification on episodes under 24 h (cheaper; may miss mid-rolls).
-export SKIP_VERIFICATION_UNDER_SECONDS=0
+export SKIP_VERIFICATION_UNDER_SECONDS=86400
 export ENABLE_PROMPT_CACHING=true
+export CHAPTERS_ENABLED=false
 ```
 
 Use `deepseek/deepseek-v4-flash-0731` (not the older `deepseek/deepseek-v4-flash`
@@ -175,9 +185,14 @@ slug). `OPENROUTER_PROVIDER_SORT=price` auto-picks the cheapest host; to pin hos
 instead, set `OPENROUTER_PROVIDER_ORDER=DeepInfra,StreamLake,GMICloud` and
 `OPENROUTER_ALLOW_FALLBACKS=false`.
 
-**Rough cost:** about **$0.01–0.02 per episode** on OpenRouter with verification
-(~2 LLM passes). Set `SKIP_VERIFICATION_UNDER_SECONDS=86400` to skip verification
-and roughly halve cost (may leave mid-roll ads in place).
+**DB sync:** MinusPod stores cost tunables in SQLite. Values customized in the
+**Ad detection** panel override `.env` until the next MinusPod start (or job
+start), when `sync_cost_tunables_from_env()` pushes `.env` into the DB. After
+changing `.env`, restart MinusPod from the Services panel.
+
+For **thorough** runs (pass 2 verification on every episode), set
+`SKIP_VERIFICATION_UNDER_SECONDS=0` — expect ~2× LLM cost and a second Whisper
+pass on the cut audio (~20 extra minutes on long shows).
 
 ### Step 2 — Secrets (pick your OS)
 
@@ -837,7 +852,7 @@ Validate thresholds against your library: `python scripts/validate_pc_transcript
 | `LARGE_WINDOW_SECONDS` | `3600` | Window size used in place of `WINDOW_SIZE_SECONDS` for 1M-context models (DeepSeek V4, Gemini Flash, Qwen Long, Llama 4 / 3.1-405B). Default 3600 covers a 1hr episode in a single window, cutting per-episode LLM cost. Set lower for smaller windows, higher for longer episodes. Range 300–36000 (10 hr ceiling, sized for 1M-context models). |
 | `LARGE_WINDOW_MIN_SECONDS` | `300` | Lower bound for the accepted `LARGE_WINDOW_SECONDS` range. Override in `.env` to tighten the envelope. |
 | `LARGE_WINDOW_MAX_SECONDS` | `36000` | Upper bound for the accepted `LARGE_WINDOW_SECONDS` range. Widen for larger-context models (e.g. Gemini 1.5 Pro at 2M). |
-| `SKIP_VERIFICATION_UNDER_SECONDS` | `0` (recommended) | Run the verification pass on every episode. **`0`** runs a second LLM pass — catches mid-roll ads (in-house + DAI stacks, timestamp mistakes in pass 1) that full-transcript detection misses. Costs ~2× LLM tokens. **`86400`** (24 h) skips verification on all realistic episodes and halves cost, but may leave mid-roll sponsor reads in place. |
+| `SKIP_VERIFICATION_UNDER_SECONDS` | `86400` (balanced) | **`86400`** skips pass 2 on episodes under 24 h — roughly half the cost and time (no second Whisper run). **`0`** always runs verification: re-transcribes cut audio and runs a second detection pass; catches more mid-rolls but ~2× LLM cost. |
 | `ENABLE_PROMPT_CACHING` | `true` | Annotate the system prompt with `cache_control: ephemeral` so the provider can cache it across the ~22 windows of a long episode. **Provider-dependent**: works on OpenRouter and Anthropic (both honour the annotation); **no-op on DeepSeek** (caching is automatic and prefix-based — see [api-docs.deepseek.com/guides/kv_cache](https://api-docs.deepseek.com/guides/kv_cache)) and on Ollama. The code auto-detects the provider from `LLM_PROVIDER` and only annotates when it will be honoured. Cached input tokens are reported in the response log regardless of provider. |
 | `AD_DETECTION_MAX_TOKENS` | `16384` | Output token budget per LLM call. With full-transcript windowing (`LARGE_WINDOW_SECONDS=3600`), ad-heavy ~1 hr episodes can exceed 8192 tokens and MinusPod retries forever (`hit max_tokens` / `empty completion` in `/tmp/minuspod.log`). **16384** is the recommended value for this OpenRouter quick setup. Lower for smaller models/contexts; raise further only if truncation persists. |
 | `CHAPTERS_ENABLED` | `true` | Read from `.env` on startup and synced to MinusPod DB. Toggle via Settings → Chapters in UI, or `PUT /api/v1/settings/ad-detection` with `{"chaptersEnabled": false}`. Disabling saves ~2 LLM calls/episode (boundary + title). |

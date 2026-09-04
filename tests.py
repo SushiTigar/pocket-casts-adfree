@@ -2587,6 +2587,28 @@ class TestServicesManager(unittest.TestCase):
         self.assertEqual(captured.get("env", {}).get("ENABLE_PROMPT_CACHING"), "true")
         self.assertEqual(captured.get("env", {}).get("AD_DETECTION_MAX_TOKENS"), "8192")
 
+    def test_sync_cost_tunables_from_env_pushes_db(self):
+        """Cost tunables in .env must be PUT to MinusPod so DB overrides don't
+        ignore SKIP_VERIFICATION_UNDER_SECONDS etc."""
+        import services_manager as _sm
+        with patch.dict(os.environ, {
+            "SKIP_VERIFICATION_UNDER_SECONDS": "86400",
+            "LARGE_WINDOW_SECONDS": "36000",
+            "AD_DETECTION_MAX_TOKENS": "16384",
+            "ENABLE_PROMPT_CACHING": "true",
+        }, clear=False), \
+             patch.object(_sm, "put_minuspod_stage_tunables",
+                          return_value={"ok": True}) as m_put:
+            result = _sm.sync_cost_tunables_from_env()
+        self.assertTrue(result.get("ok"))
+        m_put.assert_called_once()
+        payload = m_put.call_args[0][0]
+        self.assertEqual(payload["skipVerificationUnderSeconds"], 86400)
+        self.assertEqual(payload["largeWindowSeconds"], 36000)
+        self.assertEqual(payload["detectionMaxTokens"], 16384)
+        self.assertEqual(payload["verificationMaxTokens"], 16384)
+        self.assertTrue(payload["enablePromptCaching"])
+
     @unittest.skipUnless(
         (ROOT / "MinusPod" / "src" / "config.py").exists(),
         "MinusPod not vendored",

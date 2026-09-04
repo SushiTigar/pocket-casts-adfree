@@ -991,6 +991,10 @@ def start_minuspod() -> dict:
             sync_chapters_enabled_from_env()
         except Exception:
             pass
+        try:
+            sync_cost_tunables_from_env()
+        except Exception:
+            pass
     return {"ok": ok}
 
 
@@ -1078,6 +1082,56 @@ def sync_chapters_enabled_from_env() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def _env_bool(name: str) -> bool | None:
+    raw = os.environ.get(name, "").strip().lower()
+    if raw in ("true", "1", "yes"):
+        return True
+    if raw in ("false", "0", "no"):
+        return False
+    return None
+
+
+def sync_cost_tunables_from_env() -> dict:
+    """Push LLM cost tunables from ``.env`` into MinusPod's settings DB.
+
+    MinusPod's ``get_stage_tunable()`` prefers DB values over env when the user
+    customized settings in the Ad detection panel (``is_default=0``). Without
+    this sync, ``.env`` can say ``SKIP_VERIFICATION_UNDER_SECONDS=86400`` while
+    the DB still has ``1200``, causing pass 2 and ~2× LLM cost.
+    """
+    tunables: dict = {}
+
+    skip = os.environ.get("SKIP_VERIFICATION_UNDER_SECONDS", "").strip()
+    if skip:
+        tunables["skipVerificationUnderSeconds"] = int(skip)
+
+    large = os.environ.get("LARGE_WINDOW_SECONDS", "").strip()
+    if large:
+        tunables["largeWindowSeconds"] = int(large)
+
+    caching = _env_bool("ENABLE_PROMPT_CACHING")
+    if caching is not None:
+        tunables["enablePromptCaching"] = caching
+
+    max_tokens = os.environ.get("AD_DETECTION_MAX_TOKENS", "").strip()
+    if max_tokens:
+        tok = int(max_tokens)
+        tunables["detectionMaxTokens"] = tok
+        tunables["verificationMaxTokens"] = tok
+
+    if not tunables:
+        return {"ok": True, "skipped": True, "reason": "no cost tunables in environment"}
+
+    try:
+        result = put_minuspod_stage_tunables(tunables)
+        result["synced"] = tunables
+        return result
+    except ServiceError as e:
+        return {"ok": False, "error": str(e)}
+    except (TypeError, ValueError) as e:
+        return {"ok": False, "error": f"invalid cost tunable value: {e}"}
+
+
 def set_minuspod_model(model: str) -> dict:
     if not model:
         raise ServiceError("model name required")
@@ -1136,6 +1190,8 @@ def put_minuspod_stage_tunables(tunables: dict) -> dict:
         "largeWindowSeconds",
         "skipVerificationUnderSeconds",
         "enablePromptCaching",
+        "detectionMaxTokens",
+        "verificationMaxTokens",
     }
     unknown = set(tunables) - allowed
     if unknown:

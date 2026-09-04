@@ -1503,6 +1503,7 @@ def create_app(email=None, password=None):
             else:
                 services_manager.sync_minuspod_model_from_env()
                 services_manager.sync_chapters_enabled_from_env()
+                services_manager.sync_cost_tunables_from_env()
         except Exception:
             pass
         job["pause_event"].clear()
@@ -1662,6 +1663,11 @@ def create_app(email=None, password=None):
                 raise
             mp.disable_auto_process()
             mp.sync_model_from_env()
+            try:
+                services_manager.sync_cost_tunables_from_env()
+                services_manager.sync_chapters_enabled_from_env()
+            except Exception:
+                pass
             mp.set_fast_system_prompt()
             mp.lower_confidence_threshold()
             state = load_state()
