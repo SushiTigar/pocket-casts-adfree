@@ -152,9 +152,10 @@ Python 3.10+, `ffmpeg`, and vendored MinusPod + whisper.cpp (complete
 | Thorough | `0` | `36000` | on/off | ~$0.02/ep | Pass 2 re-transcribes cut audio + 2nd detection |
 | Maximum | `0` | `3600` | on | ~$0.03+/ep | Many windows × 2 passes |
 
-Voicemail Dump Truck (~$0.03) used **stale MinusPod DB values** (`skip_verification=1200`,
-`verification_max_tokens=4096`) that overrode `.env` — not the presets above. Restart
-MinusPod after changing `.env` so cost tunables sync into the DB (see below).
+**DB sync note:** MinusPod stores cost tunables in SQLite. If you previously adjusted them in the
+**Ad detection** panel, those values override `.env` until the next MinusPod start, when
+`sync_cost_tunables_from_env()` writes `.env` into the DB. After changing `.env`, restart
+MinusPod from the Services panel to pick up the new values.
 
 ### Step 1 — Tunables in `.env`
 
@@ -184,11 +185,6 @@ Use `deepseek/deepseek-v4-flash-0731` (not the older `deepseek/deepseek-v4-flash
 slug). `OPENROUTER_PROVIDER_SORT=price` auto-picks the cheapest host; to pin hosts
 instead, set `OPENROUTER_PROVIDER_ORDER=DeepInfra,StreamLake,GMICloud` and
 `OPENROUTER_ALLOW_FALLBACKS=false`.
-
-**DB sync:** MinusPod stores cost tunables in SQLite. Values customized in the
-**Ad detection** panel override `.env` until the next MinusPod start (or job
-start), when `sync_cost_tunables_from_env()` pushes `.env` into the DB. After
-changing `.env`, restart MinusPod from the Services panel.
 
 For **thorough** runs (pass 2 verification on every episode), set
 `SKIP_VERIFICATION_UNDER_SECONDS=0` — expect ~2× LLM cost and a second Whisper
