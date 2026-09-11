@@ -55,6 +55,10 @@ MINUSPOD_ADDITIONAL_PATCHES = [
     ROOT / "patches" / "llm-cost-optimizations.patch",
     ROOT / "patches" / "house-ad-detection.patch",
     ROOT / "patches" / "chapter-granularity.patch",
+    ROOT / "patches" / "truncation-failfast.patch",
+    # Consumers for the tunables llm-cost-optimizations.patch only declares.
+    # Must stay after truncation-failfast.patch: both touch llm_client.py.
+    ROOT / "patches" / "cost-optimization-consumers.patch",
 ]
 
 _KEYCHAIN_ENV_MAP = {
@@ -871,6 +875,13 @@ def start_minuspod() -> dict:
     overlaid = _reload_dotenv_into(env, exclude={"POCKETCASTS_EMAIL", "POCKETCASTS_PASSWORD"})
     if overlaid:
         log.debug("Reloaded %d keys from .env into MinusPod subprocess env", overlaid)
+
+    # Build a dict of what the *current* .env actually declares. This lets the
+    # cost-opt tunable block below use .env as the authoritative source: if a key
+    # was removed from .env (e.g. LARGE_WINDOW_SECONDS), it resolves to "" even
+    # when the parent shell still has the old value in os.environ.
+    _dotenv_declared: dict = {}
+    _reload_dotenv_into(_dotenv_declared)
     _overlay_openrouter_from_keychain(env)
     env.update({
         "DATA_DIR": str(MINUSPOD_DIR / "data"),
@@ -927,7 +938,12 @@ def start_minuspod() -> dict:
         # as the env > DB > default source. Explicit passthroughs (rather than
         # relying on os.environ.copy()) so they're visible in the process listing
         # and so the log line below confirms what MinusPod actually sees.
-        "LARGE_WINDOW_SECONDS":          env.get("LARGE_WINDOW_SECONDS", ""),
+        # NOTE: Use _dotenv_declared (fresh .env parse) rather than env.get() for
+        # keys the user might remove from .env: os.environ inherits the old value
+        # from the parent shell, so env.get() would still return it even after
+        # the key is removed. _dotenv_declared only contains what .env currently
+        # declares, so absence == empty string == MinusPod falls back to default.
+        "LARGE_WINDOW_SECONDS":          _dotenv_declared.get("LARGE_WINDOW_SECONDS", ""),
         "LARGE_WINDOW_MIN_SECONDS":      env.get("LARGE_WINDOW_MIN_SECONDS", ""),
         "LARGE_WINDOW_MAX_SECONDS":      env.get("LARGE_WINDOW_MAX_SECONDS", ""),
         "SKIP_VERIFICATION_UNDER_SECONDS": env.get("SKIP_VERIFICATION_UNDER_SECONDS", "0"),
@@ -939,7 +955,7 @@ def start_minuspod() -> dict:
         "LARGE_WINDOW_SECONDS=%r SKIP_VERIFICATION_UNDER_SECONDS=%r "
         "ENABLE_PROMPT_CACHING=%r "
         "(WINDOW_SIZE_SECONDS=%r WINDOW_OVERLAP_SECONDS=%r)",
-        env.get("LARGE_WINDOW_SECONDS") or "<unset>",
+        _dotenv_declared.get("LARGE_WINDOW_SECONDS") or "<unset>",
         env.get("SKIP_VERIFICATION_UNDER_SECONDS") or "<unset>",
         env.get("ENABLE_PROMPT_CACHING") or "<unset>",
         env.get("WINDOW_SIZE_SECONDS"),
@@ -1098,22 +1114,39 @@ def sync_cost_tunables_from_env() -> dict:
     customized settings in the Ad detection panel (``is_default=0``). Without
     this sync, ``.env`` can say ``SKIP_VERIFICATION_UNDER_SECONDS=86400`` while
     the DB still has ``1200``, causing pass 2 and ~2× LLM cost.
+
+    Reads from the *current* ``.env`` file (via ``_reload_dotenv_into``) rather
+    than from ``os.environ``. This way, removing a key from ``.env`` correctly
+    means "use the MinusPod default" — the key is simply omitted from the sync
+    payload and not written to the DB, so MinusPod falls back to its code default.
+    Using ``os.environ`` would pick up stale values the parent shell inherited
+    from a previous ``source .env`` run.
     """
+    # Parse the current .env into a fresh dict, independent of os.environ.
+    dotenv: dict = {}
+    _reload_dotenv_into(dotenv)
+
     tunables: dict = {}
 
-    skip = os.environ.get("SKIP_VERIFICATION_UNDER_SECONDS", "").strip()
+    skip = dotenv.get("SKIP_VERIFICATION_UNDER_SECONDS", "").strip()
     if skip:
         tunables["skipVerificationUnderSeconds"] = int(skip)
 
-    large = os.environ.get("LARGE_WINDOW_SECONDS", "").strip()
+    large = dotenv.get("LARGE_WINDOW_SECONDS", "").strip()
     if large:
         tunables["largeWindowSeconds"] = int(large)
 
-    caching = _env_bool("ENABLE_PROMPT_CACHING")
+    caching_raw = dotenv.get("ENABLE_PROMPT_CACHING", "").strip().lower()
+    if caching_raw in ("true", "1", "yes"):
+        caching = True
+    elif caching_raw in ("false", "0", "no"):
+        caching = False
+    else:
+        caching = None
     if caching is not None:
         tunables["enablePromptCaching"] = caching
 
-    max_tokens = os.environ.get("AD_DETECTION_MAX_TOKENS", "").strip()
+    max_tokens = dotenv.get("AD_DETECTION_MAX_TOKENS", "").strip()
     if max_tokens:
         tok = int(max_tokens)
         tunables["detectionMaxTokens"] = tok

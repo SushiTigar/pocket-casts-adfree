@@ -6,12 +6,15 @@ pipeline's preferred ad-detection tuning.
 
 ## Files
 
-| File                           | Purpose                                                              |
-| ------------------------------ | -------------------------------------------------------------------- |
-| `MINUSPOD_BASE.txt`            | Upstream commit the patch applies on top of                          |
-| `minuspod-local.patch`         | Consolidated diff covering all local edits (applies on `MINUSPOD_BASE`) |
-| `llm-cost-optimizations.patch` | Large-window override, `SKIP_VERIFICATION_UNDER_SECONDS`, OpenRouter prompt caching |
-| `house-ad-detection.patch`     | Allow self-promo / house-ad language through the ad-evidence gate in `src/ad_detector/prompts.py` |
+| File                                | Purpose                                                              |
+| ----------------------------------- | -------------------------------------------------------------------- |
+| `MINUSPOD_BASE.txt`                 | Upstream commit the patch applies on top of                          |
+| `minuspod-local.patch`              | Consolidated diff covering all local edits (applies on `MINUSPOD_BASE`) |
+| `llm-cost-optimizations.patch`      | Declares large-window override, `SKIP_VERIFICATION_UNDER_SECONDS`, `ENABLE_PROMPT_CACHING` in `config.py` and the settings API |
+| `house-ad-detection.patch`          | Allow self-promo / house-ad language through the ad-evidence gate in `src/ad_detector/prompts.py` |
+| `chapter-granularity.patch`         | Raises `chapter_boundary_max_tokens` to 1000; scales `num_splits` with episode duration |
+| `truncation-failfast.patch`         | Split truncated detection windows once at half size; fail with `retryable=false` after budget exceeded |
+| `cost-optimization-consumers.patch` | Wires the tunables from `llm-cost-optimizations.patch`: skip-verification guard, `bool` KIND_RULES coercion, prompt-caching annotations, OpenRouter cheapest-host routing |
 
 ## What the patch changes
 
@@ -34,6 +37,18 @@ Applied after `minuspod-local.patch` by `scripts/setup_minuspod.sh` and
 
 1. `llm-cost-optimizations.patch` — LLM cost tunables and Ad detection UI panel
 2. `house-ad-detection.patch` — self-promo evidence in ad gate (`SELF_PROMO_KEYWORDS`)
+3. `chapter-granularity.patch` — chapter boundary token budget + split scaling
+4. `truncation-failfast.patch` — no same-window retries on `max_tokens`; split instead
+5. `cost-optimization-consumers.patch` — must stay last: it touches `src/llm_client.py`
+   (shared with `truncation-failfast.patch`) and `src/main_app/processing.py`
+
+`llm-cost-optimizations.patch` only declares `skip_verification_under_seconds`
+and `enable_prompt_caching` in `config.py` / the settings API. Their consumers
+live in `minuspod-local.patch`, which no longer applies to the pinned upstream
+and is skipped best-effort at setup, so both settings read back correctly from
+the UI while doing nothing. `cost-optimization-consumers.patch` carries just
+those consumers plus the `bool` entry in `KIND_RULES` that the settings form
+needs to save without a 500.
 
 ## Re-generating the patch
 

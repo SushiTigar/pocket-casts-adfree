@@ -1,4 +1,5 @@
 diff --git a/src/ad_detector/prompts.py b/src/ad_detector/prompts.py
+index bd395163..1a77928d 100644
 --- a/src/ad_detector/prompts.py
 +++ b/src/ad_detector/prompts.py
 @@ -42,6 +42,53 @@ def resolve_window_size_seconds(model: str, episode_duration: float) -> float:
