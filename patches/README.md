@@ -8,55 +8,65 @@ pipeline's preferred ad-detection tuning.
 
 | File                                | Purpose                                                              |
 | ----------------------------------- | -------------------------------------------------------------------- |
-| `MINUSPOD_BASE.txt`                 | Upstream commit the patch applies on top of                          |
-| `minuspod-local.patch`              | Consolidated diff covering all local edits (applies on `MINUSPOD_BASE`) |
-| `llm-cost-optimizations.patch`      | Declares large-window override, `SKIP_VERIFICATION_UNDER_SECONDS`, `ENABLE_PROMPT_CACHING` in `config.py` and the settings API |
-| `house-ad-detection.patch`          | Allow self-promo / house-ad language through the ad-evidence gate in `src/ad_detector/prompts.py` |
-| `chapter-granularity.patch`         | Raises `chapter_boundary_max_tokens` to 1000; scales `num_splits` with episode duration |
-| `truncation-failfast.patch`         | Split truncated detection windows once at half size; fail with `retryable=false` after budget exceeded |
-| `cost-optimization-consumers.patch` | Wires the tunables from `llm-cost-optimizations.patch`: skip-verification guard, `bool` KIND_RULES coercion, prompt-caching annotations, OpenRouter cheapest-host routing |
+| `MINUSPOD_BASE.txt`                 | Upstream tag / commit notes                                          |
+| `minuspod-local.patch`              | Legacy **2.34.0 (`d900bdd`)** consolidated diff (GPU-less compose, `DATA_DIR`, tail-gap, etc.) |
+| `llm-cost-optimizations.patch`      | Large-window override, skip-verify, prompt-caching tunables in `config.py` / settings API |
+| `adaptive-detection-windows.patch` | Safe-window cap + adaptive `resolve_window_size_seconds`, self-promo evidence gate (`__init__.py`, `prompts.py`) |
+| `whisper-short-clip-guard.patch`    | Fold sub-second trailing transcription chunks; skip tiny API uploads (`transcriber.py`) |
+| `llm-call-reasoning-retry.patch`    | **2.34.0 only** — `TruncatedCompletionError` / reasoning retry in `llm_call.py` |
+| `chapter-granularity.patch`         | **2.34.0 only** — chapter token budget (dropped on v2.96.25) |
+| `truncation-failfast.patch`         | **2.34.0 only** — window bisect on truncation |
+| `cost-optimization-consumers.patch` | **2.34.0 only** — wires llm-cost tunables into `llm_client` / processing |
 
-## What the patch changes
+## Additional patches (live pin: **v2.96.25**)
 
-| File                          | Change                                                                                  |
-| ----------------------------- | --------------------------------------------------------------------------------------- |
-| `docker-compose.whisper.yml`  | Drop CUDA image + GPU device reservation so the stack comes up on hosts without an NVIDIA GPU |
-| `src/storage.py`              | Use `DATA_DIR` env var instead of hard-coded `/app/data`                                |
-| `src/database/__init__.py`    | Same `DATA_DIR` override + create dir if missing                                        |
-| `src/llm_client.py`           | Disable Ollama "thinking" mode; OpenRouter provider routing via `OPENROUTER_PROVIDER_*` env |
-| `src/main_app/processing.py`  | Honor `SKIP_VERIFICATION=true`; wire `detect_tail_gap` into the heuristic pass          |
-| `src/config.py`               | Env tunables; `get_openrouter_provider_config()` for cheap OpenRouter host pinning |
-| `src/transcriber.py`          | Chunk progress callback; skip loudnorm when `WHISPER_SKIP_PREPROCESS=1`                 |
-| `src/roll_detector.py`        | Tighter pre-roll regexes + new `detect_tail_gap` for untranscribed outros (env: `TAIL_GAP_MIN_SECONDS`) |
-| `src/audio_processor.py`      | Pad ad boundaries 1.5 s before / 2 s after; tail-of-file ads get 5 s after (env: `AD_END_PAD_TAIL`)   |
-
-## Additional patches
-
-Applied after `minuspod-local.patch` by `scripts/setup_minuspod.sh` and
+Applied after optional `minuspod-local.patch` by `scripts/setup_minuspod.sh` and
 `services_manager.py` (in this order):
 
-1. `llm-cost-optimizations.patch` — LLM cost tunables and Ad detection UI panel
-2. `house-ad-detection.patch` — self-promo evidence in ad gate (`SELF_PROMO_KEYWORDS`)
-3. `chapter-granularity.patch` — chapter boundary token budget + split scaling
-4. `truncation-failfast.patch` — no same-window retries on `max_tokens`; split instead
-5. `cost-optimization-consumers.patch` — must stay last: it touches `src/llm_client.py`
-   (shared with `truncation-failfast.patch`) and `src/main_app/processing.py`
+1. `llm-cost-optimizations.patch`
+2. `adaptive-detection-windows.patch` (includes former `house-ad-detection` hunks in `prompts.py`)
+3. `whisper-short-clip-guard.patch`
 
-`llm-cost-optimizations.patch` only declares `skip_verification_under_seconds`
-and `enable_prompt_caching` in `config.py` / the settings API. Their consumers
-live in `minuspod-local.patch`, which no longer applies to the pinned upstream
-and is skipped best-effort at setup, so both settings read back correctly from
-the UI while doing nothing. `cost-optimization-consumers.patch` carries just
-those consumers plus the `bool` entry in `KIND_RULES` that the settings form
-needs to save without a 500.
+Patches are regenerated from `git diff v2.96.25` on `local-mods` (2026-09-16).
+`minuspod-local.patch` is best-effort on v2.96.25 (upstream absorbed most hunks).
 
-## Re-generating the patch
+## Legacy 2.34.0 rebuild
 
-If you edit MinusPod sources locally and want to refresh the bundled patch:
+To reproduce the old stack: checkout `d900bdd0`, apply `minuspod-local.patch`,
+then the full chain including `llm-call-reasoning-retry`, `chapter-granularity`,
+`truncation-failfast`, and `cost-optimization-consumers`. Branch
+`local-mods-d900bdd-backup` in `MinusPod/` is a snapshot.
+
+## Upstream MinusPod
+
+As of **2026-09-16**, the live runtime pins **`v2.96.25`** (commit `1477638a`,
+annotated tag object `ca4ab897`) on branch **`local-mods`** inside `MinusPod/`.
+Upstream **`origin/main` is ~2.97.1**.
+
+Before migrating a production DB to v2.96.25, back up `MinusPod/data/*.db`
+(forward-only migrations). Rollback: restore backups and
+`git checkout local-mods-d900bdd-backup`.
+
+### v2.96.25 triage (applied)
+
+| Patch | Outcome on v2.96.25 |
+|-------|---------------------|
+| `llm-cost-optimizations` | **Regenerated** — `config.py`, `llm_call.py` |
+| `adaptive-detection-windows` | **Regenerated** — `resolve_window_size_seconds`, `__init__.py`, self-promo evidence gate |
+| `whisper-short-clip-guard` | **Regenerated** — API + local chunk sliver fold |
+| `llm-call-reasoning-retry` | **Dropped** — upstream `llm_call` + `llm_capabilities` |
+| `chapter-granularity` | **Dropped** |
+| `truncation-failfast` | **Dropped** — upstream salvage + bisect differ |
+| `cost-optimization-consumers` | **Dropped** — mostly upstream |
+| `minuspod-local` | **Mostly dropped** — upstream has `DATA_DIR`, tail-gap |
+
+## Re-generating a patch
+
+Scope diffs to the files that patch owns (never `git diff` the whole tree):
 
 ```bash
 cd MinusPod
-git diff > ../patches/minuspod-local.patch
+git diff v2.96.25 -- src/transcriber.py > ../patches/whisper-short-clip-guard.patch
 ```
 
-Commit the updated patch alongside any code changes.
+Commit the updated patch in the parent repo alongside any MinusPod commit.

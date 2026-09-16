@@ -1,12 +1,12 @@
 # MinusPod patch baseline
 #
-# The patches in this directory apply on top of:
+# Upstream tag for new checkouts and update_minuspod():
 #
 #     Repo:   https://github.com/ttlequals0/MinusPod.git
-#     Commit: d900bdd0622b89089247bafe6a5f9db87876233a
+#     Tag:    v2.96.25  (commit 1477638a…)
 #
-# Note: The scripts/setup_minuspod.sh and services_manager.py update_minuspod()
-# functions are the authoritative source for the pin. This file is for reference.
+# Local customizations live on git branch ``local-mods`` inside MinusPod/.
+# Tag object ``ca4ab897`` peels to commit ``1477638add91bd9c3a8fef6220e30e6d09044b66``.
+# Legacy 2.34.0 stack (``d900bdd0``): branch ``local-mods-d900bdd-backup`` in MinusPod/.
 #
-# Run `./scripts/setup_minuspod.sh` to clone the repo at this revision and apply
-# the patches automatically.
+# scripts/setup_minuspod.sh and services_manager.update_minuspod() are authoritative.

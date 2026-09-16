@@ -1,140 +1,12 @@
-diff --git a/src/ad_detector/__init__.py b/src/ad_detector/__init__.py
-index ae73dfb1..9e869772 100644
---- a/src/ad_detector/__init__.py
-+++ b/src/ad_detector/__init__.py
-@@ -79,6 +79,7 @@ from .boundaries import (
- from .prompts import (
-     USER_PROMPT_TEMPLATE,
-     create_windows,
-+    resolve_window_size_seconds,
-     format_window_prompt,
-     get_static_system_prompt,
-     parse_ads_from_response,
-@@ -726,6 +727,16 @@ class AdDetector:
- 
-             win_size = get_stage_tunable('window_size_seconds')
-             win_overlap = get_stage_tunable('window_overlap_seconds')
-+            model = self.get_model()
-+            effective_window_size = resolve_window_size_seconds(model, total_duration)
-+            if effective_window_size != win_size:
-+                windows = create_windows(segments, window_size=effective_window_size, overlap=win_overlap)
-+                win_size = effective_window_size
-+                logger.info(
-+                    f"[{slug}:{episode_id}] Using long-context window "
-+                    f"({win_size/60:.0f}min) for model {model}; "
-+                    f"{len(windows)} windows over {total_duration/60:.1f}min"
-+                )
-             logger.info(f"[{slug}:{episode_id}] Processing {len(windows)} windows "
-                        f"({win_size/60:.0f}min size, {win_overlap/60:.0f}min overlap) "
-                        f"for {total_duration/60:.1f}min episode")
-@@ -1685,11 +1696,17 @@ class AdDetector:
-             windows = create_windows(segments)
-             total_duration = segments[-1]['end'] if segments else 0
- 
--            logger.info(f"[{slug}:{episode_id}] Verification: Processing {len(windows)} windows "
--                       f"for {total_duration/60:.1f}min processed audio")
--
-             system_prompt = self.get_verification_prompt()
-             model = self.get_verification_model()
-+            effective_ws = resolve_window_size_seconds(model, total_duration)
-+            if effective_ws != get_stage_tunable('window_size_seconds'):
-+                windows = create_windows(
-+                    segments, window_size=effective_ws,
-+                    overlap=get_stage_tunable('window_overlap_seconds'),
-+                )
-+
-+            logger.info(f"[{slug}:{episode_id}] Verification: Processing {len(windows)} windows "
-+                       f"for {total_duration/60:.1f}min processed audio")
- 
-             logger.info(f"[{slug}:{episode_id}] Verification using model: {model}")
- 
-diff --git a/src/ad_detector/prompts.py b/src/ad_detector/prompts.py
-index 2e20a6aa..bd395163 100644
---- a/src/ad_detector/prompts.py
-+++ b/src/ad_detector/prompts.py
-@@ -22,12 +22,26 @@ from utils.constants import (
- from config import (
-     LOW_CONFIDENCE, CONFIDENCE_STRING_MAP,
-     CONTENT_DURATION_THRESHOLD, LOW_EVIDENCE_WARN_THRESHOLD,
--    get_stage_tunable,
-+    get_stage_tunable, is_large_context_model,
- )
- 
- logger = logging.getLogger('podcast.claude')
- 
- 
-+# Threshold multiplier for the long-window check
-+LARGE_WINDOW_BENEFIT_MULTIPLIER = 2.0
-+
-+
-+def resolve_window_size_seconds(model: str, episode_duration: float) -> float:
-+    base = float(get_stage_tunable('window_size_seconds'))
-+    if not is_large_context_model(model):
-+        return base
-+    if episode_duration <= base * LARGE_WINDOW_BENEFIT_MULTIPLIER:
-+        return base
-+    large = float(get_stage_tunable('large_window_seconds'))
-+    return max(large, base)
-+
-+
- # User prompt template (not configurable via UI - just formats the transcript)
- # Description is optional - may contain sponsor lists, chapter markers, or content context
- USER_PROMPT_TEMPLATE = """Podcast: {podcast_name}
-diff --git a/src/api/settings.py b/src/api/settings.py
-index 86eb544a..bd8f0f3b 100644
---- a/src/api/settings.py
-+++ b/src/api/settings.py
-@@ -316,6 +316,9 @@ def get_settings():
-         'ollamaNumCtx':                _tu('ollama_num_ctx'),
-         'windowSizeSeconds':           _tu('window_size_seconds'),
-         'windowOverlapSeconds':        _tu('window_overlap_seconds'),
-+        'largeWindowSeconds':          _tu('large_window_seconds'),
-+        'skipVerificationUnderSeconds': _tu('skip_verification_under_seconds'),
-+        'enablePromptCaching':         _tu('enable_prompt_caching'),
-     }
- 
-     enable_ad_review_raw = _setting_value(settings, 'enable_ad_review', 'false')
-@@ -1143,7 +1146,12 @@ def _apply_stage_tunables(db, data):
-     )
- 
-     # overlap >= size would make the derived step <= 0 and break create_windows.
--    if 'windowSizeSeconds' in data or 'windowOverlapSeconds' in data:
-+    # Also enforce large_window_seconds >= window_size_seconds.
-+    if (
-+        'windowSizeSeconds' in data
-+        or 'windowOverlapSeconds' in data
-+        or 'largeWindowSeconds' in data
-+    ):
-         def _effective(payload_key, db_key):
-             if payload_key in data:
-                 raw = data[payload_key]
-@@ -1157,10 +1165,15 @@ def _apply_stage_tunables(db, data):
- 
-         size_eff = _effective('windowSizeSeconds', 'window_size_seconds')
-         overlap_eff = _effective('windowOverlapSeconds', 'window_overlap_seconds')
-+        large_eff = _effective('largeWindowSeconds', 'large_window_seconds')
-         if size_eff is not None and overlap_eff is not None and overlap_eff >= size_eff:
-             return json_response({
-                 'error': 'windowOverlapSeconds must be less than windowSizeSeconds'
-             }, 400)
-+        if size_eff is not None and large_eff is not None and large_eff < size_eff:
-+            return json_response({
-+                'error': 'largeWindowSeconds must be greater than or equal to windowSizeSeconds'
-+            }, 400)
- 
-     # Coercion + provider-gating per kind. Each tuple is
-     # (coerce_callable, error_message, provider_required, store_callable).
 diff --git a/src/config.py b/src/config.py
-index 40c2e66e..e70db83c 100644
+index 47734037..e6fd5867 100644
 --- a/src/config.py
 +++ b/src/config.py
-@@ -108,6 +108,35 @@ WINDOW_SIZE_SECONDS = 600       # Claude processing window (10 min)
+@@ -410,6 +410,35 @@ JIT_RETRY_COOLDOWN_SECONDS = 60 # Base cooldown between JIT retries (doubles per
+ WINDOW_SIZE_SECONDS = 600       # Claude processing window (10 min)
  WINDOW_OVERLAP_SECONDS = 180    # Overlap between windows (3 min)
- MAX_FILE_SIZE_MB = 500          # Maximum audio file size
  
 +# Default range for the large_window_seconds cost-optimisation tunable.
-+# Overridable via LARGE_WINDOW_MIN_SECONDS / LARGE_WINDOW_MAX_SECONDS env
-+# vars so users with larger-context models can tune without forking MinusPod.
 +LARGE_WINDOW_MIN_SECONDS_DEFAULT = 300
 +LARGE_WINDOW_MAX_SECONDS_DEFAULT = 36000
 +
@@ -144,27 +16,29 @@ index 40c2e66e..e70db83c 100644
 +    try:
 +        lo = int(os.environ.get('LARGE_WINDOW_MIN_SECONDS', LARGE_WINDOW_MIN_SECONDS_DEFAULT))
 +    except (TypeError, ValueError):
-+        _tunable_logger.warning("LARGE_WINDOW_MIN_SECONDS=%r is not an integer; using default %d",
-+            os.environ.get('LARGE_WINDOW_MIN_SECONDS'), LARGE_WINDOW_MIN_SECONDS_DEFAULT)
++        _tunable_logger.warning(
++            "LARGE_WINDOW_MIN_SECONDS=%r is not an integer; using default %d",
++            os.environ.get('LARGE_WINDOW_MIN_SECONDS'), LARGE_WINDOW_MIN_SECONDS_DEFAULT,
++        )
 +        lo = LARGE_WINDOW_MIN_SECONDS_DEFAULT
 +    try:
 +        hi = int(os.environ.get('LARGE_WINDOW_MAX_SECONDS', LARGE_WINDOW_MAX_SECONDS_DEFAULT))
 +    except (TypeError, ValueError):
-+        _tunable_logger.warning("LARGE_WINDOW_MAX_SECONDS=%r is not an integer; using default %d",
-+            os.environ.get('LARGE_WINDOW_MAX_SECONDS'), LARGE_WINDOW_MAX_SECONDS_DEFAULT)
++        _tunable_logger.warning(
++            "LARGE_WINDOW_MAX_SECONDS=%r is not an integer; using default %d",
++            os.environ.get('LARGE_WINDOW_MAX_SECONDS'), LARGE_WINDOW_MAX_SECONDS_DEFAULT,
++        )
 +        hi = LARGE_WINDOW_MAX_SECONDS_DEFAULT
 +    if lo < 1:
-+        _tunable_logger.warning("LARGE_WINDOW_MIN_SECONDS=%d must be >= 1; clamping", lo)
 +        lo = LARGE_WINDOW_MIN_SECONDS_DEFAULT
 +    if hi < lo:
-+        _tunable_logger.warning("LARGE_WINDOW_MAX_SECONDS=%d < LARGE_WINDOW_MIN_SECONDS=%d; swapping", hi, lo)
 +        lo, hi = hi, lo
 +    return (lo, hi)
 +
  # ============================================================
- # Caching (seconds)
+ # Background Processing (seconds)
  # ============================================================
-@@ -557,6 +586,49 @@ OPENROUTER_ROUTER_ALIASES = (
+@@ -1422,6 +1451,43 @@ OPENROUTER_ROUTER_ALIASES = (
      ('openrouter/auto', 'OpenRouter: Auto (routes to best model for the prompt)'),
  )
  
@@ -173,14 +47,14 @@ index 40c2e66e..e70db83c 100644
 +    return [part.strip() for part in raw.split(',') if part.strip()]
 +
 +
-+def _parse_bool_env(name: str, default: Optional[bool] = None) -> Optional[bool]:
++def _parse_bool_env(name: str, default: bool | None = None) -> bool | None:
 +    raw = os.environ.get(name)
 +    if raw is None:
 +        return default
 +    return str(raw).strip().lower() in ('true', '1', 'yes')
 +
 +
-+def get_openrouter_provider_config() -> Optional[dict]:
++def get_openrouter_provider_config() -> dict | None:
 +    """Build OpenRouter provider routing object from environment."""
 +    order_raw = os.environ.get('OPENROUTER_PROVIDER_ORDER', '').strip()
 +    sort_raw = os.environ.get('OPENROUTER_PROVIDER_SORT', '').strip()
@@ -205,56 +79,34 @@ index 40c2e66e..e70db83c 100644
 +
 +    return provider or None
 +
-+MASTER_PASSPHRASE = os.environ.get('MINUSPOD_MASTER_PASSPHRASE')
-+
-+
-+def provider_crypto_ready() -> bool:
-+    return bool(MASTER_PASSPHRASE)
-+
  # ============================================================
  # LLM Pricing Configuration
  # ============================================================
-@@ -777,11 +849,15 @@ STAGE_TUNABLE_DEFAULTS = {
-     'chapter_title_max_tokens': 500,
-     'chapter_title_reasoning_budget': None,
-     'chapter_title_reasoning_level': None,
--    # ollama context window (provider-scoped, not per-stage)
-+    # ollama context window
-     'ollama_num_ctx': None,
--    # detection window geometry (global, not per-stage)
-+    # detection window geometry
+@@ -1665,6 +1731,11 @@ STAGE_TUNABLE_DEFAULTS = {
+     # detection window geometry (global, not per-stage)
      'window_size_seconds': WINDOW_SIZE_SECONDS,
      'window_overlap_seconds': WINDOW_OVERLAP_SECONDS,
-+    # LLM cost optimisations
-+    'large_window_seconds': 10800,
-+    'skip_verification_under_seconds': 86400,
++    # LLM cost optimisations (pocket-casts-adfree)
++    'large_window_seconds': 3600,
++    'detection_output_safe_window_seconds': 900,
++    'skip_verification_under_seconds': 0,
 +    'enable_prompt_caching': True,
  }
  
  STAGE_TUNABLE_ENV_VARS = {key: key.upper() for key in STAGE_TUNABLE_DEFAULTS}
-@@ -813,15 +889,39 @@ STAGE_TUNABLE_RANGES = {
-     'chapter_title_reasoning_budget': (1024, 65536),
-     # ollama context window
-     'ollama_num_ctx': (512, 131072),
--    # detection window geometry. Cross-field constraint (overlap < size) is
--    # enforced at the API layer; the per-field bounds here are the static
--    # envelope the resolver checks against.
-+    # detection window geometry
+@@ -1707,10 +1778,32 @@ STAGE_TUNABLE_RANGES = {
+     # envelope the resolver checks against.
      'window_size_seconds': (120, 1800),
      'window_overlap_seconds': (0, 1770),
-+    # LLM cost optimisation ranges
 +    'large_window_seconds': _large_window_range(),
++    'detection_output_safe_window_seconds': (0, 36000),
 +    'skip_verification_under_seconds': (0, 86400),
  }
  
  STAGE_TUNABLE_REASONING_LEVELS = {"none", "low", "medium", "high"}
  
-+# Subset of STAGE_TUNABLE_DEFAULTS whose values are booleans.
-+STAGE_TUNABLE_BOOL_KEYS = frozenset((
-+    'enable_prompt_caching',
-+))
++STAGE_TUNABLE_BOOL_KEYS = frozenset(('enable_prompt_caching',))
 +
-+# Model ID substrings indicating long-context models (>=1M tokens).
 +LARGE_CONTEXT_MODEL_PATTERNS = (
 +    'deepseek-v4',
 +    'gemini-2.5-flash',
@@ -273,9 +125,9 @@ index 40c2e66e..e70db83c 100644
 +    return any(pat in mid for pat in LARGE_CONTEXT_MODEL_PATTERNS)
 +
  
- def _coerce_tunable(key: str, raw: Any, source_label: str) -> Optional[Any]:
+ def _coerce_tunable(key: str, raw: Any, source_label: str) -> Any | None:
      """Coerce a stored or env value to int/float/enum. Returns None on bad value
-@@ -841,6 +941,16 @@ def _coerce_tunable(key: str, raw: Any, source_label: str) -> Optional[Any]:
+@@ -1730,6 +1823,16 @@ def _coerce_tunable(key: str, raw: Any, source_label: str) -> Any | None:
          )
          return None
  
@@ -292,34 +144,73 @@ index 40c2e66e..e70db83c 100644
      range_ = STAGE_TUNABLE_RANGES.get(key)
      if key.endswith('_temperature'):
          try:
-@@ -970,6 +1080,9 @@ STAGE_TUNABLE_PAYLOAD_KEYS = (
+@@ -1869,6 +1972,10 @@ STAGE_TUNABLE_PAYLOAD_KEYS = (
      ('ollamaNumCtx',                   'ollama_num_ctx',                  'ollama_ctx'),
      ('windowSizeSeconds',              'window_size_seconds',             'int'),
      ('windowOverlapSeconds',           'window_overlap_seconds',          'int'),
 +    ('largeWindowSeconds',             'large_window_seconds',            'int'),
++    ('detectionOutputSafeWindowSeconds', 'detection_output_safe_window_seconds', 'int'),
 +    ('skipVerificationUnderSeconds',   'skip_verification_under_seconds', 'int'),
 +    ('enablePromptCaching',            'enable_prompt_caching',           'bool'),
  )
  
  
-diff --git a/src/transcriber.py b/src/transcriber.py
-index 176c113b..e9dceb3b 100644
---- a/src/transcriber.py
-+++ b/src/transcriber.py
-@@ -6,7 +6,7 @@ import re
- import subprocess
- import requests
- from concurrent.futures import ThreadPoolExecutor, as_completed
--from typing import List, Dict, Optional, Tuple
-+from typing import List, Dict, Optional, Tuple, Callable
+diff --git a/src/utils/llm_call.py b/src/utils/llm_call.py
+index fffbfed9..cbaa103b 100644
+--- a/src/utils/llm_call.py
++++ b/src/utils/llm_call.py
+@@ -69,6 +69,13 @@ class ReasoningExhaustedError(EmptyCompletionError):
+     """The response budget was exhausted by reasoning before an answer."""
  
- from utils.audio import get_audio_duration
- from utils.time import format_vtt_timestamp
-@@ -1563,6 +1563,7 @@ class Transcriber:
-         audio_path: str,
-         podcast_name: str = None,
-         language_override: Optional[str] = None,
-+        progress_callback: Optional[Callable[[str, float], None]] = None,
-     ) -> List[Dict]:
-         """Transcribe audio files with dynamic chunking to prevent OOM errors.
  
++class TruncatedCompletionError(EmptyCompletionError):
++    """Model hit max_tokens; response body was cut before usable content."""
++
++
++_TRUNCATION_STOP_REASONS = frozenset(('max_tokens', 'length'))
++
++
+ def _completion_is_empty(response) -> bool:
+     """True when the model returned no usable content (empty or whitespace)."""
+     content = getattr(response, 'content', None)
+@@ -79,12 +86,17 @@ def _call_once(llm_client, llm_kwargs, model):
+     """One LLM call; raise EmptyCompletionError if it comes back content-less."""
+     response = llm_client.messages_create(**llm_kwargs)
+     if _completion_is_empty(response):
++        stop = getattr(response, 'stop_reason', None) or getattr(response, 'finish_reason', None)
+         if (getattr(response, 'reasoning_exhausted', False)
+                 or (getattr(response, 'reasoning_present', False)
+-                    and getattr(response, 'finish_reason', None) in ('max_tokens', 'length'))):
++                    and stop in _TRUNCATION_STOP_REASONS)):
+             raise ReasoningExhaustedError(
+                 f"empty completion from {model} after reasoning exhausted the output budget"
+             )
++        if stop in _TRUNCATION_STOP_REASONS:
++            raise TruncatedCompletionError(
++                f"truncated empty completion from {model} (stop_reason={stop})"
++            )
+         raise EmptyCompletionError(f"empty completion from {model} (no content returned)")
+     return response
+ 
+@@ -102,6 +114,8 @@ def _apply_reasoning_fallback(error, llm_kwargs, *, slug, episode_id, call_label
+ 
+ 
+ def _is_retryable(error) -> bool:
++    if isinstance(error, TruncatedCompletionError):
++        return False
+     return isinstance(error, EmptyCompletionError) or is_retryable_error(error)
+ 
+ 
+@@ -240,6 +254,12 @@ def call_llm(
+         try:
+             response = _call_once(llm_client, llm_kwargs, model)
+             return response, None
++        except TruncatedCompletionError as e:
++            logger.warning(
++                f"[{slug}:{episode_id}] {call_label} output truncated at "
++                f"max_tokens; not retrying same window ({e})"
++            )
++            return None, e
+         except Exception as e:
+             last_error = e
+             _apply_reasoning_fallback(

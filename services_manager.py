@@ -47,18 +47,17 @@ OLLAMA_LOG_GUESSES = [
     Path("/tmp/ollama.log"),
 ]
 UI_LOG = Path("/tmp/pocketcasts-ui.log")
+MINUSPOD_UPSTREAM_REPO = "https://github.com/ttlequals0/MinusPod.git"
+MINUSPOD_UPSTREAM_REF = "v2.96.25"
+MINUSPOD_LOCAL_BRANCH = "local-mods"
 MINUSPOD_PATCH = ROOT / "patches" / "minuspod-local.patch"
 # Additional additive patches (LLM cost-optimisations, etc.) reapplied
 # on top of the core patch after each upstream update. Order matters:
 # each patch is applied to whatever the previous one left behind.
 MINUSPOD_ADDITIONAL_PATCHES = [
     ROOT / "patches" / "llm-cost-optimizations.patch",
-    ROOT / "patches" / "house-ad-detection.patch",
-    ROOT / "patches" / "chapter-granularity.patch",
-    ROOT / "patches" / "truncation-failfast.patch",
-    # Consumers for the tunables llm-cost-optimizations.patch only declares.
-    # Must stay after truncation-failfast.patch: both touch llm_client.py.
-    ROOT / "patches" / "cost-optimization-consumers.patch",
+    ROOT / "patches" / "adaptive-detection-windows.patch",
+    ROOT / "patches" / "whisper-short-clip-guard.patch",
 ]
 
 _KEYCHAIN_ENV_MAP = {
@@ -674,6 +673,23 @@ def restart_whisper(backend: str = "native") -> dict:
     return start_whisper(backend)
 
 
+def ensure_whisper_healthy() -> bool:
+    """Restart Whisper when the HTTP health check fails (backend-aware)."""
+    st = status_whisper()
+    if st.healthy:
+        return True
+    backend = st.backend or "native"
+    log.info(
+        "Whisper not healthy (running=%s); restarting with backend=%s",
+        st.running, backend,
+    )
+    try:
+        restart_whisper(backend=backend)
+    except ServiceError:
+        return False
+    return status_whisper().healthy
+
+
 def stop_minuspod() -> dict:
     """Stop MinusPod, escalating SIGTERM -> SIGKILL.
 
@@ -716,84 +732,124 @@ def stop_minuspod() -> dict:
     return {"ok": ok, "note": "killed (SIGTERM ignored)"} if ok else {"ok": False}
 
 
+def _minuspod_git_run(*args, **kwargs):
+    return subprocess.run(
+        list(args), cwd=str(MINUSPOD_DIR),
+        capture_output=True, text=True, timeout=120, **kwargs
+    )
+
+
+def _ensure_minuspod_origin_remote() -> None:
+    r = _minuspod_git_run("git", "remote", "get-url", "origin")
+    if r.returncode != 0:
+        _minuspod_git_run("git", "remote", "add", "origin", MINUSPOD_UPSTREAM_REPO)
+
+
+def _apply_minuspod_patches(log) -> list[str]:
+    """Apply bundled patches; return names that failed."""
+    failed: list[str] = []
+    for patch_path in [MINUSPOD_PATCH, *MINUSPOD_ADDITIONAL_PATCHES]:
+        if not patch_path.exists():
+            continue
+        patch_r = _minuspod_git_run("git", "apply", "--3way", str(patch_path))
+        if patch_r.returncode == 0:
+            log.info("MinusPod patch applied cleanly: %s", patch_path.name)
+        else:
+            failed.append(patch_path.name)
+            log.error(
+                "MinusPod patch failed: %s\n%s",
+                patch_path.name,
+                patch_r.stderr.strip(),
+            )
+    return failed
+
+
 def update_minuspod() -> dict:
-    """Pull the latest MinusPod from upstream and reapply local patches.
+    """Fast-forward ``local-mods`` onto the pinned upstream tag and reapply patches.
 
-    Safe to call when MinusPod is NOT running (start_minuspod calls this
-    automatically). When MinusPod is already running the update is skipped
-    and the caller receives ``{"ok": True, "note": "already running"}``.  
-
-    Returns a dict with keys:
-        ok      – True on success or if already up-to-date / offline.
-        updated – True if a new upstream commit was pulled.
-        note    – Human-readable status message.
+    Never ``git reset --hard`` to a bare pin — customizations live on
+    ``MINUSPOD_LOCAL_BRANCH``. On a fresh tree without that branch, creates it
+    from ``MINUSPOD_UPSTREAM_REF`` and applies patches once.
     """
     import logging
     log = logging.getLogger(__name__)
     if not MINUSPOD_DIR.exists():
         return {"ok": False, "updated": False, "note": "MinusPod directory not found"}
 
-    def _run(*args, **kwargs):
-        return subprocess.run(
-            list(args), cwd=str(MINUSPOD_DIR),
-            capture_output=True, text=True, timeout=60, **kwargs
-        )
-
     try:
-        # Fetch from upstream (tolerate offline)
-        fetch = _run("git", "fetch", "origin", "--quiet")
+        _ensure_minuspod_origin_remote()
+        fetch = _minuspod_git_run("git", "fetch", "origin", "--tags", "--quiet")
         if fetch.returncode != 0:
             log.warning("MinusPod update: git fetch failed — offline? %s", fetch.stderr.strip())
             return {"ok": True, "updated": False, "note": "offline — skipped update check"}
 
-        local_sha = _run("git", "rev-parse", "HEAD").stdout.strip()
-        # Try main then master
-        for branch in ("origin/main", "origin/master"):
-            r = _run("git", "rev-parse", branch)
-            if r.returncode == 0:
-                remote_sha = r.stdout.strip()
-                break
-        else:
-            return {"ok": True, "updated": False, "note": "could not resolve remote branch"}
+        upstream_ref = MINUSPOD_UPSTREAM_REF
+        ref_check = _minuspod_git_run("git", "rev-parse", "--verify", f"{upstream_ref}^{{commit}}")
+        if ref_check.returncode != 0:
+            return {
+                "ok": False,
+                "updated": False,
+                "note": f"upstream ref {upstream_ref} not found after fetch",
+            }
+        tag_sha = ref_check.stdout.strip()
 
-        if local_sha == remote_sha:
-            short = local_sha[:7]
-            log.info("MinusPod already at latest (%s)", short)
-            if local_sha == remote_sha:
-                short = local_sha[:7]
-                log.info("MinusPod already at pinned SHA (%s)", short)
-                return {"ok": True, "updated": False, "note": f"already at pinned SHA ({short})"}
+        branch_check = _minuspod_git_run(
+            "git", "show-ref", "--verify", "--quiet",
+            f"refs/heads/{MINUSPOD_LOCAL_BRANCH}",
+        )
+        local_sha = _minuspod_git_run("git", "rev-parse", "HEAD").stdout.strip()
+        updated = False
+        patch_failures: list[str] = []
 
-        # Don't pull latest — reset to the pinned SHA from setup_minuspod.sh.
-        # This matches the contract in scripts/setup_minuspod.sh: the pinned
-        # SHA is the known-working upstream that our patches were generated
-        # against. Chasing origin/main can silently break patches.
-        pin_sha = "d900bdd0622b89089247bafe6a5f9db87876233a"
-        old_short = local_sha[:7]
-        new_short = pin_sha[:7]
-        log.info("MinusPod: resetting %s → pinned %s", old_short, new_short)
-
-        _run("git", "fetch", "origin", pin_sha, "--quiet")
-        _run("git", "reset", "--hard", pin_sha)
-        _run("git", "clean", "-fd")
-
-        # Reapply local patches on top of new upstream. The core patch
-        # is applied first; additional additive patches (e.g. LLM cost
-        # optimisations) are applied on top, each best-effort.
-        for patch_path in [MINUSPOD_PATCH, *MINUSPOD_ADDITIONAL_PATCHES]:
-            if not patch_path.exists():
-                continue
-            patch_r = _run("git", "apply", "--3way", str(patch_path))
-            if patch_r.returncode == 0:
-                log.info("MinusPod patch applied cleanly: %s", patch_path.name)
-            else:
-                log.warning(
-                    "MinusPod patch did not apply cleanly: %s — manual merge needed.\n%s",
-                    patch_path.name,
-                    patch_r.stderr.strip(),
+        if branch_check.returncode != 0:
+            log.info("MinusPod: creating %s from %s", MINUSPOD_LOCAL_BRANCH, upstream_ref)
+            _minuspod_git_run("git", "checkout", "-B", MINUSPOD_LOCAL_BRANCH, tag_sha)
+            patch_failures = _apply_minuspod_patches(log)
+            if patch_failures:
+                return {
+                    "ok": False,
+                    "updated": True,
+                    "patch_failures": patch_failures,
+                    "note": f"patch apply failed: {', '.join(patch_failures)}",
+                }
+            _minuspod_git_run("git", "add", "-A")
+            diff = _minuspod_git_run("git", "diff", "--cached", "--quiet")
+            if diff.returncode != 0:
+                _minuspod_git_run(
+                    "git", "commit", "-m",
+                    f"pocket-casts-adfree: local patches on {upstream_ref}",
                 )
+            updated = True
+        else:
+            on_branch = _minuspod_git_run(
+                "git", "branch", "--show-current",
+            ).stdout.strip()
+            if on_branch != MINUSPOD_LOCAL_BRANCH:
+                _minuspod_git_run("git", "checkout", MINUSPOD_LOCAL_BRANCH)
+            merge_base = _minuspod_git_run(
+                "git", "merge-base", "HEAD", tag_sha,
+            ).stdout.strip()
+            if merge_base != tag_sha:
+                ff = _minuspod_git_run("git", "merge", "--ff-only", tag_sha)
+                if ff.returncode != 0:
+                    return {
+                        "ok": False,
+                        "updated": False,
+                        "note": (
+                            f"{MINUSPOD_LOCAL_BRANCH} diverged from {upstream_ref}; "
+                            "rebase manually in a worktree"
+                        ),
+                    }
+                updated = True
+                patch_failures = _apply_minuspod_patches(log)
+                if patch_failures:
+                    return {
+                        "ok": False,
+                        "updated": True,
+                        "patch_failures": patch_failures,
+                        "note": f"patch apply failed: {', '.join(patch_failures)}",
+                    }
 
-        # Reinstall Python deps if requirements.txt changed
         venv_pip = MINUSPOD_DIR / "venv" / "bin" / "pip"
         req = MINUSPOD_DIR / "requirements.txt"
         if venv_pip.exists() and req.exists():
@@ -807,7 +863,10 @@ def update_minuspod() -> dict:
             else:
                 log.info("MinusPod deps updated")
 
-        return {"ok": True, "updated": True, "note": f"updated {old_short} → {new_short}"}
+        new_sha = _minuspod_git_run("git", "rev-parse", "HEAD").stdout.strip()[:7]
+        if updated:
+            return {"ok": True, "updated": True, "note": f"on {MINUSPOD_LOCAL_BRANCH} @ {new_sha}"}
+        return {"ok": True, "updated": False, "note": f"already current ({new_sha})"}
 
     except subprocess.TimeoutExpired:
         log.warning("MinusPod update timed out")
@@ -833,17 +892,25 @@ def start_minuspod() -> dict:
     # _large_window_range and LARGE_WINDOW_MIN_SECONDS_DEFAULT). Pulling latest
     # upstream overwrites them; users have to manually re-apply via
     # bash scripts/setup_minuspod.sh when they actually want an upgrade.
-    config_path = MINUSPOD_DIR / "src" / "config.py"
     needs_update = True
-    if config_path.exists():
+    if MINUSPOD_DIR.exists() and (MINUSPOD_DIR / ".git").exists():
         try:
-            content = config_path.read_text()
-            if "_large_window_range" in content and "LARGE_WINDOW_MIN_SECONDS_DEFAULT" in content:
+            br = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=str(MINUSPOD_DIR),
+                capture_output=True, text=True, timeout=10,
+            )
+            if br.returncode == 0 and br.stdout.strip() == MINUSPOD_LOCAL_BRANCH:
                 needs_update = False
         except Exception:
             pass
     if needs_update:
         update_result = update_minuspod()
+        if not update_result.get("ok"):
+            raise ServiceError(
+                update_result.get("note")
+                or f"MinusPod update failed: {update_result.get('patch_failures')}"
+            )
         if update_result.get("updated"):
             import logging
             logging.getLogger(__name__).info("MinusPod updated: %s", update_result["note"])
@@ -948,16 +1015,33 @@ def start_minuspod() -> dict:
         "LARGE_WINDOW_MAX_SECONDS":      env.get("LARGE_WINDOW_MAX_SECONDS", ""),
         "SKIP_VERIFICATION_UNDER_SECONDS": env.get("SKIP_VERIFICATION_UNDER_SECONDS", "0"),
         "ENABLE_PROMPT_CACHING":         env.get("ENABLE_PROMPT_CACHING", ""),
+        "DETECTION_OUTPUT_SAFE_WINDOW_SECONDS": _dotenv_declared.get(
+            "DETECTION_OUTPUT_SAFE_WINDOW_SECONDS", "",
+        ),
+        "DETECTION_MAX_TRUNCATED_WINDOWS": env.get("DETECTION_MAX_TRUNCATED_WINDOWS", ""),
+        # DeepSeek V4 on OpenRouter can burn the full output budget on reasoning
+        # with no ad JSON; explicit "none" maps to reasoning.effort=none.
+        "DETECTION_REASONING_LEVEL": _dotenv_declared.get(
+            "DETECTION_REASONING_LEVEL", "",
+        ),
+        "VERIFICATION_REASONING_LEVEL": _dotenv_declared.get(
+            "VERIFICATION_REASONING_LEVEL", "",
+        ),
+        "REVIEWER_REASONING_LEVEL": _dotenv_declared.get(
+            "REVIEWER_REASONING_LEVEL", "",
+        ),
         "PYTHONPATH": ".",
     })
     log.info(
         "Starting MinusPod with cost-optimisation tunables: "
         "LARGE_WINDOW_SECONDS=%r SKIP_VERIFICATION_UNDER_SECONDS=%r "
         "ENABLE_PROMPT_CACHING=%r "
+        "DETECTION_REASONING_LEVEL=%r "
         "(WINDOW_SIZE_SECONDS=%r WINDOW_OVERLAP_SECONDS=%r)",
         _dotenv_declared.get("LARGE_WINDOW_SECONDS") or "<unset>",
         env.get("SKIP_VERIFICATION_UNDER_SECONDS") or "<unset>",
         env.get("ENABLE_PROMPT_CACHING") or "<unset>",
+        _dotenv_declared.get("DETECTION_REASONING_LEVEL") or "<unset>",
         env.get("WINDOW_SIZE_SECONDS"),
         env.get("WINDOW_OVERLAP_SECONDS"),
     )
@@ -1136,6 +1220,18 @@ def sync_cost_tunables_from_env() -> dict:
     if large:
         tunables["largeWindowSeconds"] = int(large)
 
+    safe_win = dotenv.get("DETECTION_OUTPUT_SAFE_WINDOW_SECONDS", "").strip()
+    if safe_win:
+        tunables["detectionOutputSafeWindowSeconds"] = int(safe_win)
+
+    win_size = dotenv.get("WINDOW_SIZE_SECONDS", "").strip()
+    if win_size:
+        tunables["windowSizeSeconds"] = int(win_size)
+
+    win_overlap = dotenv.get("WINDOW_OVERLAP_SECONDS", "").strip()
+    if win_overlap:
+        tunables["windowOverlapSeconds"] = int(win_overlap)
+
     caching_raw = dotenv.get("ENABLE_PROMPT_CACHING", "").strip().lower()
     if caching_raw in ("true", "1", "yes"):
         caching = True
@@ -1152,11 +1248,15 @@ def sync_cost_tunables_from_env() -> dict:
         tunables["detectionMaxTokens"] = tok
         tunables["verificationMaxTokens"] = tok
 
+    min_cut = dotenv.get("MIN_CUT_CONFIDENCE", "").strip()
+    if min_cut:
+        tunables["minCutConfidence"] = float(min_cut)
+
     if not tunables:
         return {"ok": True, "skipped": True, "reason": "no cost tunables in environment"}
 
     try:
-        result = put_minuspod_stage_tunables(tunables)
+        result = put_minuspod_ad_detection_settings(tunables)
         result["synced"] = tunables
         return result
     except ServiceError as e:
@@ -1203,58 +1303,76 @@ def get_minuspod_settings() -> dict | None:
 
 
 def put_minuspod_stage_tunables(tunables: dict) -> dict:
-    """Push a subset of the stage-tunables payload to MinusPod.
+    """Push stage-tunables subset to MinusPod (legacy wrapper)."""
+    return put_minuspod_ad_detection_settings(tunables)
 
-    The parent UI only manages the three cost-optimisation levers
-    (``largeWindowSeconds``, ``skipVerificationUnderSeconds``,
-    ``enablePromptCaching``). To avoid overwriting other tunables the
-    caller may have changed locally (e.g. via MinusPod's own UI or
-    another instance of this dashboard), we first GET the current
-    ``stageTunables`` and merge the supplied subset on top before
-    PUTting the full object back to ``/api/v1/settings/ad-detection``.
-    Unknown keys in ``tunables`` are ignored.
+
+_AD_DETECTION_SYNC_KEYS = frozenset({
+    "largeWindowSeconds",
+    "skipVerificationUnderSeconds",
+    "enablePromptCaching",
+    "detectionMaxTokens",
+    "verificationMaxTokens",
+    "detectionOutputSafeWindowSeconds",
+    "windowSizeSeconds",
+    "windowOverlapSeconds",
+    "minCutConfidence",
+})
+
+
+def put_minuspod_ad_detection_settings(fields: dict) -> dict:
+    """Merge ad-detection settings from ``.env`` sync into MinusPod.
+
+    GETs the current ``/api/v1/settings`` payload, unwraps ``stageTunables``,
+    merges ``fields``, and PUTs to ``/api/v1/settings/ad-detection`` so DB
+    overrides from the MinusPod UI cannot silently undo ``.env``.
     """
-    if not isinstance(tunables, dict):
-        raise ServiceError("tunables must be an object")
-    # Allow only the cost-opt keys through; reject obvious typos early so
-    # the JS gets a 400 with a useful message instead of a 200 that did
-    # nothing.
-    allowed = {
-        "largeWindowSeconds",
-        "skipVerificationUnderSeconds",
-        "enablePromptCaching",
-        "detectionMaxTokens",
-        "verificationMaxTokens",
-    }
-    unknown = set(tunables) - allowed
+    if not isinstance(fields, dict):
+        raise ServiceError("fields must be an object")
+    unknown = set(fields) - _AD_DETECTION_SYNC_KEYS
     if unknown:
         raise ServiceError(
-            f"Unknown tunable(s): {', '.join(sorted(unknown))}. "
-            f"Allowed: {', '.join(sorted(allowed))}"
+            f"Unknown setting(s): {', '.join(sorted(unknown))}. "
+            f"Allowed: {', '.join(sorted(_AD_DETECTION_SYNC_KEYS))}"
         )
 
     current = get_minuspod_settings() or {}
     existing = current.get("stageTunables") or {}
-    merged = dict(existing)
-    # Strip the wrapper shape ({value, isDefault, envOverride}) so we
-    # only forward the bare values the PUT endpoint expects.
+    payload: dict = {}
+
+    def _unwrap(entry):
+        if isinstance(entry, dict) and "value" in entry:
+            return entry["value"]
+        return entry
+
+    def _is_blank(v) -> bool:
+        if v is None:
+            return True
+        if isinstance(v, str) and v.strip() == "":
+            return True
+        return False
+
+    # Preserve non-empty stage tunables only. Echoing blank reasoning keys
+    # makes MinusPod clear them (PUT treats "" as "reset to default").
     for key, value in existing.items():
-        if isinstance(value, dict) and "value" in value:
-            merged[key] = value["value"]
-    for key, value in tunables.items():
-        merged[key] = value
+        unwrapped = _unwrap(value)
+        if _is_blank(unwrapped):
+            continue
+        payload[key] = unwrapped
+    for key, value in fields.items():
+        if key == "minCutConfidence":
+            payload["minCutConfidence"] = value
+        else:
+            payload[key] = value
 
     try:
         r = httpx.put(
             "http://localhost:8000/api/v1/settings/ad-detection",
-            json=merged, timeout=10,
+            json=payload, timeout=10,
         )
     except Exception as e:
         raise ServiceError(f"MinusPod settings update failed: {e}")
     if r.status_code >= 400:
-        # MinusPod's handler returns JSON: {"ok": false, "error": "..."}
-        # for cross-field validation failures; surface that text instead
-        # of the bare status code.
         try:
             detail = r.json().get("error") or r.text
         except Exception:
@@ -1262,7 +1380,7 @@ def put_minuspod_stage_tunables(tunables: dict) -> dict:
         raise ServiceError(
             f"MinusPod rejected update (HTTP {r.status_code}): {detail}"
         )
-    return {"ok": True, "status_code": r.status_code, "updated": list(tunables)}
+    return {"ok": True, "status_code": r.status_code, "updated": list(fields)}
 
 
 # ---------------------------------------------------------------------------
@@ -1281,6 +1399,8 @@ def start_all_services(whisper_backend: str = "native") -> dict:
         results["ollama"] = {"ok": True, "note": f"skipped (provider is {os.environ.get('LLM_PROVIDER')})"}
     # 2. Start Whisper
     results["whisper"] = start_whisper(backend=whisper_backend)
+    if not ensure_whisper_healthy():
+        log.warning("Whisper health check failed after start")
     # 3. Start MinusPod
     results["minuspod"] = start_minuspod()
     all_ok = all(svc.get("ok", False) for svc in results.values())

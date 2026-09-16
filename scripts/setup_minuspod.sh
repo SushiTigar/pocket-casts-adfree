@@ -6,7 +6,9 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGET="${ROOT}/MinusPod"
 REPO="https://github.com/ttlequals0/MinusPod.git"
-PIN="d900bdd0622b89089247bafe6a5f9db87876233a"
+# Upstream base commit; local customizations live on branch ``local-mods``.
+PIN_REF="v2.96.25"
+LOCAL_BRANCH="local-mods"
 # Core local patch (may fail to apply if upstream drifted past the pin —
 # in that case, regenerate from a clean checkout: `git diff` → patch).
 PATCH="${ROOT}/patches/minuspod-local.patch"
@@ -15,9 +17,29 @@ PATCH="${ROOT}/patches/minuspod-local.patch"
 # are no-ops because the working tree already contains the changes.
 ADDITIONAL_PATCHES=(
   "${ROOT}/patches/llm-cost-optimizations.patch"
-  "${ROOT}/patches/house-ad-detection.patch"
-  "${ROOT}/patches/chapter-granularity.patch"
+  "${ROOT}/patches/adaptive-detection-windows.patch"
+  "${ROOT}/patches/whisper-short-clip-guard.patch"
 )
+
+apply_patches() {
+    local failed=0
+    if [[ -f "${PATCH}" ]]; then
+        echo "Applying ${PATCH} (best-effort on ${PIN_REF}; often obsolete after rebase)..."
+        if ! git apply --3way "${PATCH}"; then
+            echo "WARNING: ${PATCH} did not apply on ${PIN_REF}; continuing." >&2
+        fi
+    fi
+    for P in "${ADDITIONAL_PATCHES[@]}"; do
+        if [[ -f "${P}" ]]; then
+            echo "Applying ${P}..."
+            if ! git apply --3way "${P}"; then
+                echo "ERROR: ${P} did not apply cleanly." >&2
+                failed=1
+            fi
+        fi
+    done
+    return "${failed}"
+}
 
 if [[ ! -d "${TARGET}/.git" ]]; then
     echo "Cloning MinusPod into ${TARGET}..."
@@ -25,29 +47,31 @@ if [[ ! -d "${TARGET}/.git" ]]; then
 fi
 
 cd "${TARGET}"
-echo "Pinning to ${PIN}..."
-git fetch --quiet origin
-git reset --hard "${PIN}"
-git clean -fd
-# Drop the `origin` remote so accidental pushes don't stray into upstream.
-git remote remove origin 2>/dev/null || true
-
-if [[ -f "${PATCH}" ]]; then
-    echo "Applying ${PATCH}..."
-    if ! git apply --3way "${PATCH}"; then
-        echo "WARNING: ${PATCH} did not apply cleanly (likely upstream drift)." >&2
-        echo "         Regenerate it from a known-good checkout: cd MinusPod && git diff <pin> > ${PATCH}" >&2
-    fi
+if ! git remote get-url origin &>/dev/null; then
+    git remote add origin "${REPO}"
+fi
+echo "Fetching ${PIN_REF} from origin..."
+git fetch --quiet origin "refs/tags/${PIN_REF}:refs/tags/${PIN_REF}" 2>/dev/null || git fetch --quiet origin --tags
+if ! git rev-parse --verify "${PIN_REF}^{commit}" >/dev/null 2>&1; then
+    echo "ERROR: PIN_REF ${PIN_REF} is not a valid ref in this repo." >&2
+    exit 1
 fi
 
-for P in "${ADDITIONAL_PATCHES[@]}"; do
-    if [[ -f "${P}" ]]; then
-        echo "Applying ${P}..."
-        if ! git apply --3way "${P}"; then
-            echo "WARNING: ${P} did not apply cleanly. Check the output above." >&2
-        fi
+if git show-ref --verify --quiet "refs/heads/${LOCAL_BRANCH}"; then
+    echo "Checking out existing ${LOCAL_BRANCH} branch..."
+    git checkout "${LOCAL_BRANCH}"
+else
+    echo "Creating ${LOCAL_BRANCH} from ${PIN_REF}..."
+    git checkout -B "${LOCAL_BRANCH}" "${PIN_REF}"
+    if ! apply_patches; then
+        echo "ERROR: One or more patches failed on fresh ${PIN_REF} checkout." >&2
+        exit 1
     fi
-done
+    git add -A
+    if ! git diff --cached --quiet; then
+        git commit -m "pocket-casts-adfree: apply local patch stack on ${PIN_REF}"
+    fi
+fi
 
 if [[ ! -d "venv" ]]; then
     echo "Creating Python virtualenv..."

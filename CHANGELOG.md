@@ -6,6 +6,14 @@ loosely tracks [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+- **Quality preset:** `DETECTION_OUTPUT_SAFE_WINDOW_SECONDS` lowered from `1200` to **`900`** (15 min cap per initial detection window) after Filmcast-scale 16k-output truncations; synced via `sync_cost_tunables_from_env()`.
+- **Reasoning burn fix:** `DETECTION_/VERIFICATION_/REVIEWER_REASONING_LEVEL=none` in `.env` and MinusPod env passthrough; merged upstream `ReasoningExhaustedError` retry into `MinusPod/src/utils/llm_call.py` while keeping truncation fail-fast.
+- **Settings sync:** `put_minuspod_ad_detection_settings()` no longer echoes blank stage tunables (stops clearing reasoning levels on every start).
+- **MinusPod upstream:** live runtime on **`v2.96.25`** (`local-mods`); `update_minuspod()` fast-forwards onto the pinned tag and reapplies additive patches (no `reset --hard`). Pre-rebase **`2.34.0`** snapshot kept on `local-mods-d900bdd-backup`.
+- **Whisper crash fix:** chunk planner folds sub-second trailing remainders into the previous chunk; `_transcribe_via_api` skips clips under `WHISPER_MIN_CLIP_SECONDS` (1.0s) before upload. Captured in `patches/whisper-short-clip-guard.patch`.
+- **Patch chain:** `patches/llm-call-reasoning-retry.patch` for **`d900bdd`** rebuilds only; `adaptive-detection-windows.patch` hunk headers repaired; `patches/README.md` documents per-file patch regen.
+
 ### Added
 - **Auto-load `.env` at startup** — `pocketcasts_adfree.py` reads `.env` from
   the repo root when the UI or CLI starts, so `source .env` is no longer
@@ -15,6 +23,10 @@ loosely tracks [Semantic Versioning](https://semver.org/).
   defaults to `0` in quick-setup docs and MinusPod env passthrough (always run
   the second LLM pass; catches mid-roll ads). Set `86400` to skip verification
   and save ~50% LLM cost.
+- **Docs: Quality preset** — README Step 1, `.env.example`, and LLM backend
+  sections now match the bounded-window + verify-on `.env` (no longer document
+  "cheap balanced" as the default copy-paste block). Call out MinusPod upstream
+  defaults (`86400` / `1800`) vs this repo's recommended values.
 - **Ad detection — LLM cost optimisations panel** — new "Ad detection"
   button in the dashboard toolbar opens a modal that surfaces three
   tunables from MinusPod's stage-tunables system:

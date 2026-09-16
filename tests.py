@@ -2080,6 +2080,13 @@ class TestFailedEpisodeAbort(unittest.TestCase):
         self.assertFalse(_is_llm_stage("pass1:transcribing 3/14"))
         self.assertTrue(_is_transcription_stage("pass1:transcribing"))
 
+    def test_effective_episode_wallclock_scales_with_duration(self):
+        from pocketcasts_adfree import _effective_episode_wallclock_seconds
+        self.assertEqual(_effective_episode_wallclock_seconds(5400, None), 5400)
+        self.assertEqual(_effective_episode_wallclock_seconds(5400, 0), 5400)
+        # 30 min source → 4× duration + 30 min headroom (ad-heavy detection)
+        self.assertEqual(_effective_episode_wallclock_seconds(5400, 1800), 9000)
+
     def test_stall_threshold_higher_for_llm_stages(self):
         from pocketcasts_adfree import _stall_threshold_for_stage
         self.assertEqual(_stall_threshold_for_stage("pass1:detecting:1/9", 900), 2700)
@@ -2577,9 +2584,22 @@ class TestServicesManager(unittest.TestCase):
              patch.object(_sm, "update_minuspod", return_value={"updated": False}), \
              patch.object(_sm, "_http_ok", return_value=True), \
              patch.object(_sm, "_wait_until", return_value=True), \
-             patch.object(_sm, "_reload_dotenv_into", return_value=0), \
              patch.object(_sm, "MINUSPOD_LOG", new="/tmp/minuspod.log"):
-            _sm.start_minuspod()
+            def _reload_side_effect(dest, **kwargs):
+                exclude = kwargs.get("exclude") or set()
+                for key in (
+                    "LARGE_WINDOW_SECONDS",
+                    "DETECTION_OUTPUT_SAFE_WINDOW_SECONDS",
+                    "DETECTION_REASONING_LEVEL",
+                    "VERIFICATION_REASONING_LEVEL",
+                    "REVIEWER_REASONING_LEVEL",
+                ):
+                    if key not in exclude and key in os.environ:
+                        dest[key] = os.environ[key]
+                return len(dest)
+
+            with patch.object(_sm, "_reload_dotenv_into", side_effect=_reload_side_effect):
+                _sm.start_minuspod()
         self.assertEqual(captured.get("env", {}).get("LARGE_WINDOW_SECONDS"), "36000")
         self.assertEqual(captured.get("env", {}).get("LARGE_WINDOW_MIN_SECONDS"), "300")
         self.assertEqual(captured.get("env", {}).get("LARGE_WINDOW_MAX_SECONDS"), "36000")
@@ -2591,14 +2611,15 @@ class TestServicesManager(unittest.TestCase):
         """Cost tunables in .env must be PUT to MinusPod so DB overrides don't
         ignore SKIP_VERIFICATION_UNDER_SECONDS etc."""
         import services_manager as _sm
-        with patch.dict(os.environ, {
-            "SKIP_VERIFICATION_UNDER_SECONDS": "86400",
-            "LARGE_WINDOW_SECONDS": "36000",
-            "AD_DETECTION_MAX_TOKENS": "16384",
-            "ENABLE_PROMPT_CACHING": "true",
-        }, clear=False), \
-             patch.object(_sm, "put_minuspod_stage_tunables",
+        with patch.object(_sm, "_reload_dotenv_into") as m_reload, \
+             patch.object(_sm, "put_minuspod_ad_detection_settings",
                           return_value={"ok": True}) as m_put:
+            m_reload.side_effect = lambda dest, **kw: dest.update({
+                "SKIP_VERIFICATION_UNDER_SECONDS": "86400",
+                "LARGE_WINDOW_SECONDS": "36000",
+                "AD_DETECTION_MAX_TOKENS": "16384",
+                "ENABLE_PROMPT_CACHING": "true",
+            }) or len(dest)
             result = _sm.sync_cost_tunables_from_env()
         self.assertTrue(result.get("ok"))
         m_put.assert_called_once()
@@ -2608,6 +2629,45 @@ class TestServicesManager(unittest.TestCase):
         self.assertEqual(payload["detectionMaxTokens"], 16384)
         self.assertEqual(payload["verificationMaxTokens"], 16384)
         self.assertTrue(payload["enablePromptCaching"])
+
+    def test_sync_cost_tunables_includes_safe_window_and_min_cut(self):
+        import services_manager as _sm
+        with patch.dict(os.environ, {}, clear=False), \
+             patch.object(_sm, "_reload_dotenv_into") as m_reload, \
+             patch.object(_sm, "put_minuspod_ad_detection_settings",
+                          return_value={"ok": True}) as m_put:
+            m_reload.side_effect = lambda dest, **kw: dest.update({
+                "SKIP_VERIFICATION_UNDER_SECONDS": "0",
+                "DETECTION_OUTPUT_SAFE_WINDOW_SECONDS": "900",
+                "MIN_CUT_CONFIDENCE": "0.60",
+            })
+            result = _sm.sync_cost_tunables_from_env()
+        self.assertTrue(result.get("ok"))
+        payload = m_put.call_args[0][0]
+        self.assertEqual(payload["skipVerificationUnderSeconds"], 0)
+        self.assertEqual(payload["detectionOutputSafeWindowSeconds"], 900)
+        self.assertEqual(payload["minCutConfidence"], 0.60)
+
+    def test_put_ad_detection_settings_omits_blank_stage_values(self):
+        import services_manager as _sm
+        captured = {}
+
+        def fake_get():
+            return {
+                "stageTunables": {
+                    "detectionReasoningLevel": {"value": ""},
+                    "windowSizeSeconds": {"value": 600},
+                },
+            }
+
+        with patch.object(_sm, "get_minuspod_settings", fake_get), \
+             patch.object(_sm, "httpx") as mock_httpx:
+            mock_httpx.put.return_value.status_code = 200
+            _sm.put_minuspod_ad_detection_settings({"largeWindowSeconds": 3600})
+            captured["json"] = mock_httpx.put.call_args.kwargs["json"]
+        self.assertNotIn("detectionReasoningLevel", captured["json"])
+        self.assertEqual(captured["json"]["windowSizeSeconds"], 600)
+        self.assertEqual(captured["json"]["largeWindowSeconds"], 3600)
 
     @unittest.skipUnless(
         (ROOT / "MinusPod" / "src" / "config.py").exists(),
@@ -2675,6 +2735,47 @@ class TestServicesManager(unittest.TestCase):
                 (_mp_config.LARGE_WINDOW_MIN_SECONDS_DEFAULT,
                  _mp_config.LARGE_WINDOW_MAX_SECONDS_DEFAULT),
             )
+
+    @unittest.skipUnless(
+        (ROOT / "MinusPod" / "src" / "transcriber.py").exists(),
+        "MinusPod not vendored",
+    )
+    def test_whisper_chunk_plan_absorbs_subsecond_trailing_sliver(self):
+        """Parallel chunk planner must not emit a final sub-second chunk (whisper.cpp DTW assert)."""
+        from services_manager import ROOT
+        import sys
+        _mp_src = str(ROOT / "MinusPod" / "src")
+        if _mp_src not in sys.path:
+            sys.path.insert(0, _mp_src)
+        transcriber_py = ROOT / "MinusPod" / "src" / "transcriber.py"
+        text = transcriber_py.read_text(encoding="utf-8")
+        self.assertIn("WHISPER_MIN_CLIP_SECONDS = 1.0", text)
+        whisper_min_clip_seconds = 1.0
+
+        duration = 9600.2
+        chunk_duration = 600
+        overlap = 30
+        plan = []
+        chunk_start = 0.0
+        idx = 0
+        while chunk_start < duration:
+            chunk_end = min(chunk_start + chunk_duration, duration)
+            if 0 < duration - chunk_end < whisper_min_clip_seconds:
+                chunk_end = duration
+            chunk_end_with_overlap = (
+                min(chunk_end + overlap, duration)
+                if chunk_end < duration else chunk_end
+            )
+            plan.append((idx, chunk_start, chunk_end_with_overlap))
+            idx += 1
+            chunk_start = chunk_end
+
+        self.assertEqual(len(plan), 16)
+        last_start, last_end = plan[-1][1], plan[-1][2]
+        self.assertAlmostEqual(last_start, 9000.0)
+        self.assertAlmostEqual(last_end, duration)
+        for _, _s, e in plan:
+            self.assertGreaterEqual(e - _s, whisper_min_clip_seconds - 1e-6)
 
 
 class TestServicesEndpoints(unittest.TestCase):
@@ -2896,7 +2997,7 @@ class TestMinuspodSettingsEndpoints(unittest.TestCase):
                 "bogusKey": "should-be-rejected",
             })
         self.assertEqual(r.status_code, 400)
-        self.assertIn("Unknown tunable", r.get_json()["error"])
+        self.assertIn("Unknown setting", r.get_json()["error"])
         self.assertIn("bogusKey", r.get_json()["error"])
 
     def test_put_stage_tunables_surfaces_minuspod_validation_error(self):
@@ -2923,7 +3024,9 @@ class TestMinuspodSettingsEndpoints(unittest.TestCase):
 
     def test_put_stage_tunables_handles_minuspod_unreachable(self):
         with patch("ui_server.services_manager.get_minuspod_settings",
-                   return_value=None):
+                   return_value=None), \
+             patch("ui_server.services_manager.httpx.put",
+                   side_effect=ConnectionError("connection refused")):
             r = self.client.put("/api/minuspod/stage-tunables", json={
                 "largeWindowSeconds": 1500,
             })

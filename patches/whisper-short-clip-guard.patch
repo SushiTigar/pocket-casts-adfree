@@ -1,0 +1,58 @@
+diff --git a/src/transcriber.py b/src/transcriber.py
+index 782cf311..d3da8b37 100644
+--- a/src/transcriber.py
++++ b/src/transcriber.py
+@@ -104,6 +104,11 @@ BATCH_SIZE_TIERS = [
+     (120 * 60, 8),      # 90-120 min: batch_size=8
+ ]
+ 
++# whisper.cpp's DTW median filter asserts (killing the server process) when a
++# clip has fewer frames than the filter width. 1.0s is empirical margin over
++# the true bound, not a derived limit.
++WHISPER_MIN_CLIP_SECONDS = 1.0
++
+ # Whisper artifacts on silence and music. Matched after trailing punctuation
+ # is stripped, so a bare phrase or bare punctuation is an artifact.
+ HALLUCINATION_PATTERNS = re.compile(
+@@ -301,6 +306,8 @@ def _chunk_bounds_ahead(start, chunk_duration, duration, overlap, count):
+     bounds = []
+     while start < duration and len(bounds) < count:
+         end = min(start + chunk_duration, duration)
++        if 0 < duration - end < WHISPER_MIN_CLIP_SECONDS:
++            end = duration
+         end_with_overlap = min(end + overlap, duration) if end < duration else end
+         bounds.append((start, end_with_overlap))
+         start = end
+@@ -1273,6 +1280,14 @@ class Transcriber:
+                 logger.error("Whisper API base URL not configured")
+                 return None
+ 
++            clip_duration = get_audio_duration(audio_path)
++            if clip_duration is not None and clip_duration < WHISPER_MIN_CLIP_SECONDS:
++                logger.warning(
++                    "Skipping %.2fs clip: below the %.1fs minimum for the whisper backend",
++                    clip_duration, WHISPER_MIN_CLIP_SECONDS,
++                )
++                return []
++
+             # Preprocess audio for consistent quality (skipped when the
+             # chunk was extracted with the filter chain already applied)
+             if not preprocessed:
+@@ -1400,6 +1415,8 @@ class Transcriber:
+                             last_request_exc = exc
+                             response = None
+                             attempt += 1
++                            if attempt < max_attempts:
++                                time.sleep(min(2.0 * attempt, 8.0))
+                             continue
+                         if response.status_code == 429 and get_pool().active:
+                             if time.monotonic() >= retry_deadline:
+@@ -2165,6 +2182,8 @@ class Transcriber:
+         idx = 0
+         while chunk_start < duration:
+             chunk_end = min(chunk_start + chunk_duration, duration)
++            if 0 < duration - chunk_end < WHISPER_MIN_CLIP_SECONDS:
++                chunk_end = duration
+             chunk_end_with_overlap = (
+                 min(chunk_end + overlap, duration)
+                 if chunk_end < duration else chunk_end

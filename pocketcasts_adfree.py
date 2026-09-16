@@ -269,6 +269,7 @@ def _is_transcription_failure(err_text: str) -> bool:
         "failed to transcribe",
         "transcription failed",
         "transcribe audio",
+        "whisper api unreachable",
         "whisper",
         "metal",
         "gpu",
@@ -289,7 +290,9 @@ def _restart_whisper_if_wedged() -> bool:
     except Exception:
         return False
     try:
-        result = services_manager.restart_whisper(backend="native")
+        st = services_manager.status_whisper()
+        backend = (st.backend if st else None) or "native"
+        result = services_manager.restart_whisper(backend=backend)
         return bool(result.get("ok"))
     except Exception as exc:
         log.warning(f"  Whisper restart failed: {exc}")
@@ -411,6 +414,23 @@ def _stall_threshold_for_stage(stage: str, base_threshold: int) -> int:
     if _is_llm_stage(stage):
         return base_threshold * 3
     return base_threshold
+
+
+def _effective_episode_wallclock_seconds(
+    base_cap: int, episode_duration_sec: float | None,
+) -> int:
+    """Scale the orchestrator wait budget for long episodes (cloud LLM detection).
+
+    Fixed 90 min caps fail on ad-heavy shows that need many detection windows
+    even when MinusPod is making steady progress. Scale with source duration and
+    keep a hard ceiling so the queue cannot block for days.
+    """
+    if not episode_duration_sec or episode_duration_sec <= 0:
+        return base_cap
+    # Transcription ~1x realtime + detection with truncation splits (~4x audio).
+    scaled = int(episode_duration_sec * 4 + 1800)
+    absolute_max = 21600  # 6 h
+    return min(absolute_max, max(base_cap, scaled))
 
 
 def _bounce_service_for_stall(stage: str) -> tuple[bool, str]:
@@ -1453,10 +1473,31 @@ class MinusPodClient:
             except ValueError:
                 stall_threshold_seconds = 900
 
+        ep_duration_sec = 0.0
+        try:
+            ep_detail = self.get_episode(slug, episode_id)
+            if ep_detail:
+                ep_duration_sec = float(
+                    ep_detail.get("duration") or ep_detail.get("newDuration") or 0
+                )
+        except Exception:
+            pass
+        effective_wallclock = _effective_episode_wallclock_seconds(
+            max_wallclock_seconds, ep_duration_sec,
+        )
+        if effective_wallclock != max_wallclock_seconds and ep_duration_sec > 0:
+            log.info(
+                f"  Wallclock budget {effective_wallclock / 60:.0f} min "
+                f"(base {max_wallclock_seconds / 60:.0f} min, "
+                f"episode {ep_duration_sec / 60:.1f} min)"
+            )
+        max_wallclock_seconds = effective_wallclock
+
         url = f"{self.base_url}/episodes/{slug}/{episode_id}.mp3"
         safe_id = re.sub(r'[^\w-]', '_', episode_id)[:80]
         output_path = output_dir / f"{safe_id}.mp3"
         last_stage = ""
+        last_progress_pct = -1
         last_progress_at = time.monotonic()
         wallclock_start = time.monotonic()
         service_bounced_for_stall = False
@@ -1556,6 +1597,10 @@ class MinusPodClient:
                                 if progress_callback:
                                     progress_callback(msg)
                                 last_stage = stage
+                                last_progress_pct = progress
+                                last_progress_at = time.monotonic()
+                            elif progress > last_progress_pct:
+                                last_progress_pct = progress
                                 last_progress_at = time.monotonic()
                             elif attempt == 0:
                                 log.info(f"  Episode queued for processing, waiting...")

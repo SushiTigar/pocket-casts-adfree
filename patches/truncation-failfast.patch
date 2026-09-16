@@ -1,5 +1,5 @@
 diff --git a/src/ad_detector/__init__.py b/src/ad_detector/__init__.py
-index 9e869772..0bb2e304 100644
+index 9e869772..ae221f80 100644
 --- a/src/ad_detector/__init__.py
 +++ b/src/ad_detector/__init__.py
 @@ -7,9 +7,10 @@ Package layout:
@@ -23,7 +23,7 @@ index 9e869772..0bb2e304 100644
  from utils.prompt import format_sponsor_block, render_prompt, apply_override
  from utils.time import overlap_ratio
  
-@@ -129,6 +130,57 @@ __all__ = [
+@@ -129,6 +130,71 @@ __all__ = [
  logger = logging.getLogger('podcast.claude')
  
  
@@ -32,11 +32,25 @@ index 9e869772..0bb2e304 100644
 +
 +
 +def _detection_max_truncated_windows() -> int:
-+    raw = os.environ.get('DETECTION_MAX_TRUNCATED_WINDOWS', '2').strip()
++    raw = os.environ.get('DETECTION_MAX_TRUNCATED_WINDOWS', '6').strip()
 +    try:
 +        return max(1, int(raw))
 +    except ValueError:
-+        return 2
++        return 6
++
++
++def _min_detection_window_seconds() -> float:
++    return float(get_stage_tunable('window_size_seconds'))
++
++
++def _can_bisect_truncated_window(
++    window_start: float, window_end: float, num_segments: int,
++) -> bool:
++    """True when a truncated window can be split again (above base window size)."""
++    if num_segments <= 1:
++        return False
++    duration = window_end - window_start
++    return duration > _min_detection_window_seconds() * 1.05
 +
 +
 +def _new_truncation_budget() -> Dict[str, Any]:
@@ -62,9 +76,9 @@ index 9e869772..0bb2e304 100644
 +
 +def _truncation_budget_failed_response(last_error: Optional[Exception] = None) -> dict:
 +    detail = (
-+        "Ad detection hit the output token limit too many times in this episode. "
-+        "Lower LARGE_WINDOW_SECONDS or raise AD_DETECTION_MAX_TOKENS in .env, "
-+        "restart MinusPod, then reprocess."
++        "Ad detection hit the output token limit too many times in this episode "
++        "(even after automatic window splitting). Raise AD_DETECTION_MAX_TOKENS "
++        "or lower WINDOW_SIZE_SECONDS, restart MinusPod, then reprocess."
 +    )
 +    if last_error and str(last_error):
 +        detail = f"{detail} ({last_error})"
@@ -81,7 +95,7 @@ index 9e869772..0bb2e304 100644
  class WindowResult(NamedTuple):
      """Per-window output from _process_single_window.
  
-@@ -211,11 +263,12 @@ def _all_windows_failed_response(stage: str, num_windows: int, last_error, model
+@@ -211,11 +277,12 @@ def _all_windows_failed_response(stage: str, num_windows: int, last_error, model
      not_found_hint = _model_not_found_hint(last_error, model)
      if not_found_hint:
          parts.append(not_found_hint)
@@ -95,18 +109,17 @@ index 9e869772..0bb2e304 100644
          "last_error_type": last_err_type,
          "last_error_status": last_err_status,
      }
-@@ -517,7 +570,9 @@ class AdDetector:
+@@ -517,7 +584,8 @@ class AdDetector:
                                  audio_enforcer, audio_analysis,
                                  llm_timeout, max_retries,
                                  slug, episode_id, pass_name,
 -                                window_label_prefix, validate_timestamps):
 +                                window_label_prefix, validate_timestamps,
-+                                is_split_attempt=False,
 +                                truncation_budget=None):
          """Run one window through prompt-build + LLM call + parse + filter.
  
          Returns a ``WindowResult``. Thread-safe: writes nothing to shared
-@@ -525,6 +580,22 @@ class AdDetector:
+@@ -525,6 +593,22 @@ class AdDetector:
          through ``_call_llm_for_window`` which uses lock-protected helpers
          downstream.
          """
@@ -129,14 +142,15 @@ index 9e869772..0bb2e304 100644
          window_segments = window['segments']
          window_start = window['start']
          window_end = window['end']
-@@ -564,6 +635,83 @@ class AdDetector:
+@@ -564,6 +648,83 @@ class AdDetector:
              pass_name=pass_name,
          )
          if response is None:
 +            if (
 +                isinstance(last_error, TruncatedCompletionError)
-+                and not is_split_attempt
-+                and len(window_segments) > 1
++                and _can_bisect_truncated_window(
++                    window_start, window_end, len(window_segments),
++                )
 +            ):
 +                duration = window_end - window_start
 +                half_size = duration / 2.0
@@ -169,7 +183,6 @@ index 9e869772..0bb2e304 100644
 +                        pass_name=pass_name,
 +                        window_label_prefix=f"{window_label_prefix}-split",
 +                        validate_timestamps=validate_timestamps,
-+                        is_split_attempt=True,
 +                        truncation_budget=truncation_budget,
 +                    )
 +                    sub_results = [
@@ -213,7 +226,7 @@ index 9e869772..0bb2e304 100644
              logger.error(
                  f"[{slug}:{episode_id}] {window_label}/{total_windows} failed after all retries, "
                  f"skipping (error: {last_error})"
-@@ -791,6 +939,8 @@ class AdDetector:
+@@ -791,6 +952,8 @@ class AdDetector:
                      f"with concurrency={parallel_windows}"
                  )
  
@@ -222,7 +235,7 @@ index 9e869772..0bb2e304 100644
              window_results = self._run_windows(
                  windows,
                  max_workers=parallel_windows,
-@@ -811,8 +961,19 @@ class AdDetector:
+@@ -811,8 +974,19 @@ class AdDetector:
                  pass_name=PASS_AD_DETECTION_1,
                  window_label_prefix='Window',
                  validate_timestamps=True,
@@ -242,116 +255,3 @@ index 9e869772..0bb2e304 100644
              # Merge in window order (futures may complete out of order under
              # parallel execution; window_idx restores transcript-time order).
              for result in window_results:
-diff --git a/src/llm_client.py b/src/llm_client.py
-index facfb639..73c3f096 100644
---- a/src/llm_client.py
-+++ b/src/llm_client.py
-@@ -118,6 +118,7 @@ class LLMResponse:
-     model: str
-     usage: Optional[Dict[str, int]] = None
-     raw_response: Any = None  # Original response object for advanced use
-+    stop_reason: Optional[str] = None  # max_tokens/length/end_turn (provider-specific)
- 
- 
- @dataclass
-@@ -563,9 +564,8 @@ class AnthropicClient(LLMClient):
- 
-         content = (response.content[0].text or "") if response.content else ""
- 
--        self._warn_if_truncated(
--            getattr(response, 'stop_reason', None), eff_max, model
--        )
-+        anthropic_stop = getattr(response, 'stop_reason', None)
-+        self._warn_if_truncated(anthropic_stop, eff_max, model)
- 
-         llm_response = LLMResponse(
-             content=content,
-@@ -574,7 +574,8 @@ class AnthropicClient(LLMClient):
-                 'input_tokens': response.usage.input_tokens,
-                 'output_tokens': response.usage.output_tokens
-             } if response.usage else None,
--            raw_response=response
-+            raw_response=response,
-+            stop_reason=anthropic_stop,
-         )
- 
-         # Log response
-@@ -763,7 +764,8 @@ class OpenAICompatibleClient(LLMClient):
-                 'input_tokens': response.usage.prompt_tokens,
-                 'output_tokens': response.usage.completion_tokens
-             } if response.usage else None,
--            raw_response=response
-+            raw_response=response,
-+            stop_reason=finish_reason,
-         )
- 
-         # Log response
-diff --git a/src/utils/llm_call.py b/src/utils/llm_call.py
-index 41c1820c..dc671f23 100644
---- a/src/utils/llm_call.py
-+++ b/src/utils/llm_call.py
-@@ -22,6 +22,8 @@ from utils.retry import calculate_backoff
- 
- logger = logging.getLogger(__name__)
- 
-+_TRUNCATION_STOP_REASONS = frozenset(('max_tokens', 'length'))
-+
- 
- class EmptyCompletionError(Exception):
-     """The provider returned a completion with no content.
-@@ -34,6 +36,10 @@ class EmptyCompletionError(Exception):
-     """
- 
- 
-+class TruncatedCompletionError(EmptyCompletionError):
-+    """Model hit max_tokens; response body was cut before usable content."""
-+
-+
- def _completion_is_empty(response) -> bool:
-     """True when the model returned no usable content (empty or whitespace)."""
-     content = getattr(response, 'content', None)
-@@ -44,11 +50,18 @@ def _call_once(llm_client, llm_kwargs, model):
-     """One LLM call; raise EmptyCompletionError if it comes back content-less."""
-     response = llm_client.messages_create(**llm_kwargs)
-     if _completion_is_empty(response):
-+        stop = getattr(response, 'stop_reason', None)
-+        if stop in _TRUNCATION_STOP_REASONS:
-+            raise TruncatedCompletionError(
-+                f"truncated empty completion from {model} (stop_reason={stop})"
-+            )
-         raise EmptyCompletionError(f"empty completion from {model} (no content returned)")
-     return response
- 
- 
- def _is_retryable(error) -> bool:
-+    if isinstance(error, TruncatedCompletionError):
-+        return False
-     return isinstance(error, EmptyCompletionError) or is_retryable_error(error)
- 
- 
-@@ -92,6 +105,12 @@ def call_llm_for_window(
-         try:
-             response = _call_once(llm_client, llm_kwargs, model)
-             return response, None
-+        except TruncatedCompletionError as e:
-+            logger.warning(
-+                f"[{slug}:{episode_id}] {window_label} output truncated at "
-+                f"max_tokens; not retrying same window ({e})"
-+            )
-+            return None, e
-         except Exception as e:
-             last_error = e
-             daily_quota = classify_daily_quota_exhaustion(e)
-@@ -179,6 +198,12 @@ def call_llm_for_window(
-                     f"[{slug}:{episode_id}] {window_label} succeeded on retry {retry_num}"
-                 )
-                 return response, None
-+            except TruncatedCompletionError as e:
-+                logger.warning(
-+                    f"[{slug}:{episode_id}] {window_label} truncated on "
-+                    f"per-window retry {retry_num}; giving up ({e})"
-+                )
-+                return None, e
-             except Exception as e:
-                 last_error = e
-                 logger.warning(
