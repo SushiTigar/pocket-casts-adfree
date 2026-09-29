@@ -161,15 +161,20 @@ push the **Quality** row into the DB on each MinusPod start so the dashboard and
 SQLite match `.env` (see [CHANGELOG](CHANGELOG.md) — verification on by default
 for this project).
 
-**DB sync note:** MinusPod stores cost tunables in SQLite. If you previously adjusted them in the
+**DB sync note:** MinusPod stores cost tunables and LLM provider in SQLite. If you previously adjusted them in the
 **Ad detection** panel, those values override `.env` until the next MinusPod start, when
 `sync_cost_tunables_from_env()` writes `.env` into the DB. After changing `.env`, restart
 MinusPod from the Services panel to pick up the new values.
+
+**LLM provider fix:** Starting in v2.96.25, the pipeline ensures the MinusPod database `llm_provider` setting matches your `.env` configuration to prevent LLM initialization errors. If you see `Ad detection failed: No API key` errors, verify `LLM_PROVIDER` in `.env` matches the database setting via `sqlite3 MinusPod/data/podcast.db "SELECT value FROM settings WHERE key='llm_provider';"`.
 
 ### Step 1 — Tunables in `.env`
 
 ```bash
 cp .env.example .env
+```
+
+Paste this block into `.env` (secrets go in Passwords app / `secrets.ps1` — not here):
 ```
 
 Paste this block into `.env` (secrets go in Passwords app / `secrets.ps1` — not here):
@@ -1005,13 +1010,13 @@ chosen preset. After editing `.env`, restart MinusPod from the Services panel.
 
 The Services panel can tail any of these inline (`Log` button per row).
 
+**Logging fix:** Starting in v2.96.25, the pipeline's logging system was improved to prevent job failures. Previously, logging finalization could occur out of order during error handling, causing incomplete logs and potential job failures. The fix ensures logs are properly finalized before being moved to permanent storage, improving reliability and debugging capabilities.
 ## Tests
-
-```bash
-source venv/bin/activate
 source secrets.sh   # or secrets.ps1 on Windows — see Step 2
 python -m unittest tests -v
 ```
+
+
 
 The suite covers artwork normalization, date validation, state management,
 Patreon detection, transcript parsing, skip/stop semantics, upload ordering,

@@ -1572,44 +1572,56 @@ def create_app(email=None, password=None):
             if match:
                 return match
 
-        # Not found — ask MinusPod to ingest more history. add_feed with the
-        # same sourceUrl is idempotent server-side (returns 409) but also
-        # accepts a larger maxEpisodes; if it 409s, try a refresh instead.
+        # Not found — ask MinusPod to ingest more history. Try multiple times with exponential backoff.
         if not rss_url:
             return None
-        if job_log:
-            job_log(
-                "info",
-                f"  Title not found in MinusPod feed; expanding window to 500 and retrying...",
-            )
-        try:
-            mp.add_feed(rss_url, max_episodes=500)
-        except Exception:
-            # Likely 409 already-exists — fall through to refresh.
+        max_retries = 3
+        base_delay = 5  # seconds
+        for attempt in range(max_retries):
+            if attempt > 0:
+                # Not first attempt - do feed refresh and wait
+                if job_log:
+                    job_log(
+                        "info",
+                        f"  Retrying feed refresh (attempt {attempt + 1}/{max_retries})...",
+                    )
+                try:
+                    mp.add_feed(rss_url, max_episodes=500)
+                except Exception:
+                    # Likely 409 already-exists — fall through to refresh.
+                    try:
+                        mp.client.post(
+                            f"{mp.base_url}/api/v1/feeds/{feed_slug}/refresh", timeout=30
+                        )
+                    except Exception as e:
+                        if job_log:
+                            job_log("warn", f"  Feed refresh failed: {e}")
+                time.sleep(base_delay * (2 ** attempt))  # Exponential backoff
+            
             try:
-                mp.client.post(
-                    f"{mp.base_url}/api/v1/feeds/{feed_slug}/refresh", timeout=30
-                )
+                episodes = mp.get_episodes(feed_slug)
             except Exception as e:
                 if job_log:
-                    job_log("warn", f"  Feed refresh failed: {e}")
-                return None
-        time.sleep(5)
-        try:
-            episodes = mp.get_episodes(feed_slug)
-        except Exception as e:
-            if job_log:
-                job_log("warn", f"  MinusPod get_episodes (retry) failed: {e}")
-            return None
-
-        # Retry primary title first, then alts.
-        match = _find(episodes, pc_title)
-        if match:
-            return match
-        for alt in alt_titles or []:
-            match = _find(episodes, alt)
+                    job_log("warn", f"  MinusPod get_episodes failed: {e}")
+                if attempt == max_retries - 1:  # Last attempt
+                    return None
+                continue  # Try again
+            
+            # Search for the episode
+            match = _find(episodes, pc_title)
             if match:
                 return match
+            for alt in alt_titles or []:
+                match = _find(episodes, alt)
+                if match:
+                    return match
+            
+            # If we get here, the episode wasn't found in this attempt
+            if job_log:
+                job_log("info", f"  Episode not found in feed after refresh (attempt {attempt + 1}/{max_retries})")
+            if attempt == max_retries - 1:  # Last attempt
+                return None
+            # Otherwise, try again
         return None
 
     def _process_job(job_id, selections):
