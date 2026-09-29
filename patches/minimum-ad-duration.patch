@@ -1,0 +1,75 @@
+diff --git a/src/config.py b/src/config.py
+index 47734037..b69c0064 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -1292,6 +1321,7 @@ def cue_only_missing_roles(rows):
+ MIN_AD_DURATION_FOR_REMOVAL = 10.0   # Min ad duration to actually remove from audio
+ SHORT_CUT_KEEP_CONFIDENCE = 0.9      # Keep a shorter cut anyway at/above this confidence
+                                      # (fingerprint-stage cuts are always kept)
++ABSOLUTE_MIN_AD_DURATION = 4.0       # Absolute min ad duration to keep (filters obvious false positives)
+ POST_ROLL_TRIM_THRESHOLD = 30.0      # Threshold for trimming post-roll content
+ MERGE_GAP_SECONDS = 1.0              # Cuts separated by less than this merge into one
+                                      # (distinct from the validator's MERGE_GAP_THRESHOLD)
+diff --git a/src/audio_processor.py b/src/audio_processor.py
+index 93cfa49c..a285fbce 100644
+--- a/src/audio_processor.py
++++ b/src/audio_processor.py
+@@ -15,6 +15,7 @@ from config import (
+     FFMPEG_LONG_TIMEOUT,
+     MIN_AD_DURATION_FOR_REMOVAL, POST_ROLL_TRIM_THRESHOLD, MERGE_GAP_SECONDS,
+     SHORT_CUT_KEEP_CONFIDENCE, RENDER_DRIFT_WARN_SECONDS,
++    ABSOLUTE_MIN_AD_DURATION,
+ )
+ 
+ logger = logging.getLogger(__name__)
+@@ -312,12 +313,13 @@ class AudioProcessor:
+         if current_segment:
+             merged_ads.append(current_segment)
+ 
+-        # Filter out short ad detections (< 10 seconds) - likely LLM
+-        # hallucinations. Trusted short cuts stay: a fingerprint match is a
+-        # known ad pattern, and a high-confidence detection (e.g. an 8s
+-        # bumper) is more likely real than noise.
++        # Filter out short ad detections - likely LLM hallucinations.
++        # Trusted short cuts stay: a fingerprint match is a known ad pattern,
++        # and a high-confidence detection is more likely real than noise.
++        # However, apply an absolute minimum to filter obvious false positives.
+         ads = []
+         skipped_count = 0
++        false_positive_count = 0
+         for ad in merged_ads:
+             duration = ad['end'] - ad['start']
+             trusted_split = bool(ad.get('_trusted_split_fragment'))
+             trusted = (ad.get('detection_stage') == 'fingerprint'
+                        or ad.get('confidence', 0) >= SHORT_CUT_KEEP_CONFIDENCE
+                        or trusted_split)
+             if duration >= MIN_AD_DURATION_FOR_REMOVAL:
+                 ads.append(ad)
+-            elif trusted:
++            elif trusted and duration >= ABSOLUTE_MIN_AD_DURATION:
++                # Trusted short ad (4-10s) - keep it
+                 ads.append(ad)
+                 logger.info(
+-                    f"Keeping short ad ({duration:.1f}s < {MIN_AD_DURATION_FOR_REMOVAL}s): "
++                    f"Keeping short trusted ad ({duration:.1f}s < {MIN_AD_DURATION_FOR_REMOVAL}s, "
++                    f">= {ABSOLUTE_MIN_AD_DURATION}s absolute min): "
+                     f"stage={ad.get('detection_stage', '?')} "
+                     f"confidence={ad.get('confidence', 'n/a')} "
+                     f"trusted_split={trusted_split}")
++            elif duration < ABSOLUTE_MIN_AD_DURATION:
++                # Obvious false positive (<4s) - always skip
++                false_positive_count += 1
++                logger.info(
++                    f"Skipping obvious false positive ad ({duration:.1f}s < {ABSOLUTE_MIN_AD_DURATION}s): "
++                    f"{ad.get('reason', 'unknown')[:50]}")
+             else:
++                # Short but untrusted ad (4-10s, not trusted) - skip
+                 skipped_count += 1
+                 logger.info(f"Skipping short ad ({duration:.1f}s < {MIN_AD_DURATION_FOR_REMOVAL}s): {ad.get('reason', 'unknown')[:50]}")
++        if false_positive_count > 0:
++            logger.info(f"Skipped {false_positive_count} obvious false positive ad detections (< {ABSOLUTE_MIN_AD_DURATION}s)")
+         if skipped_count > 0:
+-            logger.info(f"Skipped {skipped_count} short ad detections (< {MIN_AD_DURATION_FOR_REMOVAL}s)")
++            logger.info(f"Skipped {skipped_count} short ad detections (< {MIN_AD_DURATION_FOR_REMOVAL}s, >= {ABSOLUTE_MIN_AD_DURATION}s)")
+         for ad in ads:
+             ad.pop('_trusted_split_fragment', None)
