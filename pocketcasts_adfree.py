@@ -22,6 +22,7 @@ import subprocess
 import tempfile
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -148,6 +149,80 @@ def _normalize_episode_url(url: str) -> str:
         return path.rsplit("/", 1)[-1].lower()
     except Exception:
         return url.strip().lower()
+
+
+PUBLISHED_MATCH_TOLERANCE_SECONDS = 300
+DURATION_MATCH_TOLERANCE_SECONDS = 60
+
+
+def _parse_iso_ts(value) -> float | None:
+    """Parse an ISO-8601 timestamp into a unix epoch float, or None."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
+
+
+def _find_episode_by_audio_url(episodes: list[dict], audio_url: str) -> dict | None:
+    """Match an episode by its audio-URL basename.
+
+    Entries without a URL are skipped: MinusPod's /episodes API often omits
+    the enclosure, and an empty normalized key must never compare equal or
+    substring-match (that would bind every lookup to the first episode).
+    """
+    url_key = _normalize_episode_url(audio_url)
+    if not url_key:
+        return None
+    for ep in episodes:
+        ep_url = ep.get("url") or ep.get("original_url") or ""
+        ep_key = _normalize_episode_url(ep_url)
+        if not ep_key:
+            continue
+        if ep_key == url_key or url_key.endswith(ep_key) or ep_key.endswith(url_key):
+            return ep
+    return None
+
+
+def _find_episode_by_published(
+    episodes: list[dict],
+    published: str,
+    duration: float = 0,
+) -> dict | None:
+    """Match an episode by publish timestamp; ties broken by duration.
+
+    Covers titles that drift between Pocket Casts and the RSS feed (user
+    renames, stale Up Next titles). Only a *unique* candidate is returned —
+    an ambiguous same-day drop is never guessed.
+    """
+    ts = _parse_iso_ts(published)
+    if ts is None:
+        return None
+    candidates = []
+    for ep in episodes:
+        ep_ts = _parse_iso_ts(ep.get("published", ""))
+        if ep_ts is None:
+            continue
+        if abs(ep_ts - ts) <= PUBLISHED_MATCH_TOLERANCE_SECONDS:
+            candidates.append(ep)
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+    if duration:
+        ranked = sorted(
+            candidates,
+            key=lambda ep: abs(float(ep.get("duration") or 0) - duration),
+        )
+        best_delta = abs(float(ranked[0].get("duration") or 0) - duration)
+        second_delta = abs(float(ranked[1].get("duration") or 0) - duration)
+        if best_delta <= DURATION_MATCH_TOLERANCE_SECONDS and best_delta < second_delta:
+            return ranked[0]
+    return None
 
 
 def resolve_pc_episode_uuid(

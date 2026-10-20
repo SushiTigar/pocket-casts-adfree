@@ -2263,6 +2263,111 @@ class TestUpNextTitleMatching(unittest.TestCase):
         self.assertIsNone(m(""))
 
 
+class TestEpisodeMatchingFallbacks(unittest.TestCase):
+    """Audio-URL and publish-timestamp matching used when titles drift
+    between Pocket Casts and the RSS feed."""
+
+    def _eps(self):
+        # MinusPod's /episodes API returns no audio URL at all, which is the
+        # common case — plus one entry that does carry one.
+        return [
+            {"id": "mp-897", "title": "Ep. 897", "published": "2026-10-20T19:00:00Z", "duration": 7200.0},
+            {"id": "mp-896", "title": "Ep. 896", "published": "2026-10-13T18:00:00Z", "duration": 5703.0},
+            {"id": "mp-895", "title": "Ep. 895", "published": "2026-10-06T18:00:00Z",
+             "url": "https://clrtpod.com/m/pscrb.fm/rss/p/dts.podtrac.com/redirect.mp3/audioboom.com/posts/8960621.mp3",
+             "duration": 6100.0},
+        ]
+
+    def test_missing_urls_never_match(self):
+        """Empty normalized URLs must not substring-match every episode."""
+        from pocketcasts_adfree import _find_episode_by_audio_url
+
+        eps = [{"id": "mp-897", "title": "Ep. 897"},
+               {"id": "mp-896", "title": "Ep. 896"}]
+        self.assertIsNone(
+            _find_episode_by_audio_url(eps, "https://audioboom.com/posts/8967112.mp3")
+        )
+
+    def test_url_basename_match(self):
+        from pocketcasts_adfree import _find_episode_by_audio_url
+
+        m = _find_episode_by_audio_url(
+            self._eps(),
+            "https://clrtpod.com/m/pscrb.fm/rss/p/dts.podtrac.com/redirect.mp3/audioboom.com/posts/8960621.mp3?mode=1",
+        )
+        self.assertIsNotNone(m)
+        self.assertEqual(m["id"], "mp-895")
+
+    def test_url_no_match_on_unrelated_basenames(self):
+        from pocketcasts_adfree import _find_episode_by_audio_url
+
+        self.assertIsNone(
+            _find_episode_by_audio_url(self._eps(), "https://cdn.example.com/other.mp3")
+        )
+
+    def test_empty_audio_url_returns_none(self):
+        from pocketcasts_adfree import _find_episode_by_audio_url
+
+        self.assertIsNone(_find_episode_by_audio_url(self._eps(), ""))
+
+    def test_published_match_within_tolerance(self):
+        from pocketcasts_adfree import _find_episode_by_published
+
+        m = _find_episode_by_published(self._eps(), "2026-10-20T19:04:00Z")
+        self.assertIsNotNone(m)
+        self.assertEqual(m["id"], "mp-897")
+
+    def test_published_match_naive_timestamp_assumed_utc(self):
+        from pocketcasts_adfree import _find_episode_by_published
+
+        m = _find_episode_by_published(self._eps(), "2026-10-13T18:00:00")
+        self.assertIsNotNone(m)
+        self.assertEqual(m["id"], "mp-896")
+
+    def test_published_outside_tolerance_no_match(self):
+        from pocketcasts_adfree import _find_episode_by_published
+
+        # 10 minutes off — outside the 300s window.
+        self.assertIsNone(_find_episode_by_published(self._eps(), "2026-10-20T19:10:00Z"))
+
+    def test_published_ambiguous_tie_broken_by_duration(self):
+        from pocketcasts_adfree import _find_episode_by_published
+
+        eps = [
+            {"id": "a", "published": "2026-10-20T19:00:00Z", "duration": 7200.0},
+            {"id": "b", "published": "2026-10-20T19:02:00Z", "duration": 3600.0},
+        ]
+        m = _find_episode_by_published(eps, "2026-10-20T19:01:00Z", duration=3610)
+        self.assertIsNotNone(m)
+        self.assertEqual(m["id"], "b")
+
+    def test_published_ambiguous_without_duration_never_guesses(self):
+        from pocketcasts_adfree import _find_episode_by_published
+
+        eps = [
+            {"id": "a", "published": "2026-10-20T19:00:00Z", "duration": 7200.0},
+            {"id": "b", "published": "2026-10-20T19:02:00Z", "duration": 3600.0},
+        ]
+        self.assertIsNone(_find_episode_by_published(eps, "2026-10-20T19:01:00Z"))
+
+    def test_published_garbage_or_empty_returns_none(self):
+        from pocketcasts_adfree import _find_episode_by_published
+
+        self.assertIsNone(_find_episode_by_published(self._eps(), ""))
+        self.assertIsNone(_find_episode_by_published(self._eps(), "not-a-date"))
+        self.assertIsNone(_find_episode_by_published([], "2026-10-20T19:00:00Z"))
+
+    def test_parse_iso_ts(self):
+        from pocketcasts_adfree import _parse_iso_ts
+
+        utc = _parse_iso_ts("2026-10-20T19:00:00Z")
+        naive = _parse_iso_ts("2026-10-20T19:00:00")
+        self.assertEqual(utc, naive)
+        self.assertIsNotNone(utc)
+        self.assertIsNone(_parse_iso_ts(None))
+        self.assertIsNone(_parse_iso_ts("junk"))
+
+
 class TestRSSUrlDetection(unittest.TestCase):
     """RSS URL detection must recognize common podcast hosting platforms."""
 

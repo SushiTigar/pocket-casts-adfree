@@ -28,6 +28,8 @@ from pocketcasts_adfree import (
     _normalize_title,
     _normalize_title_strong,
     _retry_up_next,
+    _find_episode_by_audio_url,
+    _find_episode_by_published,
     is_patreon_feed,
     find_rss_url_for_podcast,
     get_podcast_artwork_url,
@@ -1528,19 +1530,19 @@ def create_app(email=None, password=None):
         rss_url: str | None = None, job_log=None,
         alt_titles: list[str] | None = None,
         pc_audio_url: str | None = None,
+        pc_published: str = "",
+        pc_duration: float = 0,
     ) -> dict | None:
-        """Find the MinusPod episode in `feed_slug` whose title matches
-        `pc_title`. Uses the same normalization as the rest of the pipeline
-        (exact-normalized, then substring-normalized).
+        """Find the MinusPod episode in `feed_slug` for a Pocket Casts item.
 
-        If `alt_titles` is provided, each entry is also tried against the
-        feed — this handles cases where Pocket Casts returns a stale/wrong
-        title (e.g. user renamed locally, or Up Next drifted) while
-        get_new_releases() carries the canonical RSS title.
+        Matching order (same normalization as the rest of the pipeline):
+        exact-normalized title, substring title, `alt_titles` (e.g. the
+        RSS-canonical title from get_new_releases when Up Next drifted),
+        audio-URL basename, then publish timestamp (ties broken by duration).
 
-        If no match is found AND `rss_url` is provided, re-add the feed with
-        a larger window (maxEpisodes=500) so older Up Next items become
-        matchable, then retry once.
+        If no match is found AND `rss_url` is provided, force-refresh the feed
+        (bypasses the coalesce window and ETag/304 so a just-published episode
+        is ingested) and retry with exponential backoff.
         """
         def _find(episodes: list[dict], target_title: str) -> dict | None:
             target = _normalize_title(target_title)
@@ -1556,6 +1558,21 @@ def create_app(email=None, password=None):
                     return e
             return None
 
+        def _match_all(episodes: list[dict]) -> dict | None:
+            match = _find(episodes, pc_title)
+            if match:
+                return match
+            for alt in alt_titles or []:
+                match = _find(episodes, alt)
+                if match:
+                    return match
+            # Audio URL (defensive — /episodes usually omits the enclosure)
+            match = _find_episode_by_audio_url(episodes, pc_audio_url or "")
+            if match:
+                return match
+            # Publish timestamp — covers PC/RSS title drift
+            return _find_episode_by_published(episodes, pc_published, pc_duration)
+
         try:
             episodes = mp.get_episodes(feed_slug)
         except Exception as e:
@@ -1563,64 +1580,39 @@ def create_app(email=None, password=None):
                 job_log("warn", f"  MinusPod get_episodes failed: {e}")
             return None
 
-        match = _find(episodes, pc_title)
+        match = _match_all(episodes)
         if match:
             return match
 
-        # Try alt_titles (e.g. RSS-canonical title from get_new_releases).
-        for alt in alt_titles or []:
-            match = _find(episodes, alt)
-            if match:
-                return match
-        # Also try matching by audio URL if provided (helps when titles differ between PC and RSS)
-        if not match and pc_audio_url:
-            try:
-                from pocketcasts_adfree import _normalize_episode_url
-                pc_url_key = _normalize_episode_url(pc_audio_url)
-                if pc_url_key:
-                    for e in episodes:
-                        mp_url = e.get('url') or e.get('original_url') or ''
-                        mp_url_key = _normalize_episode_url(mp_url)
-                        if mp_url_key == pc_url_key:
-                            match = e
-                            break
-                        if pc_url_key in mp_url.lower() or mp_url_key in pc_url_key:
-                            match = e
-                            break
-            except Exception:
-                pass
-
-
-        # Not found — ask MinusPod to ingest more history. Try multiple times with exponential backoff.
+        # Not found — force-refresh so a brand-new episode is ingested, then
+        # retry with exponential backoff.
         if not rss_url:
             return None
         max_retries = 3
         base_delay = 5  # seconds
         for attempt in range(max_retries):
-            if attempt > 0:
-                # Not first attempt - do feed refresh and wait
+            if attempt > 0 and job_log:
+                job_log(
+                    "info",
+                    f"  Retrying feed refresh (attempt {attempt + 1}/{max_retries})...",
+                )
+            # add_feed() swallows the 409 "feed already exists" (allowed_status)
+            # and returns the existing feed instead of raising, so the refresh
+            # endpoint is the only reliable way to pull a new episode in.
+            # force=True bypasses the 30s refresh-coalesce window and the
+            # cached ETag/Last-Modified.
+            try:
+                mp.client.post(
+                    f"{mp.base_url}/api/v1/feeds/{feed_slug}/refresh",
+                    json={"force": True}, timeout=60,
+                )
                 if job_log:
-                    job_log(
-                        "info",
-                        f"  Retrying feed refresh (attempt {attempt + 1}/{max_retries})...",
-                    )
-                try:
-                    mp.add_feed(rss_url, max_episodes=500)
-                except Exception:
-                    # Likely 409 already-exists — fall through to refresh.
-                    # force=True bypasses the 30s refresh-coalesce window and the
-                    # cached ETag/Last-Modified, so a brand-new episode published
-                    # since the last sweep is guaranteed to be fetched here.
-                    try:
-                        mp.client.post(
-                            f"{mp.base_url}/api/v1/feeds/{feed_slug}/refresh",
-                            json={"force": True}, timeout=30,
-                        )
-                    except Exception as e:
-                        if job_log:
-                            job_log("warn", f"  Feed refresh failed: {e}")
-                time.sleep(base_delay * (2 ** attempt))  # Exponential backoff
-            
+                    job_log("info", "  Forced MinusPod feed refresh (force=true)")
+            except Exception as e:
+                if job_log:
+                    job_log("warn", f"  Feed refresh failed: {e}")
+            time.sleep(base_delay * (2 ** attempt))  # Exponential backoff
+
             try:
                 episodes = mp.get_episodes(feed_slug)
             except Exception as e:
@@ -1629,16 +1621,17 @@ def create_app(email=None, password=None):
                 if attempt == max_retries - 1:  # Last attempt
                     return None
                 continue  # Try again
-            
-            # Search for the episode
-            match = _find(episodes, pc_title)
+
+            match = _match_all(episodes)
             if match:
+                if job_log:
+                    job_log(
+                        "info",
+                        f"  Matched episode after feed refresh: "
+                        f"{match.get('title', '')[:60]}",
+                    )
                 return match
-            for alt in alt_titles or []:
-                match = _find(episodes, alt)
-                if match:
-                    return match
-            
+
             # If we get here, the episode wasn't found in this attempt
             if job_log:
                 job_log("info", f"  Episode not found in feed after refresh (attempt {attempt + 1}/{max_retries})")
@@ -1918,6 +1911,8 @@ def create_app(email=None, password=None):
                                 job_log=lambda lvl, msg: _job_log(job_id, lvl, msg),
                                 alt_titles=alt_titles,
                                 pc_audio_url=pc_url,
+                                pc_published=pc_published,
+                                pc_duration=pc_duration,
                             )
                             if mp_ep:
                                 ep = dict(mp_ep)
