@@ -19,6 +19,8 @@ ADDITIONAL_PATCHES=(
   "${ROOT}/patches/llm-cost-optimizations.patch"
   "${ROOT}/patches/adaptive-detection-windows.patch"
   "${ROOT}/patches/whisper-short-clip-guard.patch"
+  "${ROOT}/patches/cost-optimization-consumers.patch"
+  "${ROOT}/patches/ad-cut-tuning.patch"
 )
 
 apply_patches() {

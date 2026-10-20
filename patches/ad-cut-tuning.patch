@@ -1,0 +1,332 @@
+diff --git a/src/ad_validator.py b/src/ad_validator.py
+index ba343370..925adbb8 100644
+--- a/src/ad_validator.py
++++ b/src/ad_validator.py
+@@ -737,7 +737,9 @@ class AdValidator:
+         decision = self._make_decision(confidence, flags, duration)
+ 
+         # Apply per-feed hold rules after the base decision.
+-        decision = self._apply_hold_rules(ad, decision, confidence, flags, duration)
++        decision = self._apply_hold_rules(
++            ad, decision, confidence, flags, duration,
++            sponsor_confirmed=sponsor_confirmed)
+ 
+         ad['validation'] = {
+             'decision': decision.value,
+@@ -1008,7 +1010,8 @@ class AdValidator:
+             return Decision.REVIEW
+ 
+     def _apply_hold_rules(self, ad: dict, decision: Decision, confidence: float,
+-                          flags: list[str], duration: float) -> Decision:
++                          flags: list[str], duration: float,
++                          sponsor_confirmed: bool = False) -> Decision:
+         """Apply per-feed hold rules after the base decision.
+ 
+         A held ad gets decision=REVIEW with held_for_review=True so the gate
+@@ -1043,7 +1046,13 @@ class AdValidator:
+         # review, never solo-cut. Ordered before the cue gate so the hold
+         # carries its specific reason. Corroborated regions had the flag
+         # cleared in _merge_detection_results and cut normally.
++        # Catch: a sponsor-confirmed differential block is itself corroboration
++        # (the description/registry matched a brand read inside the exact
++        # span), so it cuts like any other confirmed ad instead of being held.
++        # Genuinely-unverified regions -- e.g. an editorial segment whose audio
++        # merely differs across fetches, with no sponsor read -- stay held.
+         if (decision != Decision.REJECT
++                and not sponsor_confirmed
+                 and ad.get('detection_stage') == 'dai_differential'
+                 and ad.get('differential_uncorroborated')):
+             self._mark_held(ad, flags, HOLD_REASON_DIFFERENTIAL_UNCORROBORATED)
+diff --git a/src/audio_processor.py b/src/audio_processor.py
+index 93cfa49c..f0cfe88b 100644
+--- a/src/audio_processor.py
++++ b/src/audio_processor.py
+@@ -15,6 +15,7 @@ from config import (
+     FFMPEG_LONG_TIMEOUT,
+     MIN_AD_DURATION_FOR_REMOVAL, POST_ROLL_TRIM_THRESHOLD, MERGE_GAP_SECONDS,
+     SHORT_CUT_KEEP_CONFIDENCE, RENDER_DRIFT_WARN_SECONDS,
++    ABSOLUTE_MIN_AD_DURATION,
+ )
+ 
+ logger = logging.getLogger(__name__)
+@@ -244,9 +245,11 @@ class AudioProcessor:
+         """Compute the cuts remove_ads actually applies to the audio.
+ 
+         Requested segments diverge from applied cuts: near-adjacent segments
+-        merge, short ones drop, and an end-of-episode cut extends to the end
+-        of the file. ``cut_barriers`` identifies content that must neither be
+-        swallowed by a gap merge nor by that trailing extension. Asset
++        merge, short ones drop, surviving edges are padded outward
++        (AD_START_PAD / AD_END_PAD / AD_END_PAD_TAIL), and an end-of-episode
++        cut extends to the end of the file. ``cut_barriers`` identifies content
++        that must neither be swallowed by a gap merge nor by that trailing
++        extension. Asset
+         generation and verification timestamp mapping need the applied list,
+         not the requested one -- remove_ads returns it.
+         """
+@@ -312,12 +315,14 @@ class AudioProcessor:
+         if current_segment:
+             merged_ads.append(current_segment)
+ 
+-        # Filter out short ad detections (< 10 seconds) - likely LLM
+-        # hallucinations. Trusted short cuts stay: a fingerprint match is a
+-        # known ad pattern, and a high-confidence detection (e.g. an 8s
+-        # bumper) is more likely real than noise.
++        # Filter out short ad detections - likely LLM hallucinations.
++        # Trusted short cuts stay: a fingerprint match is a known ad pattern,
++        # and a high-confidence detection is more likely real than noise.
++        # However, apply an absolute minimum to filter obvious false positives.
++
+         ads = []
+         skipped_count = 0
++        false_positive_count = 0
+         for ad in merged_ads:
+             duration = ad['end'] - ad['start']
+             trusted_split = bool(ad.get('_trusted_split_fragment'))
+@@ -326,21 +331,50 @@ class AudioProcessor:
+                        or trusted_split)
+             if duration >= MIN_AD_DURATION_FOR_REMOVAL:
+                 ads.append(ad)
+-            elif trusted:
++            elif trusted and duration >= ABSOLUTE_MIN_AD_DURATION:
++                # Trusted short ad (4-10s) - keep it
+                 ads.append(ad)
+                 logger.info(
+-                    f"Keeping short ad ({duration:.1f}s < {MIN_AD_DURATION_FOR_REMOVAL}s): "
++                    f"Keeping short trusted ad ({duration:.1f}s < {MIN_AD_DURATION_FOR_REMOVAL}s, "
++                    f">= {ABSOLUTE_MIN_AD_DURATION}s absolute min): "
+                     f"stage={ad.get('detection_stage', '?')} "
+                     f"confidence={ad.get('confidence', 'n/a')} "
+                     f"trusted_split={trusted_split}")
++            elif duration < ABSOLUTE_MIN_AD_DURATION:
++                # Obvious false positive (<4s) - always skip
++                false_positive_count += 1
++                logger.info(
++                    f"Skipping obvious false positive ad ({duration:.1f}s < {ABSOLUTE_MIN_AD_DURATION}s): "
++                    f"{ad.get('reason', 'unknown')[:50]}")
+             else:
++                # Short but untrusted ad (4-10s, not trusted) - skip
+                 skipped_count += 1
+                 logger.info(f"Skipping short ad ({duration:.1f}s < {MIN_AD_DURATION_FOR_REMOVAL}s): {ad.get('reason', 'unknown')[:50]}")
++        if false_positive_count > 0:
++            logger.info(f"Skipped {false_positive_count} obvious false positive ad detections (< {ABSOLUTE_MIN_AD_DURATION}s)")
+         if skipped_count > 0:
+-            logger.info(f"Skipped {skipped_count} short ad detections (< {MIN_AD_DURATION_FOR_REMOVAL}s)")
++            logger.info(f"Skipped {skipped_count} short ad detections (< {MIN_AD_DURATION_FOR_REMOVAL}s, >= {ABSOLUTE_MIN_AD_DURATION}s)")
++
++        # Expand ad boundaries to avoid leaving partial ad audio behind. LLM
++        # boundaries often land mid-word, so a small start pad and a larger end
++        # pad keep the cut edges from clipping into the ad. Tail-of-file ads get
++        # extra end padding because the model truncates outros when Whisper
++        # drops the trailing music. Env-tunable (AD_START_PAD / AD_END_PAD /
++        # AD_END_PAD_TAIL); a negative value insets the edge instead. Applied
++        # after the short-ad filter so padding cannot rescue a hallucination.
++        ad_start_pad = float(os.environ.get('AD_START_PAD', '0.5'))
++        ad_end_pad = float(os.environ.get('AD_END_PAD', '1.0'))
++        ad_end_pad_tail = float(os.environ.get('AD_END_PAD_TAIL', '5.0'))
++        tail_threshold = 5.0
+         for ad in ads:
+-            ad.pop('_trusted_split_fragment', None)
++            ad['start'] = max(0.0, ad['start'] - ad_start_pad)
++            end_pad = (ad_end_pad_tail
++                       if (total_duration - ad['end']) <= tail_threshold
++                       else ad_end_pad)
++            ad['end'] = min(total_duration, ad['end'] + end_pad)
+ 
++        for ad in ads:
++            ad.pop('_trusted_split_fragment', None)
+         # End-of-episode cut: when less than 30s would remain after the last
+         # cut, the episode ends at the beep, so the cut runs to the end.
+         if ads:
+diff --git a/src/config.py b/src/config.py
+index e6fd5867..b69c0064 100644
+--- a/src/config.py
++++ b/src/config.py
+@@ -1321,6 +1321,7 @@ def cue_only_missing_roles(rows):
+ MIN_AD_DURATION_FOR_REMOVAL = 10.0   # Min ad duration to actually remove from audio
+ SHORT_CUT_KEEP_CONFIDENCE = 0.9      # Keep a shorter cut anyway at/above this confidence
+                                      # (fingerprint-stage cuts are always kept)
++ABSOLUTE_MIN_AD_DURATION = 4.0       # Absolute min ad duration to keep (filters obvious false positives)
+ POST_ROLL_TRIM_THRESHOLD = 30.0      # Threshold for trimming post-roll content
+ MERGE_GAP_SECONDS = 1.0              # Cuts separated by less than this merge into one
+                                      # (distinct from the validator's MERGE_GAP_THRESHOLD)
+diff --git a/tests/conftest.py b/tests/conftest.py
+index fbdafa2d..5de4bb25 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -30,6 +30,21 @@ def _align_loaded_app_singletons():
+     _restore_loaded_app_singletons()
+ 
+ 
++@pytest.fixture(autouse=True)
++def _neutralize_ad_boundary_padding(monkeypatch):
++    """Zero the AD_*_PAD cut-boundary padding for the suite.
++
++    compute_applied_cuts pads each surviving cut edge outward
++    (AD_START_PAD / AD_END_PAD / AD_END_PAD_TAIL) so the applied cuts match
++    what remove_ads renders. Most tests assert raw detected boundaries, so
++    neutralise the pads here; test_ad_boundary_padding.py exercises the real
++    defaults and overrides.
++    """
++    monkeypatch.setenv('AD_START_PAD', '0')
++    monkeypatch.setenv('AD_END_PAD', '0')
++    monkeypatch.setenv('AD_END_PAD_TAIL', '0')
++
++
+ @pytest.fixture
+ def temp_dir():
+     """Create a temporary directory for test data."""
+diff --git a/tests/unit/test_ad_boundary_padding.py b/tests/unit/test_ad_boundary_padding.py
+new file mode 100644
+index 00000000..14a0e0b5
+--- /dev/null
++++ b/tests/unit/test_ad_boundary_padding.py
+@@ -0,0 +1,94 @@
++"""AD_START_PAD / AD_END_PAD / AD_END_PAD_TAIL expand applied cut edges.
++
++compute_applied_cuts pads each surviving cut outward so the cut matches what
++remove_ads renders. The start pad is deliberately smaller than the end pad to
++avoid over-cutting show content at the head of an ad. These tests run with the
++suite's padding-neutralizing autouse fixture overridden, so they must set the
++env explicitly.
++"""
++
++import pytest
++
++from audio_processor import AudioProcessor
++
++
++@pytest.fixture
++def processor():
++    return AudioProcessor()
++
++
++@pytest.fixture(autouse=True)
++def _use_real_pad_defaults(monkeypatch):
++    # The suite-wide fixture pins the pads to 0; drop them so the code's own
++    # defaults apply here. Tests that want specific values set them explicitly.
++    for var in ('AD_START_PAD', 'AD_END_PAD', 'AD_END_PAD_TAIL'):
++        monkeypatch.delenv(var, raising=False)
++
++
++def test_default_start_pad_smaller_than_end(processor):
++    cuts = processor.compute_applied_cuts(
++        [{'start': 100.0, 'end': 130.0}], 600.0,
++    )
++    assert len(cuts) == 1
++    assert cuts[0]['start'] == pytest.approx(99.5)   # - AD_START_PAD (0.5)
++    assert cuts[0]['end'] == pytest.approx(131.0)    # + AD_END_PAD (1.0)
++
++
++def test_start_pad_clamped_to_zero(processor):
++    cuts = processor.compute_applied_cuts(
++        [{'start': 0.2, 'end': 30.0}], 600.0,
++    )
++    assert cuts[0]['start'] == 0.0
++    assert cuts[0]['end'] == pytest.approx(31.0)
++
++
++def test_negative_start_pad_insets_the_edge(processor, monkeypatch):
++    monkeypatch.setenv('AD_START_PAD', '-1.0')
++    cuts = processor.compute_applied_cuts(
++        [{'start': 100.0, 'end': 130.0}], 600.0,
++    )
++    # Inset: the cut starts later, removing less content at the head.
++    assert cuts[0]['start'] == pytest.approx(101.0)
++    assert cuts[0]['end'] == pytest.approx(131.0)
++
++
++def test_tail_ad_uses_tail_end_pad(processor, monkeypatch):
++    # A keep barrier blocks the end-of-episode extension, so the tail pad is
++    # observable: AD_END_PAD_TAIL applies (1.0), not AD_END_PAD (9.0).
++    monkeypatch.setenv('AD_END_PAD', '9.0')
++    monkeypatch.setenv('AD_END_PAD_TAIL', '1.0')
++    cuts = processor.compute_applied_cuts(
++        [{'start': 585.0, 'end': 596.0}], 600.0,
++        cut_barriers=[{'start': 597.5, 'end': 600.0}],
++    )
++    assert len(cuts) == 1
++    assert cuts[0]['end'] == pytest.approx(597.0)
++
++
++def test_non_tail_ad_uses_normal_end_pad(processor):
++    cuts = processor.compute_applied_cuts(
++        [{'start': 100.0, 'end': 130.0}], 600.0,
++    )
++    assert cuts[0]['end'] == pytest.approx(131.0)
++
++
++def test_env_overrides_applied(processor, monkeypatch):
++    monkeypatch.setenv('AD_START_PAD', '3.0')
++    monkeypatch.setenv('AD_END_PAD', '4.0')
++    monkeypatch.setenv('AD_END_PAD_TAIL', '4.0')
++    cuts = processor.compute_applied_cuts(
++        [{'start': 100.0, 'end': 130.0}], 600.0,
++    )
++    assert cuts[0]['start'] == pytest.approx(97.0)
++    assert cuts[0]['end'] == pytest.approx(134.0)
++
++
++def test_padding_cannot_rescue_short_untrusted_ad(processor):
++    # 9s untrusted ad: padding (0.5 + 2.0) would exceed the 10s floor, but the
++    # filter runs first so the hallucination is still dropped.
++    cuts = processor.compute_applied_cuts(
++        [{'start': 100.0, 'end': 109.0, 'confidence': 0.7,
++          'detection_stage': 'claude'}],
++        600.0,
++    )
++    assert cuts == []
+diff --git a/tests/unit/test_ad_validator.py b/tests/unit/test_ad_validator.py
+index 697586ed..b66214e0 100644
+--- a/tests/unit/test_ad_validator.py
++++ b/tests/unit/test_ad_validator.py
+@@ -172,6 +172,49 @@ class TestAdValidatorDifferentialHold:
+         result = validator.validate([ad])
+         assert result.ads[0].get('held_for_review') is not True
+ 
++    def test_sponsor_confirmed_differential_not_held(self):
++        # Regression: a mid-episode back-to-back ad block was detected ONLY by
++        # the cross-fetch differential stage, so it carried the uncorroborated
++        # hold even though the sponsor registry found a brand read (10x
++        # BetterHelp) inside the exact span. Sponsor confirmation is real
++        # corroboration, so the block must be accepted/cut, not held in audio.
++        description = '<strong>Sponsors:</strong><a href="https://betterhelp.com">BetterHelp</a>'
++        validator = AdValidator(
++            episode_duration=500.0,
++            segments=[],
++            episode_description=description,
++        )
++        ad = {
++            'start': 100.0,
++            'end': 290.0,
++            'confidence': 0.95,
++            'reason': 'BetterHelp sponsor read block',
++            'detection_stage': 'dai_differential',
++            'differential_uncorroborated': True,
++        }
++        result = validator.validate([ad])
++        out = result.ads[0]
++        assert out['validation']['decision'] == Decision.ACCEPT.value
++        assert out.get('held_for_review') is not True
++
++    def test_unconfirmed_differential_still_held_even_with_similar_confidence(self):
++        # The hold must survive for differential regions with NO sponsor read,
++        # so the false-positive class (editorial audio that merely differs
++        # across fetches) is never solo-cut -- even at 0.95 confidence.
++        validator = AdValidator(episode_duration=500.0, segments=[])
++        ad = {
++            'start': 100.0,
++            'end': 130.0,
++            'confidence': 0.95,
++            'reason': 'Audio differs across fetches; no other ad signal -- review',
++            'detection_stage': 'dai_differential',
++            'differential_uncorroborated': True,
++        }
++        result = validator.validate([ad])
++        out = result.ads[0]
++        assert out['validation']['decision'] == Decision.REVIEW.value
++        assert out.get('held_for_review') is True
++
+ 
+ class TestAdValidatorMerging:
+     """Tests for ad merging behavior."""

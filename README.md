@@ -135,7 +135,7 @@ upstream on each start, and the
 ## Quick setup: OpenRouter + DeepSeek V4 Flash
 
 This matches the author's cloud setup: **local Whisper** for transcription,
-**OpenRouter** for ad detection with `deepseek/deepseek-v4-flash-0731`,
+**OpenRouter** for ad detection with `deepseek/deepseek-v4.1-flash`,
 **verification pass 2** on every episode, **bounded detection windows** (so
 long shows are not one giant LLM call), and cheapest-host routing. No Ollama or
 GPU required beyond Whisper.
@@ -175,14 +175,12 @@ cp .env.example .env
 ```
 
 Paste this block into `.env` (secrets go in Passwords app / `secrets.ps1` — not here):
-```
-
-Paste this block into `.env` (secrets go in Passwords app / `secrets.ps1` — not here):
 
 ```bash
-export DISABLE_TRANSCRIPT_SYNC=true
+export DISABLE_TRANSCRIPT_SYNC=false
+export PC_TRANSCRIPT_REUSE=true
 export LLM_PROVIDER=openrouter
-export OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
+export OPENAI_MODEL=deepseek/deepseek-v4.1-flash
 export OPENROUTER_PROVIDER_SORT=price
 
 # Quality preset (recommended) — see Cost presets table
@@ -202,8 +200,8 @@ export ENABLE_PROMPT_CACHING=true
 export CHAPTERS_ENABLED=false
 ```
 
-Use `deepseek/deepseek-v4-flash-0731` (not the older `deepseek/deepseek-v4-flash`
-slug). `OPENROUTER_PROVIDER_SORT=price` auto-picks the cheapest host; to pin hosts
+Use `deepseek/deepseek-v4.1-flash` (the latest V4.1 Flash, Sep 2026 — not the older
+`deepseek/deepseek-v4-flash` slug). `OPENROUTER_PROVIDER_SORT=price` auto-picks the cheapest host; to pin hosts
 instead, set `OPENROUTER_PROVIDER_ORDER=DeepInfra,StreamLake,GMICloud` and
 `OPENROUTER_ALLOW_FALLBACKS=false`.
 
@@ -569,7 +567,7 @@ Transcription still runs locally via whisper.cpp; only ad detection goes to
 the API.
 
 **OpenRouter** — one key, many models. For the author's tuned setup (`deepseek/
-deepseek-v4-flash-0731`, full-transcript windowing), use
+deepseek-v4.1-flash`, full-transcript windowing), use
 [Quick setup: OpenRouter](#quick-setup-openrouter--deepseek-v4-flash) instead of
 the shorter example below.
 
@@ -585,7 +583,7 @@ security add-internet-password -a api-key -s openrouter.ai -r htps \
 
 # .env — OpenRouter tunables only
 export LLM_PROVIDER=openrouter
-export OPENAI_MODEL=deepseek/deepseek-v4-flash-0731
+export OPENAI_MODEL=deepseek/deepseek-v4.1-flash
 
 # Cost / quality tunables (OpenRouter — same as Quick setup Step 1):
 export WINDOW_SIZE_SECONDS=600
@@ -849,10 +847,16 @@ Set `LLM_PROVIDER` in `.env` to choose how MinusPod runs ad detection. See
 
 | Variable | Default | Effect |
 |----------|---------|--------|
-| `AD_START_PAD` | `1.5` | Seconds to extend each ad earlier. |
-| `AD_END_PAD` | `2.0` | Seconds to extend each ad later. |
+| `AD_START_PAD` | `0.5` | Seconds to extend each ad earlier. Deliberately small — a bigger start pad over-cuts show content at the head of a cut. Negative insets the edge. |
+| `AD_END_PAD` | `1.0` | Seconds to extend each ad later. Negative insets the edge. |
 | `AD_END_PAD_TAIL` | `5.0` | Extra padding for ads that end at the very end of the file. Catches musical outros that Whisper truncates. |
 | `TAIL_GAP_MIN_SECONDS` | `60` | If Whisper's transcript ends this many seconds before the audio file does, treat the gap as an untranscribed post-roll ad and cut it. |
+
+Cuts also have a hard floor: `ABSOLUTE_MIN_AD_DURATION = 4.0` in patched
+`config.py` (via [`ad-cut-tuning.patch`](patches/ad-cut-tuning.patch)) means a
+detection under 4 s is **never** removed — not even on a fingerprint match or at
+high confidence — so 2–3 s LLM false positives can no longer chop up the show.
+Trusted short ads (4–10 s) still cut as before.
 
 ### Pocket Casts transcript reuse (optional)
 
@@ -961,6 +965,7 @@ failing the install.
 | [`truncation-failfast.patch`](patches/truncation-failfast.patch) | On `max_tokens`, bisect the window instead of retrying the same prompt; fail with `retryable=false` after `DETECTION_MAX_TRUNCATED_WINDOWS` leaf truncations. |
 | [`cost-optimization-consumers.patch`](patches/cost-optimization-consumers.patch) | Wires the cost tunables declared by `llm-cost-optimizations.patch`: skip-verification guard, `bool` coercion in the settings form, OpenRouter prompt-caching annotations, and cheapest-host provider routing. Without this patch those settings are inert. |
 | [`adaptive-detection-windows.patch`](patches/adaptive-detection-windows.patch) | Default 1 hr safe cap on long-context windows plus recursive bisect so ad-heavy podcasts (DLC, etc.) work without per-show `.env` tweaks. |
+| [`ad-cut-tuning.patch`](patches/ad-cut-tuning.patch) | Minimum-ad floor (`ABSOLUTE_MIN_AD_DURATION = 4.0`) so sub-4 s detections are never cut, regardless of trust signals, plus cut-boundary padding (`AD_START_PAD`/`AD_END_PAD`/`AD_END_PAD_TAIL`) and sponsor-confirmed differential-ad cuts. |
 
 ### Tuning without restart
 
@@ -997,6 +1002,7 @@ chosen preset. After editing `.env`, restart MinusPod from the Services panel.
 | Stuck on `pass1:detecting:N/M` | Ad detection uses your **LLM**, not Whisper. A single window on a long ad-heavy show can take **10–15 min** on OpenRouter — that is normal, not a hang. Check `/tmp/minuspod.log` for `Window-split` / `truncated` lines; MinusPod **bisects** oversized windows automatically down to `WINDOW_SIZE_SECONDS` (10 min). If you still see endless retries, confirm `AD_DETECTION_MAX_TOKENS=16384` and that `adaptive-detection-windows.patch` is applied (Services → restart MinusPod). **Ollama:** use `OPENAI_MODEL=qwen3:14b` on ≤36 GB Macs or raise `LLM_TIMEOUT_LOCAL`. Stall watchdog waits up to 45 min (`EPISODE_STALL_THRESHOLD_LLM_SECONDS`) during detection. |
 | Queue stalls on one episode forever | Wallclock cap 90 min (`EPISODE_MAX_WALLCLOCK_SECONDS`). Transcription stalls bounce whisper; LLM stalls bounce Ollama. See `EPISODE_STALL_THRESHOLD_*` above. |
 | Ad still partially in outro | Increase `TAIL_GAP_MIN_SECONDS` (smaller threshold = more aggressive) or `AD_END_PAD_TAIL`. See `patches/README.md`. |
+| 2–3 s of the show itself got cut | Hallucinated short "ad". Detections under 4 s are skipped outright by the `ABSOLUTE_MIN_AD_DURATION` floor in `ad-cut-tuning.patch` — confirm it applied (Services → restart MinusPod) and look for `Skipping obvious false positive ad` in `/tmp/minuspod.log`. |
 | Custom-file thumbnail stuck on the generic icon | Pocket Casts caches the colour fallback for ~1 minute after upload. The image does eventually render on every device — it's cosmetic only. |
 
 ## Logs

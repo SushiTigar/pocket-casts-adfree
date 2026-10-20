@@ -1527,6 +1527,7 @@ def create_app(email=None, password=None):
         mp, feed_slug: str, pc_title: str,
         rss_url: str | None = None, job_log=None,
         alt_titles: list[str] | None = None,
+        pc_audio_url: str | None = None,
     ) -> dict | None:
         """Find the MinusPod episode in `feed_slug` whose title matches
         `pc_title`. Uses the same normalization as the rest of the pipeline
@@ -1571,6 +1572,24 @@ def create_app(email=None, password=None):
             match = _find(episodes, alt)
             if match:
                 return match
+        # Also try matching by audio URL if provided (helps when titles differ between PC and RSS)
+        if not match and pc_audio_url:
+            try:
+                from pocketcasts_adfree import _normalize_episode_url
+                pc_url_key = _normalize_episode_url(pc_audio_url)
+                if pc_url_key:
+                    for e in episodes:
+                        mp_url = e.get('url') or e.get('original_url') or ''
+                        mp_url_key = _normalize_episode_url(mp_url)
+                        if mp_url_key == pc_url_key:
+                            match = e
+                            break
+                        if pc_url_key in mp_url.lower() or mp_url_key in pc_url_key:
+                            match = e
+                            break
+            except Exception:
+                pass
+
 
         # Not found — ask MinusPod to ingest more history. Try multiple times with exponential backoff.
         if not rss_url:
@@ -1589,9 +1608,13 @@ def create_app(email=None, password=None):
                     mp.add_feed(rss_url, max_episodes=500)
                 except Exception:
                     # Likely 409 already-exists — fall through to refresh.
+                    # force=True bypasses the 30s refresh-coalesce window and the
+                    # cached ETag/Last-Modified, so a brand-new episode published
+                    # since the last sweep is guaranteed to be fetched here.
                     try:
                         mp.client.post(
-                            f"{mp.base_url}/api/v1/feeds/{feed_slug}/refresh", timeout=30
+                            f"{mp.base_url}/api/v1/feeds/{feed_slug}/refresh",
+                            json={"force": True}, timeout=30,
                         )
                     except Exception as e:
                         if job_log:
@@ -1894,6 +1917,7 @@ def create_app(email=None, password=None):
                                 rss_url=rss_url if not is_custom_file else None,
                                 job_log=lambda lvl, msg: _job_log(job_id, lvl, msg),
                                 alt_titles=alt_titles,
+                                pc_audio_url=pc_url,
                             )
                             if mp_ep:
                                 ep = dict(mp_ep)

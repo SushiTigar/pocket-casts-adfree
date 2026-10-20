@@ -16,7 +16,8 @@ pipeline's preferred ad-detection tuning.
 | `llm-call-reasoning-retry.patch`    | **2.34.0 only** — `TruncatedCompletionError` / reasoning retry in `llm_call.py` |
 | `chapter-granularity.patch`         | **2.34.0 only** — chapter token budget (dropped on v2.96.25) |
 | `truncation-failfast.patch`         | **2.34.0 only** — window bisect on truncation |
-| `cost-optimization-consumers.patch` | **2.34.0 only** — wires llm-cost tunables into `llm_client` / processing |
+| `cost-optimization-consumers.patch` | Wires the llm-cost tunables into their consumers: prompt-caching annotation + `cached=` logging and OpenRouter provider routing (`llm_client.py`), `bool` tunable coercion (`api/settings.py`), `skip_verification_under_seconds` enforcement (`main_app/processing.py`) |
+| `ad-cut-tuning.patch`               | Minimum-ad floor (`ABSOLUTE_MIN_AD_DURATION` in `config.py`) plus cut-boundary padding in `compute_applied_cuts` (`audio_processor.py`): `AD_START_PAD`/`AD_END_PAD`/`AD_END_PAD_TAIL`, start pad deliberately smaller. Also cuts sponsor-confirmed cross-fetch differential ads that Rule 5 would otherwise hold (`ad_validator.py`): a DAI-differential block whose span is confirmed by the sponsor registry is corroborated and cut, not held. Includes the padding-isolation test fixture (`tests/conftest.py`), `tests/unit/test_ad_boundary_padding.py`, and differential-hold tests in `tests/unit/test_ad_validator.py` |
 
 ## Additional patches (live pin: **v2.96.25**)
 
@@ -26,6 +27,8 @@ Applied after optional `minuspod-local.patch` by `scripts/setup_minuspod.sh` and
 1. `llm-cost-optimizations.patch`
 2. `adaptive-detection-windows.patch` (includes former `house-ad-detection` hunks in `prompts.py`)
 3. `whisper-short-clip-guard.patch`
+4. `cost-optimization-consumers.patch` (consumers for the tunables declared by `llm-cost-optimizations.patch`)
+5. `ad-cut-tuning.patch` (minimum-ad floor + envelope cut-boundary padding + sponsor-confirmed differential cuts; supersedes the former `minimum-ad-duration.patch`)
 
 Patches are regenerated from `git diff v2.96.25` on `local-mods` (2026-09-16).
 `minuspod-local.patch` is best-effort on v2.96.25 (upstream absorbed most hunks).
@@ -34,8 +37,8 @@ Patches are regenerated from `git diff v2.96.25` on `local-mods` (2026-09-16).
 
 To reproduce the old stack: checkout `d900bdd0`, apply `minuspod-local.patch`,
 then the full chain including `llm-call-reasoning-retry`, `chapter-granularity`,
-`truncation-failfast`, and `cost-optimization-consumers`. Branch
-`local-mods-d900bdd-backup` in `MinusPod/` is a snapshot.
+and `truncation-failfast`. Branch `local-mods-d900bdd-backup` in `MinusPod/` is
+a snapshot.
 
 ## Upstream MinusPod
 
@@ -57,7 +60,8 @@ Before migrating a production DB to v2.96.25, back up `MinusPod/data/*.db`
 | `llm-call-reasoning-retry` | **Dropped** — upstream `llm_call` + `llm_capabilities` |
 | `chapter-granularity` | **Dropped** |
 | `truncation-failfast` | **Dropped** — upstream salvage + bisect differ |
-| `cost-optimization-consumers` | **Dropped** — mostly upstream |
+| `cost-optimization-consumers` | **Regenerated** — prompt caching, provider routing, `bool` coercion, skip-verify enforcement |
+| `ad-cut-tuning` | **Regenerated** — minimum-ad floor + `AD_START_PAD`/`AD_END_PAD`/`AD_END_PAD_TAIL` cut padding + sponsor-confirmed differential cuts (supersedes `minimum-ad-duration`) |
 | `minuspod-local` | **Mostly dropped** — upstream has `DATA_DIR`, tail-gap |
 
 ## Re-generating a patch

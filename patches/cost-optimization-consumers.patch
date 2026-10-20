@@ -1,7 +1,8 @@
 diff --git a/src/api/settings.py b/src/api/settings.py
+index b2ed7508..b9cf74e9 100644
 --- a/src/api/settings.py
 +++ b/src/api/settings.py
-@@ -1180,6 +1180,15 @@
+@@ -2083,6 +2083,15 @@ def _apply_stage_tunables(db, data):
      # provider_required: 'anthropic' / 'not_anthropic' / 'ollama' / None.
      def _coerce_int(raw):  return int(raw)
      def _coerce_float(raw): return float(raw)
@@ -17,7 +18,7 @@ diff --git a/src/api/settings.py b/src/api/settings.py
      def _coerce_level(raw):
          n = str(raw).strip().lower()
          if n not in STAGE_TUNABLE_REASONING_LEVELS:
-@@ -1190,6 +1199,7 @@
+@@ -2093,6 +2102,7 @@ def _apply_stage_tunables(db, data):
          # kind:        (coerce,        type_msg,       provider_gate,    range_checked)
          'float':       (_coerce_float, 'a number',     None,             True),
          'int':         (_coerce_int,   'an integer',   None,             True),
@@ -25,38 +26,36 @@ diff --git a/src/api/settings.py b/src/api/settings.py
          'budget':      (_coerce_int,   'an integer',   'anthropic',      True),
          'level':       (_coerce_level, None,           'not_anthropic',  False),
          'ollama_ctx':  (_coerce_int,   'an integer',   'ollama',         True),
-
 diff --git a/src/llm_client.py b/src/llm_client.py
+index 273a5eed..767908f4 100644
 --- a/src/llm_client.py
 +++ b/src/llm_client.py
-@@ -51,6 +51,7 @@
-     PROVIDER_OPENROUTER,
-     PROVIDER_OLLAMA,
+@@ -62,6 +62,8 @@ from config import (
+     PROVIDER_OPENAI_COMPATIBLE,
      PROVIDERS_NON_ANTHROPIC,
+     coerce_bool_setting,
 +    get_openrouter_provider_config,
++    get_stage_tunable,
+     ModelNotConfiguredError,
  )
  from llm_capabilities import (
-     get_pass_defaults,
-@@ -75,6 +76,39 @@
-     "4. Use null for missing values (not None)\n"
-     "Malformed JSON causes parsing failures.</output_format>"
- )
-+
-+
+@@ -166,6 +168,38 @@ def _rejects_json_mode(err: str) -> bool:
+     return any(k in low for k in _JSON_MODE_REJECTIONS)
+ 
+ 
 +def _prompt_caching_enabled() -> bool:
-+    """True when the user has enabled OpenRouter prompt caching.
++    """True when the operator enabled OpenRouter prompt caching.
 +
 +    Resolved at call time so Settings UI changes take effect without a
-+    process restart. Imported lazily to avoid a circular import with config.
++    process restart.
 +    """
 +    try:
-+        from config import get_stage_tunable
 +        return bool(get_stage_tunable('enable_prompt_caching'))
 +    except Exception:
 +        return False
 +
 +
-+def _with_cache_control(system_message: Dict[str, Any]) -> Dict[str, Any]:
++def _with_cache_control(system_message: dict[str, Any]) -> dict[str, Any]:
 +    """Return a copy of ``system_message`` annotated for OpenRouter caching.
 +
 +    Only the system prompt is annotated: it is identical across every window
@@ -74,57 +73,29 @@ diff --git a/src/llm_client.py b/src/llm_client.py
 +            }
 +        ],
 +    }
- 
- 
++
++
  def _log_content(label: str, content: str, max_length: int = 2000):
-@@ -118,6 +152,7 @@
-     model: str
-     usage: Optional[Dict[str, int]] = None
-     raw_response: Any = None  # Original response object for advanced use
-+    stop_reason: Optional[str] = None  # max_tokens/length/end_turn (provider-specific)
+     """Log LLM content at DEBUG level with intelligent truncation.
  
- 
- @dataclass
-@@ -563,9 +598,8 @@
- 
-         content = (response.content[0].text or "") if response.content else ""
- 
--        self._warn_if_truncated(
--            getattr(response, 'stop_reason', None), eff_max, model
--        )
-+        anthropic_stop = getattr(response, 'stop_reason', None)
-+        self._warn_if_truncated(anthropic_stop, eff_max, model)
- 
-         llm_response = LLMResponse(
-             content=content,
-@@ -574,7 +608,8 @@
-                 'input_tokens': response.usage.input_tokens,
-                 'output_tokens': response.usage.output_tokens
-             } if response.usage else None,
--            raw_response=response
-+            raw_response=response,
-+            stop_reason=anthropic_stop,
-         )
- 
-         # Log response
-@@ -631,13 +666,15 @@
-         base_url: Optional[str] = None,
-         api_key: Optional[str] = None,
-         default_model: Optional[str] = None,
--        extra_headers: Optional[Dict[str, str]] = None
-+        extra_headers: Optional[Dict[str, str]] = None,
-+        openrouter_provider: Optional[Dict[str, Any]] = None,
+@@ -920,13 +954,15 @@ class OpenAICompatibleClient(LLMClient):
+         base_url: str | None = None,
+         api_key: str | None = None,
+         default_model: str | None = None,
+-        extra_headers: dict[str, str] | None = None
++        extra_headers: dict[str, str] | None = None,
++        openrouter_provider: dict[str, Any] | None = None
      ):
          super().__init__()
          self.base_url = base_url or os.environ.get('OPENAI_BASE_URL', DEFAULT_OPENAI_BASE_URL)
          self.api_key = api_key or get_effective_openai_api_key()
-         self.default_model = default_model or os.environ.get('OPENAI_MODEL', 'claude-sonnet-4-5-20250929')
+         self.default_model = default_model or os.environ.get('OPENAI_MODEL')
          self.extra_headers = extra_headers or {}
 +        self.openrouter_provider = openrouter_provider
          self._client = None
          # Cache which token parameter each model accepts: "max_completion_tokens" or "max_tokens"
          # Per-instance to avoid cross-contamination between clients with different base_urls
-@@ -691,7 +728,10 @@
+@@ -983,7 +1019,10 @@ class OpenAICompatibleClient(LLMClient):
          self._check_circuit_breaker()
          self._ensure_client()
  
@@ -134,52 +105,55 @@ diff --git a/src/llm_client.py b/src/llm_client.py
 +            system_message = _with_cache_control(system_message)
 +        all_messages = [system_message] + messages
  
-         eff_max, eff_temp, eff_reasoning = _apply_pass_fallback(
+         eff_max, eff_temp, eff_reasoning, started_in_fallback = _apply_pass_fallback(
              episode_id, pass_name, max_tokens, temperature, reasoning_effort
-@@ -724,8 +764,16 @@
-                 else:
-                     kw["response_format"] = response_format
+@@ -1036,6 +1075,12 @@ class OpenAICompatibleClient(LLMClient):
              reasoning_kwargs = translate_reasoning_effort(active_provider, reasoning)
--            # extra_body merges if a caller already supplied one; we don't, so direct update is fine.
--            kw.update(reasoning_kwargs)
-+            # Merge reasoning kwargs, keeping extra_body separate so we can
-+            # also inject OpenRouter provider routing without clobbering it.
-+            for key, val in reasoning_kwargs.items():
-+                if key != 'extra_body':
-+                    kw[key] = val
-+            extra_body = dict(reasoning_kwargs.get('extra_body') or {})
+             # extra_body merges if a caller already supplied one; we don't, so direct update is fine.
+             kw.update(reasoning_kwargs)
++            # OpenRouter cheap-host routing: inject the provider block without
++            # clobbering any extra_body a reasoning shape already supplied.
 +            if self.openrouter_provider:
++                extra_body = dict(kw.get('extra_body') or {})
 +                extra_body['provider'] = self.openrouter_provider
-+            if extra_body:
 +                kw['extra_body'] = extra_body
              return kw
  
          def _send(tok, tmp, reasoning):
-@@ -756,24 +804,34 @@
-         finish_reason = getattr(response.choices[0], 'finish_reason', None) if response.choices else None
-         self._warn_if_truncated(finish_reason, eff_max, model)
+@@ -1129,13 +1174,28 @@ class OpenAICompatibleClient(LLMClient):
+             and output_tokens >= eff_max
+         )
  
 +        # The cost calculator is cache-unaware (it would need a per-model
-+        # cache-read price table), so cached_input_tokens is for visibility only.
++        # cache-read price table), so cached_input_tokens is for visibility
++        # only and is attached solely when a cache hit actually occurred, so
++        # the usage payload is otherwise byte-identical to before.
 +        cached_input_tokens = 0
-+        if response.usage is not None:
-+            details = getattr(response.usage, 'prompt_tokens_details', None)
-+            cached_input_tokens = int(getattr(details, 'cached_tokens', 0) or 0)
++        if usage is not None:
++            _details = getattr(usage, 'prompt_tokens_details', None)
++            cached_input_tokens = int(getattr(_details, 'cached_tokens', 0) or 0)
++
++        usage_payload = None
++        if response.usage:
++            usage_payload = {
++                'input_tokens': response.usage.prompt_tokens,
++                'output_tokens': response.usage.completion_tokens,
++            }
++            if cached_input_tokens:
++                usage_payload['cached_input_tokens'] = cached_input_tokens
 +
          llm_response = LLMResponse(
              content=content,
              model=model,
-             usage={
-                 'input_tokens': response.usage.prompt_tokens,
+-            usage={
+-                'input_tokens': response.usage.prompt_tokens,
 -                'output_tokens': response.usage.completion_tokens
-+                'output_tokens': response.usage.completion_tokens,
-+                'cached_input_tokens': cached_input_tokens,
-             } if response.usage else None,
--            raw_response=response
-+            raw_response=response,
-+            stop_reason=finish_reason,
-         )
- 
+-            } if response.usage else None,
++            usage=usage_payload,
+             finish_reason=finish_reason,
+             reasoning_present=reasoning_present,
+             reasoning_exhausted=(
+@@ -1148,11 +1208,12 @@ class OpenAICompatibleClient(LLMClient):
          # Log response
          _log_content("OpenAI response", content)
          if llm_response.usage:
@@ -193,7 +167,7 @@ diff --git a/src/llm_client.py b/src/llm_client.py
              )
  
          self._notify_usage(llm_response)
-@@ -1203,13 +1261,17 @@
+@@ -1625,13 +1686,17 @@ def _build_client(provider: str) -> LLMClient | None:
          return AnthropicClient()
      elif provider == PROVIDER_OPENROUTER:
          api_key = get_effective_openrouter_api_key() or 'not-needed'
@@ -212,51 +186,41 @@ diff --git a/src/llm_client.py b/src/llm_client.py
          )
      elif provider in PROVIDERS_NON_ANTHROPIC:
          raw_base_url = get_effective_base_url()
-
 diff --git a/src/main_app/processing.py b/src/main_app/processing.py
+index 053c82dd..d7c04585 100644
 --- a/src/main_app/processing.py
 +++ b/src/main_app/processing.py
-@@ -31,6 +31,7 @@
-     AUDIO_CUE_SNAP_CONFIDENCE, AUDIO_CUE_PAIR_CONFIDENCE,
-     AUDIO_CUE_PAIR_MIN_BREAK_SECONDS, AUDIO_CUE_PAIR_MAX_BREAK_SECONDS,
-     AUDIO_CUE_PAIR_MAX_BREAK_FRACTION, AUDIO_CUE_PAIR_ORIENT_WINDOW_SECONDS,
+@@ -59,6 +59,7 @@ from config import (
+     log_download_query_enabled,
+     MIN_CUT_CONFIDENCE, MAX_EPISODE_RETRIES,
+     MIN_AD_DURATION_FOR_REMOVAL,
 +    get_stage_tunable,
- )
- from llm_capabilities import (
-     PASS_AD_DETECTION_1, PASS_AD_DETECTION_2,
-@@ -2042,15 +2043,26 @@
- 
-             # Stage 6: Verification pass
-             current_pass = "pass2"
--            verification_count, v_ads_for_ui, processed_path, verification_cue_count = _run_verification_pass(
--                ctx, processed_path, applied_cuts,
--                skip_patterns, min_cut_confidence,
--                local_audio_processor, detection_progress_callback,
--                original_segments=segments,
--                # LLM-only reprocess maps the saved transcript through the cuts
--                # for pass 2 instead of re-transcribing (issue #349).
--                reuse_transcript=(reprocess_mode == 'llm'),
--            )
-+            # Pass 2 re-transcribes and re-detects, roughly doubling LLM cost.
-+            # 0 disables the skip and always verifies.
-+            skip_under = get_stage_tunable('skip_verification_under_seconds')
-+            if skip_under > 0 and episode_duration < skip_under:
+     MIN_CONTENT_BETWEEN_ADS_SECONDS,
+     MAX_MERGED_DURATION,
+     AUDIO_CUE_PAIR_CONFIDENCE, AUDIO_CUE_PAIR_ORIENT_WINDOW_SECONDS,
+@@ -5492,6 +5493,16 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+                 m for m in all_ads_with_validation
+                 if m.get('action_applied') == 'keep'
+             ]
++            # Opt-in cost guard: skip pass 2 for episodes shorter than the
++            # configured threshold. 0 (default) always verifies; skipped runs
++            # reuse the pass-1 output and report verification_ok=False.
++            skip_under_seconds = get_stage_tunable('skip_verification_under_seconds')
++            skip_short = bool(skip_under_seconds) and episode_duration < skip_under_seconds
++            if skip_short:
 +                audio_logger.info(
-+                    f"[{slug}:{episode_id}] Skipping verification pass: "
-+                    f"episode {episode_duration:.0f}s is below "
-+                    f"skip_verification_under_seconds={skip_under:.0f}s threshold"
-+                )
-+                verification_count, v_ads_for_ui, verification_cue_count = 0, [], 0
-+            else:
-+                verification_count, v_ads_for_ui, processed_path, verification_cue_count = _run_verification_pass(
-+                    ctx, processed_path, applied_cuts,
-+                    skip_patterns, min_cut_confidence,
-+                    local_audio_processor, detection_progress_callback,
-+                    original_segments=segments,
-+                    # LLM-only reprocess maps the saved transcript through the cuts
-+                    # for pass 2 instead of re-transcribing (issue #349).
-+                    reuse_transcript=(reprocess_mode == 'llm'),
-+                )
-             # Detection-event accounting, not unique cues (issue #350): a cue
-             # in a region pass 1 left in the audio is re-detected here and
-             # intentionally counts twice.
++                    f"[{slug}:{episode_id}] Verification pass skipped: episode "
++                    f"{episode_duration:.0f}s is below "
++                    f"skip_verification_under_seconds={skip_under_seconds:.0f}s threshold")
+             if skip_second_pass and not skip_detection:
+                 audio_logger.info(
+                     f"[{slug}:{episode_id}] Verification pass skipped (per-feed setting)")
+@@ -5507,7 +5518,7 @@ def process_episode(slug: str, episode_id: str, episode_url: str,
+                 cue_gate_enabled=cue_gate_enabled,
+                 pass1_held_markers=pass1_held_markers,
+                 pass1_kept_markers=pass1_kept_markers,
+-                skip_verification=skip_detection or skip_second_pass or cue_only,
++                skip_verification=skip_detection or skip_second_pass or cue_only or skip_short,
+                 segment_actions=segment_actions,
+                 differential_override=keep_override,
+                 run_stats=run_stats,
