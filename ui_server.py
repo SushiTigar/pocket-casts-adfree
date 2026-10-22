@@ -1578,17 +1578,21 @@ def create_app(email=None, password=None):
         except Exception as e:
             if job_log:
                 job_log("warn", f"  MinusPod get_episodes failed: {e}")
-            return None
+            episodes = None
 
-        match = _match_all(episodes)
-        if match:
-            return match
+        if episodes is not None:
+            match = _match_all(episodes)
+            if match:
+                return match
 
-        # Not found — force-refresh so a brand-new episode is ingested, then
-        # retry with exponential backoff.
+        # Not found (or MinusPod was momentarily unreachable) — force-refresh so
+        # a brand-new episode is ingested, then retry with exponential backoff.
+        # More attempts than the old 3: a MinusPod auto-update or health bounce
+        # can take tens of seconds, and giving up turns a transient outage into
+        # a skipped episode.
         if not rss_url:
             return None
-        max_retries = 3
+        max_retries = 5
         base_delay = 5  # seconds
         for attempt in range(max_retries):
             if attempt > 0 and job_log:

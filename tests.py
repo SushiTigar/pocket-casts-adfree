@@ -2368,6 +2368,49 @@ class TestEpisodeMatchingFallbacks(unittest.TestCase):
         self.assertIsNone(_parse_iso_ts("junk"))
 
 
+class TestMinusPodTransientErrors(unittest.TestCase):
+    """MinusPodClient must surface a mid-request connection drop as a
+    retryable MinusPodUnavailable, not a raw protocol error — otherwise a
+    MinusPod restart (auto-update / health bounce) aborts the episode."""
+
+    def _client(self):
+        from pocketcasts_adfree import MinusPodClient
+
+        mp = MinusPodClient.__new__(MinusPodClient)
+        mp.base_url = "http://localhost:8000"
+        mp.client = MagicMock()
+        return mp
+
+    def test_connect_error_is_unavailable(self):
+        import httpx
+        from pocketcasts_adfree import MinusPodUnavailable
+
+        mp = self._client()
+        mp.client.request.side_effect = httpx.ConnectError("refused")
+        with self.assertRaises(MinusPodUnavailable):
+            mp.get_episodes("the-filmcast")
+
+    def test_remote_protocol_error_is_unavailable(self):
+        import httpx
+        from pocketcasts_adfree import MinusPodUnavailable
+
+        mp = self._client()
+        mp.client.request.side_effect = httpx.RemoteProtocolError(
+            "Server disconnected without sending a response."
+        )
+        with self.assertRaises(MinusPodUnavailable):
+            mp.get_episodes("the-filmcast")
+
+    def test_read_error_is_unavailable(self):
+        import httpx
+        from pocketcasts_adfree import MinusPodUnavailable
+
+        mp = self._client()
+        mp.client.request.side_effect = httpx.ReadError("connection reset")
+        with self.assertRaises(MinusPodUnavailable):
+            mp.get_episodes("the-filmcast")
+
+
 class TestRSSUrlDetection(unittest.TestCase):
     """RSS URL detection must recognize common podcast hosting platforms."""
 

@@ -1342,6 +1342,15 @@ class MinusPodClient:
             raise MinusPodUnavailable(
                 "MinusPod is not reachable — start it from the Services panel"
             ) from e
+        except (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError) as e:
+            # Server accepted the connection then dropped it — typically a
+            # MinusPod restart (auto-update / health bounce) racing the request.
+            # Surface it as a transient "unavailable" so callers can retry
+            # instead of aborting the episode on a raw protocol error.
+            raise MinusPodUnavailable(
+                f"MinusPod connection dropped mid-request ({type(e).__name__}) — "
+                "it may be restarting"
+            ) from e
 
     def health(self) -> dict:
         resp = self._request("GET", "/api/v1/health")
