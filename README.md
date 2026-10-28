@@ -406,19 +406,19 @@ echo "Loading secrets from macOS Keychain..."
 
 export POCKETCASTS_EMAIL="$(_kc_internet_acct pocketcasts.com)"
 [ -z "$POCKETCASTS_EMAIL" ] && export POCKETCASTS_EMAIL="$(_kc_generic pocketcasts-email)"
-[ -z "$POCKETCASTS_EMAIL" ] && echo "  WARNING: POCKETCASTS_EMAIL not found in Keychain"
+[ -z "$POCKETCASTS_EMAIL" ] && echo "  WARNING: POCKETCASTS_EMAIL not found in Keychain. Add it: security add-internet-password -a \"you@example.com\" -s pocketcasts.com -r htps -l \"Pocket Casts\" -w \"your-password\" -U"
 
 export POCKETCASTS_PASSWORD="$(_kc_internet_pass_server pocketcasts.com)"
 [ -z "$POCKETCASTS_PASSWORD" ] && export POCKETCASTS_PASSWORD="$(_kc_generic pocketcasts-password)"
-[ -z "$POCKETCASTS_PASSWORD" ] && echo "  WARNING: POCKETCASTS_PASSWORD not found in Keychain"
+[ -z "$POCKETCASTS_PASSWORD" ] && echo "  WARNING: POCKETCASTS_PASSWORD not found in Keychain. Add it (same command as above, sets both email+password)"
 
 export OPENROUTER_API_KEY="$(_kc_internet_pass openrouter.ai api-key)"
 [ -z "$OPENROUTER_API_KEY" ] && export OPENROUTER_API_KEY="$(_kc_generic openrouter-api-key)"
-[ -z "$OPENROUTER_API_KEY" ] && echo "  WARNING: OPENROUTER_API_KEY not found in Keychain (required for LLM_PROVIDER=openrouter)"
+[ -z "$OPENROUTER_API_KEY" ] && echo "  WARNING: OPENROUTER_API_KEY not found in Keychain. Add it: security add-internet-password -a api-key -s openrouter.ai -r htps -l \"OpenRouter (Pocket Casts pipeline)\" -w \"sk-or-v1-...\" -U"
 
 export UI_AUTH_PASSWORD="$(_kc_internet_pass_port localhost "$_UI_USER" 5050)"
 [ -z "$UI_AUTH_PASSWORD" ] && export UI_AUTH_PASSWORD="$(_kc_generic ui-auth-password)"
-[ -z "$UI_AUTH_PASSWORD" ] && echo "  WARNING: UI_AUTH_PASSWORD not found in Keychain (dashboard will be unprotected)"
+[ -z "$UI_AUTH_PASSWORD" ] && echo "  WARNING: UI_AUTH_PASSWORD not found in Keychain. Generate one: python3 -c 'import secrets; print(secrets.token_urlsafe(24))' then add: security add-internet-password -a admin -s localhost -P 5050 -r http -l \"Pocket Casts Ad-Free UI\" -w \"<generated>\" -U"
 
 echo "Secrets loaded."
 EOF
