@@ -401,14 +401,26 @@ _kc_internet_pass_server() { security find-internet-password -s "$1" -w 2>/dev/n
 _kc_internet_pass_port() { security find-internet-password -s "$1" -a "$2" -P "$3" -w 2>/dev/null || true; }
 _kc_internet_acct() { security find-internet-password -s "$1" 2>/dev/null | awk -F'"' '/"acct"/ { print $4; exit }'; }
 _kc_generic() { security find-generic-password -a "$_ACCOUNT" -s "$1" -w 2>/dev/null || true; }
+
+echo "Loading secrets from macOS Keychain..."
+
 export POCKETCASTS_EMAIL="$(_kc_internet_acct pocketcasts.com)"
 [ -z "$POCKETCASTS_EMAIL" ] && export POCKETCASTS_EMAIL="$(_kc_generic pocketcasts-email)"
+[ -z "$POCKETCASTS_EMAIL" ] && echo "  WARNING: POCKETCASTS_EMAIL not found in Keychain"
+
 export POCKETCASTS_PASSWORD="$(_kc_internet_pass_server pocketcasts.com)"
 [ -z "$POCKETCASTS_PASSWORD" ] && export POCKETCASTS_PASSWORD="$(_kc_generic pocketcasts-password)"
+[ -z "$POCKETCASTS_PASSWORD" ] && echo "  WARNING: POCKETCASTS_PASSWORD not found in Keychain"
+
 export OPENROUTER_API_KEY="$(_kc_internet_pass openrouter.ai api-key)"
 [ -z "$OPENROUTER_API_KEY" ] && export OPENROUTER_API_KEY="$(_kc_generic openrouter-api-key)"
+[ -z "$OPENROUTER_API_KEY" ] && echo "  WARNING: OPENROUTER_API_KEY not found in Keychain (required for LLM_PROVIDER=openrouter)"
+
 export UI_AUTH_PASSWORD="$(_kc_internet_pass_port localhost "$_UI_USER" 5050)"
 [ -z "$UI_AUTH_PASSWORD" ] && export UI_AUTH_PASSWORD="$(_kc_generic ui-auth-password)"
+[ -z "$UI_AUTH_PASSWORD" ] && echo "  WARNING: UI_AUTH_PASSWORD not found in Keychain (dashboard will be unprotected)"
+
+echo "Secrets loaded."
 EOF
 chmod +x secrets.sh
 ```
